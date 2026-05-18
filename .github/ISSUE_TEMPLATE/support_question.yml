@@ -1,0 +1,45 @@
+name: Support question / 사용 도움말
+description: Ask for setup or usage help. / 설치나 사용에 대한 도움을 요청하세요.
+title: "[Support]: "
+labels: ["support", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check the README and SUPPORT.md before opening a support question.
+        
+        지원 요청을 올리기 전에 README와 SUPPORT.md를 먼저 확인해주세요.
+  - type: textarea
+    id: question
+    attributes:
+      label: What do you need help with? / 무엇이 궁금한가요?
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried? / 어떤 방법을 시도했나요?
+    validations:
+      required: true
+  - type: dropdown
+    id: variant
+    attributes:
+      label: Package variant / 패키지 종류
+      options:
+        - Korea
+        - Global
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method / 설치 방법
+      options:
+        - RMSKIN
+        - ZIP
+        - Built-in updater
+        - Manual copy
+        - Not sure
+    validations:
+      required: true
