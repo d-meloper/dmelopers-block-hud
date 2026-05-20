@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report / 보안 제보
+    url: https://github.com/d-meloper/dmelopers-block-hud/security
+    about: Please do not report security issues in public issues. Use the security policy instead. / 보안 문제는 공개 이슈로 올리지 말고 보안 정책 경로를 사용해주세요.

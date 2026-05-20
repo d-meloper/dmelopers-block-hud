@@ -1,0 +1,47 @@
+name: Feature request / 기능 제안
+description: Suggest an improvement or new feature. / 개선점이나 새 기능을 제안해주세요.
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case / 문제 또는 사용 목적
+      description: What are you trying to do? / 무엇을 하고 싶은지 설명해주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior / 원하는 동작
+      description: What should happen? / 어떤 식으로 동작하면 좋은지 적어주세요.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area / 영향 범위
+      options:
+        - HUD
+        - Hotbar
+        - Inventory
+        - Editor
+        - Settings
+        - Updater
+        - Localization
+        - Packaging
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: variant
+    attributes:
+      label: Variant impact / 영향 패키지
+      options:
+        - Both Korea and Global
+        - Korea only
+        - Global only
+        - Not sure
+    validations:
+      required: true

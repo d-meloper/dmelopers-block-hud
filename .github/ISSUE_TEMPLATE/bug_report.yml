@@ -1,0 +1,100 @@
+name: Bug report / 버그 제보
+description: Report a reproducible problem with the skin. / 재현 가능한 스킨 문제를 제보해주세요.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please include enough detail to reproduce it.
+        
+        버그를 제보해 주셔서 감사합니다. 재현할 수 있도록 가능한 한 자세히 적어주세요.
+  - type: input
+    id: skin-version
+    attributes:
+      label: Skin version / 스킨 버전
+      placeholder: "v1.1.6"
+    validations:
+      required: true
+  - type: dropdown
+    id: variant
+    attributes:
+      label: Package variant / 패키지 종류
+      options:
+        - Korea
+        - Global
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method / 설치 방법
+      options:
+        - RMSKIN
+        - ZIP
+        - Built-in updater
+        - Manual copy
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version / Windows 버전
+      placeholder: "Windows 11 23H2"
+    validations:
+      required: true
+  - type: input
+    id: rainmeter-version
+    attributes:
+      label: Rainmeter version / Rainmeter 버전
+      placeholder: "Rainmeter 4.5.x"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 재현 방법
+      description: List exact steps. / 재현 단계를 순서대로 적어주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior / 기대한 동작
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior / 실제 동작
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots / 로그 또는 스크린샷
+      description: Attach logs, screenshots, or a screen recording if relevant. / 가능하면 로그, 스크린샷, 화면 녹화를 첨부해주세요.
+    validations:
+      required: false
+  - type: dropdown
+    id: edited-files
+    attributes:
+      label: Did you manually edit any skin files? / 스킨 파일을 직접 수정했나요?
+      options:
+        - "No"
+        - "Yes"
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: refresh-tested
+    attributes:
+      label: Does it still happen after refreshing or restarting Rainmeter? / Rainmeter 새로고침 또는 재시작 후에도 같은가요?
+      options:
+        - "Yes"
+        - "No"
+        - Not tested
+    validations:
+      required: true
