@@ -16,6 +16,13 @@ return function(app)
         return methods.localize('Settings_Loading', 'Loading...\\nPlease wait.')
     end
 
+    local function showModalAlert(level, summaryKey, fallback, logPath)
+        if not methods.ShowModalAlertByKeys then
+            return false
+        end
+        return methods.ShowModalAlertByKeys(level, summaryKey, fallback, logPath)
+    end
+
 
 
     function methods.readPersistentCacheVariable(variableName, defaultValue)
@@ -312,6 +319,16 @@ return function(app)
 
         methods.setLoadingVisible(false)
         logNotice('Settings helper timed out: loadKind=' .. tostring(loadKind) .. ' helperKind=' .. tostring(helperKind) .. ' timeoutSeconds=' .. tostring(timeoutSeconds))
+        local shouldAlertTimeout = loadKind == 'minecraftSkinApply'
+            or loadKind == 'startupAutoRunApply'
+            or (loadKind == 'computerInfo' and state.pendingLoadFieldKey == 'refreshComputerInfo')
+        if methods.ShowModalAlertByKeys and shouldAlertTimeout then
+            methods.ShowModalAlertByKeys(
+                'warn',
+                'ModalAlert_HelperTimeout',
+                'The requested task did not finish in time, so the wait was canceled. Try again shortly.'
+            )
+        end
         methods.renderActivePage()
     end
     function methods.checkPendingLoadHelperWatchdog()
@@ -381,17 +398,34 @@ return function(app)
 
     function methods.startRunCommandHelper(helperKind, measureName, argsVariableName, args, options)
         options = options or {}
+        local loadKind = trim(options.loadKind or state.pendingLoadKind or '')
+        local shouldAlertStartFailure = loadKind == 'minecraftSkinApply'
+            or loadKind == 'startupAutoRunApply'
+            or (loadKind == 'computerInfo' and state.pendingLoadFieldKey == 'refreshComputerInfo')
         local ignoredPendingHelper = methods.getIgnoredPendingLoadHelperCompletion(helperKind)
         if ignoredPendingHelper then
             logNotice('Settings helper start blocked while a previous helper completion is still pending cleanup: ' .. tostring(helperKind or ''))
+            if methods.ShowModalAlertByKeys and shouldAlertStartFailure then
+                methods.ShowModalAlertByKeys(
+                    'warn',
+                    'ModalAlert_HelperBusy',
+                    'The previous task is still cleaning up, so the request cannot start again now. Try again shortly.'
+                )
+            end
             return false
         end
         if not SKIN:GetMeasure(tostring(measureName or '')) then
             logNotice('Settings helper run measure is missing: ' .. tostring(measureName or ''))
+            if methods.ShowModalAlertByKeys and shouldAlertStartFailure then
+                methods.ShowModalAlertByKeys(
+                    'error',
+                    'ModalAlert_HelperStartFailed',
+                    'The requested task could not be started. Refresh the skin and try again.'
+                )
+            end
             return false
         end
         methods.clearPendingLoadHelperState()
-        local loadKind = trim(options.loadKind or state.pendingLoadKind or '')
         local timeoutSeconds = math.max(0, tonumber(options.timeoutSeconds) or 0)
         local startedAt = os.time()
         state.pendingLoadHelperRunning = true
@@ -439,6 +473,13 @@ return function(app)
     function methods.startDetachedRunCommandHelper(helperKind, measureName, argsVariableName, args)
         if not SKIN:GetMeasure(tostring(measureName or '')) then
             logNotice('Settings detached helper run measure is missing: ' .. tostring(measureName or ''))
+            if methods.ShowModalAlertByKeys and trim(helperKind or '') == 'openLogFolder' then
+                methods.ShowModalAlertByKeys(
+                    'error',
+                    'ModalAlert_OpenLogFailed',
+                    'The log folder could not be opened. Check whether File Explorer is working normally.'
+                )
+            end
             return false
         end
 
@@ -591,7 +632,7 @@ return function(app)
 
     function methods.minecraftSkinFetchArguments(username)
 
-        return '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        return '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File '
 
             .. methods.escapeCommandArgument(methods.fetchMinecraftSkinScriptPath())
 
@@ -617,7 +658,11 @@ return function(app)
 
             'SettingsMinecraftSkinHelperArgs',
 
-            methods.minecraftSkinFetchArguments(username)
+            methods.minecraftSkinFetchArguments(username),
+            {
+                loadKind = 'minecraftSkinApply',
+                timeoutSeconds = 25,
+            }
 
         )
 
@@ -759,6 +804,11 @@ return function(app)
         )
         if not started and methods.clearVersionManagerLaunchPending then
             methods.clearVersionManagerLaunchPending()
+            showModalAlert(
+                'error',
+                'ModalAlert_VersionManagerFailed',
+                'Skins could not be opened from Settings. Refresh the skin and try again.'
+            )
         end
         return started
     end
@@ -1127,6 +1177,11 @@ return function(app)
             local activeLoadKind = trim(state.pendingLoadHelperLoadKind or state.pendingLoadKind or '')
             if activeLoadKind == 'legacyImport' then
                 logNotice('Settings action blocked while old-data import is running.')
+                showModalAlert(
+                    'warn',
+                    'Settings_Notice_LegacyBlockedSwitch',
+                    'You cannot switch to another action while old-data import is running.'
+                )
                 return false
             end
             methods.clearPendingLoadState({
@@ -1253,9 +1308,30 @@ return function(app)
 
 
 
+    local function startupAutoRunOutputHasLiteral(output)
+        for line in tostring(output or ''):gmatch('[^\r\n]+') do
+            local value = trim(line)
+            if value == '0' or value == '1' then
+                return true
+            end
+        end
+        return false
+    end
+
     function methods.applyStartupAutoRunApplyOutput(output, field)
 
         local previousLiteral = field and methods.readFieldValue(field) or '0'
+
+        if not startupAutoRunOutputHasLiteral(output) then
+            logNotice('Startup auto-run helper did not return a valid toggle state.')
+            if methods.ShowModalAlertByKeys then
+                methods.ShowModalAlertByKeys(
+                    'error',
+                    'ModalAlert_StartupAutoRunFailed',
+                    'The startup-program setting result could not be confirmed. The setting may not have been applied.'
+                )
+            end
+        end
 
         local actualLiteral = methods.normalizeToggleValue(methods.parseStartupAutoRunLiteral(output, previousLiteral))
 
@@ -1358,17 +1434,28 @@ return function(app)
         else
 
             local errorMessage = result and result.message or ''
+            local modalErrorMessage = errorMessage
+            local modalSummaryKey = ''
 
             if errorMessage == '' then
 
                 errorMessage = methods.localize('Settings_Notice_MinecraftFailed', 'The Minecraft skin could not be loaded. Check the log folder for details.')
+                modalErrorMessage = methods.localize('ModalAlert_MinecraftFailed', 'The Minecraft skin could not be loaded. Check the username and try again.')
+                modalSummaryKey = 'ModalAlert_MinecraftFailed'
 
             end
 
             methods.syncMinecraftSkinDraftFromCanonical()
 
 
-            logNotice('Minecraft skin fetch failed: ' .. errorMessage)
+            logNotice(methods.localizeFormat('Settings_Notice_MinecraftFetchFailed', { errorMessage }, errorMessage))
+            if methods.ShowModalAlertByKeys then
+                methods.ShowModalAlertByKeys(
+                    'error',
+                    modalSummaryKey,
+                    modalErrorMessage
+                )
+            end
 
         end
 
@@ -1441,6 +1528,14 @@ return function(app)
         end
 
         logNotice('Legacy import ' .. string.lower(status) .. ': ' .. table.concat(details, ' | '))
+        if status ~= 'CANCEL' then
+            showModalAlert(
+                status == 'WARN' and 'warn' or 'error',
+                'ModalAlert_LegacyImportFailed',
+                'Old-data import could not be completed. Check that the selected old skin folder is valid and try again.',
+                result.logPath
+            )
+        end
         return true
     end
 
@@ -1468,6 +1563,12 @@ return function(app)
                 details[#details + 1] = 'Version manager launch confirmation timed out.'
             end
             logNotice('Version manager warning: ' .. table.concat(details, ' | '))
+            showModalAlert(
+                'warn',
+                'ModalAlert_VersionManagerFailed',
+                'Skins could not be opened from Settings. Refresh the skin and try again.',
+                logPath
+            )
             return
         end
 
@@ -1488,6 +1589,12 @@ return function(app)
 
 
         logNotice('Version manager ' .. string.lower(status) .. ': ' .. table.concat(details, ' | '))
+        showModalAlert(
+            'error',
+            'ModalAlert_VersionManagerFailed',
+            'Skins could not be opened from Settings. Refresh the skin and try again.',
+            logPath
+        )
     end
 
     function methods.handleVersionCatalogHelperResult(values)
@@ -1537,6 +1644,13 @@ return function(app)
 
 
         logNotice('Log folder open ' .. string.lower(status) .. ': ' .. table.concat(details, ' | '))
+        if methods.ShowModalAlertByKeys then
+            methods.ShowModalAlertByKeys(
+                'error',
+                'ModalAlert_OpenLogFailed',
+                'The log folder could not be opened. Check whether File Explorer is working normally.'
+            )
+        end
     end
 
     function methods.finishPendingLoadCycle()
@@ -1615,6 +1729,16 @@ return function(app)
             if not state.installedDriveTargets or #state.installedDriveTargets == 0 then
                 methods.setInstalledDriveTargetList(methods.defaultDriveTargets(driveField))
                 logNotice('Settings UI drive load fallback applied.')
+            end
+            if state.pendingLoadFieldKey == 'refreshComputerInfo'
+                and methods.ShowModalAlertByKeys
+                and ((not state.bundledFontFaces or #state.bundledFontFaces == 0)
+                    or (not state.installedDriveTargets or #state.installedDriveTargets == 0)) then
+                methods.ShowModalAlertByKeys(
+                    'warn',
+                    'ModalAlert_ComputerInfoUnavailable',
+                    'Some computer information could not be loaded, so default options are being shown.'
+                )
             end
             methods.persistPersistentCache('computerInfo')
             if state.pendingLoadFieldKey == 'startupAutoRun' then

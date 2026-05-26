@@ -76,6 +76,17 @@ return function(app)
         return contractVariable('SettingsDropdownArrowOpen', '^')
     end
 
+    local function pixelValue(value, fallback)
+        local numeric = tonumber(value)
+        if numeric == nil then
+            numeric = tonumber(fallback) or 0
+        end
+        if numeric < 0 then
+            return math.ceil(numeric - 0.5)
+        end
+        return math.floor(numeric + 0.5)
+    end
+
 
 
 
@@ -650,7 +661,7 @@ return function(app)
 
 
 
-        local fieldY = methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_Y', 0) or 0
+        local fieldY = pixelValue(methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_Y', 0), 0)
 
 
 
@@ -666,7 +677,7 @@ return function(app)
 
 
 
-        local fieldH = methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_H', methods.numericVariable('SettingsTall1H', 40)) or 40
+        local fieldH = pixelValue(methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_H', methods.numericVariable('SettingsTall1H', 40)), 40)
 
 
 
@@ -682,7 +693,7 @@ return function(app)
 
 
 
-        local contentPad = methods.numericVariable('SlotSettingsRowText_ContentPad', methods.numericVariable('SettingsInnerPad', 10)) or 10
+        local contentPad = pixelValue(methods.numericVariable('SlotSettingsRowText_ContentPad', methods.numericVariable('SettingsInnerPad', 10)), 10)
 
 
 
@@ -698,7 +709,7 @@ return function(app)
 
 
 
-        local buttonW = methods.numericVariable('SettingsDropdownButtonW', 24) or 24
+        local buttonW = pixelValue(methods.numericVariable('SettingsDropdownButtonW', 24), 24)
 
 
 
@@ -714,7 +725,9 @@ return function(app)
 
 
 
-        local buttonGap = methods.numericVariable('SettingsDropdownButtonGap', 4) or 4
+        local buttonGap = pixelValue(methods.numericVariable('SettingsDropdownButtonGap', 4), 4)
+
+        local dropdownControlW = pixelValue(methods.numericVariable('SettingsDropdownControlW', methods.numericVariable('SettingsRowControlW', 0)), 0)
 
 
 
@@ -938,7 +951,13 @@ return function(app)
 
 
 
-            local buttonX = controlX + controlW - buttonW
+            dropdownControlW = pixelValue(math.max(0, math.min(controlW, dropdownControlW)), 0)
+
+            fieldX = pixelValue(controlX + controlW - dropdownControlW, 0)
+
+            setVariable('SettingsRow' .. rowIndex .. '_Field_X', tostring(fieldX))
+
+            local buttonX = fieldX + dropdownControlW - buttonW
 
 
 
@@ -954,7 +973,7 @@ return function(app)
 
 
 
-            fieldW = math.max(0, controlW - buttonW - buttonGap)
+            fieldW = pixelValue(math.max(0, dropdownControlW - buttonW - buttonGap), 0)
 
 
 
@@ -1652,6 +1671,7 @@ return function(app)
 
     local settingsTabLocalizationKeyById = {
         general = 'Settings_Tab_General',
+        lowSpec = 'Settings_Tab_LowSpec',
         hotbar = 'Settings_Tab_Hotbar',
         indicators = 'Settings_Tab_Indicators',
         inventory = 'Settings_Tab_Inventory',
@@ -4468,7 +4488,7 @@ return function(app)
 
 
 
-        local rowX = methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_X', 0) or 0
+        local rowX = pixelValue(methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_X', 0), 0)
 
 
 
@@ -4484,7 +4504,7 @@ return function(app)
 
 
 
-        local rowY = methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_Y', 0) or 0
+        local rowY = pixelValue(methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_Y', 0), 0)
 
 
 
@@ -4500,7 +4520,7 @@ return function(app)
 
 
 
-        local rowH = methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_H', methods.numericVariable('SettingsTall1H', 40)) or 40
+        local rowH = pixelValue(methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_H', methods.numericVariable('SettingsTall1H', 40)), 40)
 
 
 
@@ -4516,7 +4536,7 @@ return function(app)
 
 
 
-        local rowControlW = methods.numericVariable('SlotSettingsRow' .. rowIndex .. '_ControlW', methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_W', 0)) or 0
+        local rowControlW = pixelValue(methods.numericVariable('SlotSettingsRow' .. rowIndex .. '_ControlW', methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_W', 0)), 0)
 
 
 
@@ -4532,7 +4552,7 @@ return function(app)
 
 
 
-        local panelX = methods.numericVariable('SettingsContentX', methods.numericVariable('SettingsPanelX', 0)) or 0
+        local panelX = pixelValue(methods.numericVariable('SettingsContentX', methods.numericVariable('SettingsPanelX', 0)), 0)
 
 
 
@@ -4548,7 +4568,7 @@ return function(app)
 
 
 
-        local panelW = methods.numericVariable('SettingsContentW', methods.numericVariable('SettingsPanelWidth', rowControlW)) or rowControlW
+        local panelW = pixelValue(methods.numericVariable('SettingsContentW', methods.numericVariable('SettingsPanelWidth', rowControlW)), rowControlW)
 
 
 
@@ -4564,7 +4584,7 @@ return function(app)
 
 
 
-        local panelY = methods.numericVariable('SettingsPanelY', 0) or 0
+        local panelY = pixelValue(methods.numericVariable('SettingsPanelY', 0), 0)
 
 
 
@@ -4580,7 +4600,7 @@ return function(app)
 
 
 
-        local panelH = methods.numericVariable('SettingsPanelHeight', 0) or 0
+        local panelH = pixelValue(methods.numericVariable('SettingsPanelHeight', 0), 0)
 
 
 
@@ -4628,7 +4648,7 @@ return function(app)
 
 
 
-        local dropdownH = methods.numericVariable('SettingsDropdownH', 0) or 0
+        local dropdownH = pixelValue(methods.numericVariable('SettingsDropdownH', 0), 0)
 
 
 
@@ -4644,7 +4664,7 @@ return function(app)
 
 
 
-        local anchorGap = methods.numericVariable('SettingsDropdownAnchorGap', 4) or 4
+        local anchorGap = pixelValue(methods.numericVariable('SettingsDropdownAnchorGap', 4), 4)
 
 
 
@@ -4660,7 +4680,7 @@ return function(app)
 
 
 
-        local desiredW = math.max(rowControlW + 96, 220)
+        local desiredW = pixelValue(methods.numericVariable('SettingsDropdownW', rowControlW), rowControlW)
 
 
 
@@ -4676,7 +4696,17 @@ return function(app)
 
 
 
-        local resolvedW = math.min(desiredW, math.max(rowControlW, panelW))
+        if desiredW <= 0 then
+            desiredW = rowControlW
+        end
+
+
+
+
+
+
+
+        local resolvedW = pixelValue(math.min(desiredW, panelW), rowControlW)
 
 
 
@@ -4692,7 +4722,7 @@ return function(app)
 
 
 
-        local resolvedX = rowX
+        local resolvedX = pixelValue(rowX, 0)
 
 
 
@@ -4724,7 +4754,7 @@ return function(app)
 
 
 
-            resolvedX = panelRight - resolvedW
+            resolvedX = pixelValue(panelRight - resolvedW, 0)
 
 
 
@@ -4804,7 +4834,7 @@ return function(app)
 
 
 
-        local downY = rowY + rowH + anchorGap
+        local downY = pixelValue(rowY + rowH + anchorGap, 0)
 
 
 
@@ -4820,7 +4850,7 @@ return function(app)
 
 
 
-        local upY = rowY - anchorGap - dropdownH
+        local upY = pixelValue(rowY - anchorGap - dropdownH, 0)
 
 
 
@@ -6305,7 +6335,7 @@ function methods.refreshVisuals()
 
 
 
-            'MeterSettingsTabPrevBG', 'MeterSettingsTabPrevLabel',
+            'MeterSettingsTab1BG', 'MeterSettingsTab1Label',
 
 
 
@@ -6321,7 +6351,7 @@ function methods.refreshVisuals()
 
 
 
-            'MeterSettingsTabCurrentBG', 'MeterSettingsTabCurrentLabel',
+            'MeterSettingsTab2BG', 'MeterSettingsTab2Label',
 
 
 
@@ -6337,7 +6367,11 @@ function methods.refreshVisuals()
 
 
 
-            'MeterSettingsTabNextBG', 'MeterSettingsTabNextLabel',
+            'MeterSettingsTab3BG', 'MeterSettingsTab3Label',
+            'MeterSettingsTab4BG', 'MeterSettingsTab4Label',
+            'MeterSettingsTab5BG', 'MeterSettingsTab5Label',
+            'MeterSettingsTab6BG', 'MeterSettingsTab6Label',
+            'MeterSettingsTab7BG', 'MeterSettingsTab7Label',
 
 
 

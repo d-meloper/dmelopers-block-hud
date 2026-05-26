@@ -42,6 +42,7 @@ $script:ResultPairs = [ordered]@{
 }
 
 . (Join-Path $PSScriptRoot 'Localization.Common.ps1')
+. (Join-Path $PSScriptRoot 'LowSpecSettings.Policy.ps1')
 $script:LogPath = Get-BlockHudCanonicalLogPath -ScriptRoot $PSScriptRoot
 $script:SkinRootForLocalization = Get-LocalizationSkinRoot -ScriptRoot $PSScriptRoot
 $script:LanguageCode = Read-LanguageCode -SkinRoot $script:SkinRootForLocalization
@@ -274,7 +275,7 @@ public static class DMeloperMigrationFinalPath {
 "@
 }
 
-function Get-CanonicalExistingPath {
+function Get-FinalExistingPathInfo {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     $resolved = Resolve-FullPath -Path $Path
@@ -287,6 +288,7 @@ function Get-CanonicalExistingPath {
         $shareReadWriteDelete = 7
         $handle = [DMeloperMigrationFinalPath]::CreateFile($item.FullName, 0, $shareReadWriteDelete, [IntPtr]::Zero, $openExisting, $fileFlagBackupSemantics, [IntPtr]::Zero)
         if ($handle.IsInvalid) {
+            $handle.Dispose()
             throw "CreateFile failed for $($item.FullName)"
         }
 
@@ -308,16 +310,36 @@ function Get-CanonicalExistingPath {
             elseif ($finalPath.StartsWith('\\?\')) {
                 $finalPath = $finalPath.Substring(4)
             }
-            return $finalPath.TrimEnd('\', '/').ToLowerInvariant()
+            return [pscustomobject]@{
+                Success = $true
+                Path = $finalPath.TrimEnd('\', '/').ToLowerInvariant()
+                Error = ''
+            }
         }
         finally {
             $handle.Dispose()
         }
     }
     catch {
-        Write-Log "Falling back to normalized path identity for '$($item.FullName)': $($_.Exception.Message)" 'WARN'
+        return [pscustomobject]@{
+            Success = $false
+            Path = ''
+            Error = $_.Exception.Message
+        }
+    }
+}
+
+function Get-CanonicalExistingPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $resolved = Resolve-FullPath -Path $Path
+    $item = Get-Item -LiteralPath $resolved
+    $finalPathInfo = Get-FinalExistingPathInfo -Path $item.FullName
+    if ($finalPathInfo.Success) {
+        return $finalPathInfo.Path
     }
 
+    Write-Log "Falling back to normalized path identity for '$($item.FullName)': $($finalPathInfo.Error)" 'WARN'
     return $item.FullName.TrimEnd('\', '/').ToLowerInvariant()
 }
 
@@ -644,7 +666,64 @@ function Assert-RootContainmentPolicy {
     }
 }
 
-function Assert-NoReparsePoints {
+function Get-FileSystemInfoPropertyText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.IO.FileSystemInfo]$Item,
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    $property = $Item.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) {
+        return ''
+    }
+
+    $values = @($property.Value | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_) })
+    if ($values.Count -eq 0) {
+        return ''
+    }
+
+    return (($values | ForEach-Object { [string]$_ }) -join '; ').Trim()
+}
+
+function Test-NonRedirectingReparsePoint {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.IO.FileSystemInfo]$Item,
+        [Parameter(Mandatory = $true)]
+        [ref]$Reason
+    )
+
+    $linkType = Get-FileSystemInfoPropertyText -Item $Item -Name 'LinkType'
+    if (-not [string]::IsNullOrWhiteSpace($linkType)) {
+        $Reason.Value = "LinkType=$linkType"
+        return $false
+    }
+
+    $target = Get-FileSystemInfoPropertyText -Item $Item -Name 'Target'
+    if (-not [string]::IsNullOrWhiteSpace($target)) {
+        $Reason.Value = "Target=$target"
+        return $false
+    }
+
+    $itemIdentity = Normalize-PathIdentity -Path $Item.FullName
+    $finalPathInfo = Get-FinalExistingPathInfo -Path $Item.FullName
+    if (-not $finalPathInfo.Success) {
+        $Reason.Value = "final path could not be resolved: $($finalPathInfo.Error)"
+        return $false
+    }
+
+    if ($finalPathInfo.Path -ne $itemIdentity) {
+        $Reason.Value = "final path resolves outside itself: $($finalPathInfo.Path)"
+        return $false
+    }
+
+    $Reason.Value = 'non-redirecting cloud/sync placeholder'
+    return $true
+}
+
+function Assert-NoUnsafeTargetReparsePoints {
     param(
         [Parameter(Mandatory = $true)]
         [string[]]$Roots,
@@ -662,9 +741,14 @@ function Assert-NoReparsePoints {
         $reparseItems = @($items | Where-Object {
             ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
         })
-        if ($reparseItems.Count -gt 0) {
-            $first = $reparseItems[0].FullName
-            throw "Refusing migration because $Context contains a reparse point: $first"
+        foreach ($item in $reparseItems) {
+            $reason = ''
+            if (Test-NonRedirectingReparsePoint -Item $item -Reason ([ref]$reason)) {
+                Write-Log "Allowed $Context reparse point as $reason`: $($item.FullName)"
+                continue
+            }
+
+            throw "Refusing migration because $Context contains an unsafe reparse point ($reason): $($item.FullName)"
         }
     }
 }
@@ -1476,7 +1560,6 @@ function Preflight-SourceState {
         '@Resources\Customs\Data\InventoryItems.inc',
         '@Resources\Customs\Data\ItemImages.inc',
         '@Resources\Customs\Data\ResponsiveLayoutState.inc',
-        '@Resources\Customs\Settings\General.inc',
         '@Resources\Customs\Settings\Hotbar.inc',
         '@Resources\Customs\Settings\Inventory.inc',
         '@Resources\Customs\Settings\Clock.inc',
@@ -1492,6 +1575,7 @@ function Preflight-SourceState {
     }
 
     foreach ($optionalFile in @(
+        '@Resources\Customs\Settings\General.inc',
         '@Resources\Customs\Data\ImageAdjustments.inc',
         '@Resources\Customs\Data\EditorFavoritesCatalog.txt'
     )) {
@@ -1879,10 +1963,15 @@ function Get-SettingsBackfill {
 
     switch ($FileName) {
         'General.inc' {
-            return (New-BackfillMap -Values @{
+            $values = @{
                 EnableRainmeterStartup = '0'
+                ItemCountTextFontSize = '18'
                 LanguageCode = 'ko-KR'
-            })
+            }
+            foreach ($entry in Get-LowSpecSettingsPolicy) {
+                $values[[string]$entry.VariableName] = [string]$entry.DefaultValue
+            }
+            return (New-BackfillMap -Values $values)
         }
         'Indicators.inc' {
             return (New-BackfillMap -Values @{
@@ -1967,6 +2056,101 @@ function Merge-SettingsFiles {
         $sourcePath = Join-RootPath -Root $sourceSettings -RelativePath $fileName
         $backfill = Get-SettingsBackfill -FileName $fileName
         Merge-VariablesFile -SourcePath $sourcePath -TargetPath $targetPath -SameKeysOnly -Backfill $backfill
+    }
+}
+
+function Test-EnabledSettingValue {
+    param([AllowNull()][string]$Value)
+
+    $normalized = ([string]$Value).Trim().ToLowerInvariant()
+    return ($normalized -in @('1', 'true', 'yes', 'on'))
+}
+
+function Normalize-SettingBoolValue {
+    param([AllowNull()][string]$Value)
+
+    if (Test-EnabledSettingValue -Value $Value) {
+        return '1'
+    }
+
+    return '0'
+}
+
+function Apply-LowSpecSettingsCompatibility {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$TargetRoot
+    )
+
+    $sourceGeneralPath = Join-RootPath -Root $SourceRoot -RelativePath '@Resources\Customs\Settings\General.inc'
+    $targetGeneralPath = Join-RootPath -Root $TargetRoot -RelativePath '@Resources\Customs\Settings\General.inc'
+    $sourceVariables = Read-VariablesFile -Path $sourceGeneralPath
+    $targetVariables = Read-VariablesFile -Path $targetGeneralPath
+
+    $lowSpecPolicy = @(Get-LowSpecSettingsPolicy)
+    $sourceHasSplitLowSpec = $false
+    $changed = $false
+
+    foreach ($entry in $lowSpecPolicy) {
+        $key = [string]$entry.VariableName
+        if ($sourceVariables.Contains($key)) {
+            $sourceHasSplitLowSpec = $true
+        }
+        if ($targetVariables.Contains($key)) {
+            $normalizedValue = Normalize-SettingBoolValue -Value $targetVariables[$key]
+            if ([string]$targetVariables[$key] -ne $normalizedValue) {
+                Set-MapValue -Map $targetVariables -Key $key -Value $normalizedValue
+                $changed = $true
+            }
+        }
+        else {
+            Set-MapValue -Map $targetVariables -Key $key -Value ([string]$entry.DefaultValue)
+            $changed = $true
+        }
+    }
+
+    if ($sourceHasSplitLowSpec) {
+        Write-Log 'Source already contains split low-spec settings; legacy low-spec compatibility backfill skipped.'
+        if ($changed) {
+            $content = ConvertTo-VariablesContent -Variables $targetVariables
+            $null = Invoke-MigrationAction -Action 'Normalize split low-spec settings' -Target $targetGeneralPath -ScriptBlock {
+                Write-Utf16Text -Path $targetGeneralPath -Content $content
+            }
+        }
+        return
+    }
+
+    if (-not $sourceVariables.Contains('EnableLowSpecMode') -or -not (Test-EnabledSettingValue -Value $sourceVariables['EnableLowSpecMode'])) {
+        if ($changed) {
+            $content = ConvertTo-VariablesContent -Variables $targetVariables
+            $null = Invoke-MigrationAction -Action 'Normalize split low-spec settings' -Target $targetGeneralPath -ScriptBlock {
+                Write-Utf16Text -Path $targetGeneralPath -Content $content
+            }
+        }
+        return
+    }
+
+    foreach ($entry in $lowSpecPolicy) {
+        if (-not $entry.ExpandFromLegacySingleToggle) {
+            continue
+        }
+        $key = [string]$entry.VariableName
+        $value = Normalize-SettingBoolValue -Value ([string]$entry.LegacyEnabledValue)
+        if (-not $targetVariables.Contains($key) -or [string]$targetVariables[$key] -ne $value) {
+            Set-MapValue -Map $targetVariables -Key $key -Value $value
+            $changed = $true
+        }
+    }
+
+    if (-not $changed) {
+        return
+    }
+
+    $content = ConvertTo-VariablesContent -Variables $targetVariables
+    $null = Invoke-MigrationAction -Action 'Apply legacy low-spec settings compatibility' -Target $targetGeneralPath -ScriptBlock {
+        Write-Utf16Text -Path $targetGeneralPath -Content $content
     }
 }
 
@@ -2926,7 +3110,7 @@ function Invoke-Migration {
     }
 
     $script:ResolvedSourceRoot = $resolvedSourceRoot
-    Assert-NoReparsePoints -Context 'target operational state' -Roots @(
+    Assert-NoUnsafeTargetReparsePoints -Context 'target operational state' -Roots @(
         (Join-RootPath -Root $resolvedTargetRoot -RelativePath '@Resources\Customs'),
         (Join-RootPath -Root $resolvedTargetRoot -RelativePath 'Settings')
     )
@@ -2984,6 +3168,7 @@ function Invoke-Migration {
     Copy-PlayerSkinCacheFiles -SourceDirectory (Join-RootPath -Root $resolvedSourceRoot -RelativePath '@Resources\Customs\Images\Player') -TargetDirectory (Join-RootPath -Root $resolvedTargetRoot -RelativePath '@Resources\Customs\Images\Player')
 
     Merge-SettingsFiles -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
+    Apply-LowSpecSettingsCompatibility -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
     Normalize-ImportedMinecraftSkinState -TargetRoot $resolvedTargetRoot
     Sync-ActiveLocalizationCatalog -TargetRoot $resolvedTargetRoot -LanguageCode $importedLanguageCode
     Validate-TouchedRainmeterFiles

@@ -271,6 +271,24 @@ function M.WriteState(SKIN, id, state, broadcast)
     end
 end
 
+function M.PrepareInventoryRefreshPosition(SKIN, preserveCurrentPosition)
+    if preserveCurrentPosition == false then
+        local baseline = resolveBaselineState(SKIN, 'Inventory')
+        if baseline then
+            M.WriteState(SKIN, 'Inventory', baseline, true)
+        end
+    end
+
+    local rects = M.ResolveRects(SKIN)
+    local inventory = rects and rects.Inventory
+    if not inventory then
+        return false
+    end
+
+    M.WriteLiveState(SKIN, 'Inventory', true, inventory.x, inventory.y, false)
+    return true
+end
+
 function M.ResetStateIds(SKIN, ids)
     for _, id in ipairs(ids or {}) do
         local baseline = M.BaselineState(id)
@@ -912,7 +930,7 @@ end
 
 local function applyClockSpriteVars(SKIN, rect)
     local m = rect.metrics
-    setVariableForConfig(SKIN, 'ClockSpriteSize', m.size)
+    setVariableForConfig(SKIN, 'ClockSpriteRenderSize', m.size)
     SKIN:Bang('!UpdateMeter', 'MeterClockSprite')
 end
 

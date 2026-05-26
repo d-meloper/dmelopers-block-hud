@@ -353,7 +353,22 @@ return {
 
 
 
-        { id = 'general', name = '기본', fields = { 'muteSound', 'hideHintTooltip', 'lowSpecMode', 'language', 'refreshComputerInfo', 'startupAutoRun', 'openLogFolder', 'resetAllSettings' } },
+        { id = 'general', name = '기본', fields = { 'muteSound', 'hideHintTooltip', 'itemCountTextFontSize', 'language', 'refreshComputerInfo', 'startupAutoRun', 'openLogFolder', 'resetAllSettings' } },
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        { id = 'lowSpec', name = '저사양 모드', fields = { 'lowSpecFreezeInventoryPlayerAnimation', 'lowSpecDisableSlotHoverHighlight', 'lowSpecDisableHoverTextTooltip' } },
 
 
 
@@ -401,7 +416,7 @@ return {
 
 
 
-        { id = 'inventory', name = '인벤토리', fields = { 'inventoryItemSize', 'inventoryTooltipSize', 'inventoryBottomRow', 'minecraftSkinUsernameDraft', 'hideSteve', 'hideUsageGuide', 'hideSkinFolderButton', 'hideEditButton', 'hideSettingsButton', 'inventoryEnabled', 'inventoryDraggable', 'inventoryDragSnap', 'resetInventorySettings', 'resetInventorySkinPositions' } },
+        { id = 'inventory', name = '인벤토리', fields = { 'inventoryItemSize', 'inventoryTooltipSize', 'inventoryBottomRow', 'minecraftSkinUsernameDraft', 'hideSteve', 'hideUsageGuide', 'hideSkinFolderButton', 'hideEditButton', 'hideSettingsButton', 'inventoryEnabled', 'inventoryDraggable', 'inventoryDragSnap', 'inventoryRefreshPositionLock', 'resetInventorySettings', 'resetInventorySkinPositions' } },
 
 
 
@@ -641,7 +656,13 @@ return {
 
 
 
-        lowSpecMode = {
+        itemCountTextFontSize = {
+            key = 'itemCountTextFontSize', tabId = 'general', pageId = 1, controlType = 'stepper', label = '아이템 개수 글자 크기',
+            settingsFile = 'General', variableName = 'ItemCountTextFontSize', valueType = 'integer', min = 8, max = 64, step = 1,
+            historyLabel = '아이템 개수 글자 크기 조정', refreshTargets = { 'Hotbar', 'Inventory' },
+        },
+
+        lowSpecFreezeInventoryPlayerAnimation = {
 
 
 
@@ -657,7 +678,7 @@ return {
 
 
 
-            key = 'lowSpecMode', tabId = 'general', pageId = 1, controlType = 'toggle', label = '저사양 모드',
+            key = 'lowSpecFreezeInventoryPlayerAnimation', tabId = 'lowSpec', pageId = 1, controlType = 'toggle', label = '스티브 애니메이션 고정',
 
 
 
@@ -673,7 +694,7 @@ return {
 
 
 
-            settingsFile = 'General', variableName = 'EnableLowSpecMode', valueType = 'bool',
+            settingsFile = 'General', variableName = 'LowSpecFreezeInventoryPlayerAnimation', valueType = 'bool',
 
 
 
@@ -689,7 +710,7 @@ return {
 
 
 
-            historyLabel = '저사양 모드 전환', refreshTargets = { 'Hotbar', 'Inventory' },
+            historyLabel = '스티브 애니메이션 고정 전환', refreshTargets = { 'Hotbar', 'Inventory' },
 
 
 
@@ -3851,6 +3872,162 @@ clockType = {
 
 
 
+        lowSpecDisableSlotHoverHighlight = {
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            key = 'lowSpecDisableSlotHoverHighlight', tabId = 'lowSpec', pageId = 1, controlType = 'toggle', label = '슬롯 하이라이트 끄기',
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            settingsFile = 'General', variableName = 'LowSpecDisableSlotHoverHighlight', valueType = 'bool',
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            historyLabel = '슬롯 하이라이트 끄기 전환', refreshTargets = { 'Hotbar', 'Inventory' },
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        },
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        lowSpecDisableHoverTextTooltip = {
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            key = 'lowSpecDisableHoverTextTooltip', tabId = 'lowSpec', pageId = 1, controlType = 'toggle', label = '툴팁 위치 고정',
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            settingsFile = 'General', variableName = 'LowSpecDisableHoverTextTooltip', valueType = 'bool',
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            historyLabel = '툴팁 위치 고정 전환', refreshTargets = { 'Hotbar', 'Inventory' },
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        },
+
+        inventoryRefreshPositionLock = {
+            key = 'inventoryRefreshPositionLock', tabId = 'inventory', pageId = 4, controlType = 'toggle', label = '현재 위치 고정',
+            settingsFile = 'Inventory', variableName = 'PreserveInventoryRefreshPosition', valueType = 'bool',
+            historyLabel = '인벤토리 현재 위치 고정 전환', refreshTargets = {},
+        },
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -3989,7 +4166,7 @@ clockType = {
 
 
 
-        'muteSound', 'hideHintTooltip', 'lowSpecMode', 'language', 'startupAutoRun', 'hotbarSlotSize', 'hotbarItemOffset', 'hotbarTextYOffset', 'hotbarTextFontSize', 'hotbarTextColor', 'hotbarEnabled', 'hotbarDraggable', 'hotbarDragSnap',
+        'muteSound', 'hideHintTooltip', 'itemCountTextFontSize', 'language', 'startupAutoRun', 'lowSpecFreezeInventoryPlayerAnimation', 'lowSpecDisableSlotHoverHighlight', 'lowSpecDisableHoverTextTooltip', 'hotbarSlotSize', 'hotbarItemOffset', 'hotbarTextYOffset', 'hotbarTextFontSize', 'hotbarTextColor', 'hotbarEnabled', 'hotbarDraggable', 'hotbarDragSnap',
 
 
 
@@ -4037,7 +4214,7 @@ clockType = {
 
 
 
-        'inventoryItemSize', 'inventoryTooltipSize', 'inventoryBottomRow', 'minecraftSkinUsername', 'inventoryEnabled', 'inventoryDraggable', 'inventoryDragSnap',
+        'inventoryItemSize', 'inventoryTooltipSize', 'inventoryBottomRow', 'minecraftSkinUsername', 'inventoryEnabled', 'inventoryDraggable', 'inventoryDragSnap', 'inventoryRefreshPositionLock',
 
 
 

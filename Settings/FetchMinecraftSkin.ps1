@@ -80,6 +80,10 @@ function Sanitize-FileComponent([string]$Value) {
     return $resolved.Trim()
 }
 
+function Test-MinecraftUsername([string]$Value) {
+    return -not [string]::IsNullOrWhiteSpace($Value) -and $Value -match '^[A-Za-z0-9_]{3,16}$'
+}
+
 function Show-ErrorDialog([string]$Message) {
     if (-not $ShowErrorDialog) {
         return
@@ -119,6 +123,66 @@ function Test-PngSignature([string]$Path) {
         }
     }
     return $true
+}
+
+function Copy-ResponseStreamBounded(
+    [System.IO.Stream]$Source,
+    [string]$DestinationPath,
+    [long]$MaxBytes
+) {
+    $buffer = New-Object byte[] 81920
+    $total = [long]0
+    $fileStream = [System.IO.File]::Create($DestinationPath)
+    try {
+        while ($true) {
+            $read = $Source.Read($buffer, 0, $buffer.Length)
+            if ($read -le 0) {
+                break
+            }
+            $total += [long]$read
+            if ($total -gt $MaxBytes) {
+                throw 'Minecraft skin image exceeded the maximum allowed size.'
+            }
+            $fileStream.Write($buffer, 0, $read)
+        }
+    }
+    finally {
+        $fileStream.Dispose()
+    }
+    return $total
+}
+
+function Convert-ToCleanPng([string]$Path) {
+    $cleanPath = $null
+    try {
+        Add-Type -AssemblyName System.Drawing
+        $image = [System.Drawing.Image]::FromFile($Path)
+        try {
+            if ($image.Width -lt 1 -or $image.Height -lt 1 -or $image.Width -gt 1024 -or $image.Height -gt 1024) {
+                throw 'Minecraft skin image dimensions are outside the allowed range.'
+            }
+            $bitmap = New-Object System.Drawing.Bitmap $image
+        }
+        finally {
+            $image.Dispose()
+        }
+
+        $cleanPath = $Path + '.clean.png'
+        try {
+            $bitmap.Save($cleanPath, [System.Drawing.Imaging.ImageFormat]::Png)
+        }
+        finally {
+            $bitmap.Dispose()
+        }
+
+        Move-Item -LiteralPath $cleanPath -Destination $Path -Force
+    }
+    catch {
+        if ($cleanPath -and [System.IO.File]::Exists($cleanPath)) {
+            Remove-Item -LiteralPath $cleanPath -Force -ErrorAction SilentlyContinue
+        }
+        throw 'MineSkin returned an invalid PNG image.'
+    }
 }
 
 function Read-ResponseText([System.Net.HttpWebResponse]$Response) {
@@ -220,6 +284,10 @@ try {
         exit 0
     }
 
+    if (-not (Test-MinecraftUsername $resolvedUsername)) {
+        throw (L 'Helper_Minecraft_InvalidUsername' 'Enter a valid Minecraft username.')
+    }
+
     $requestStage = 'profileLookup'
     $profile = Resolve-MinecraftProfile -Username $resolvedUsername -TimeoutMilliseconds $timeoutMilliseconds
     if ($null -eq $profile) {
@@ -255,23 +323,31 @@ try {
     if ([int]$response.StatusCode -ne 200) {
         throw ('MineSkin returned HTTP ' + [int]$response.StatusCode)
     }
+    $contentType = [string]$response.ContentType
+    if (-not [string]::IsNullOrWhiteSpace($contentType) -and $contentType -notmatch '^\s*image/png\b') {
+        throw ('MineSkin returned unexpected content type ' + $contentType)
+    }
+    $maxImageBytes = [long](2 * 1024 * 1024)
+    if ($response.ContentLength -gt $maxImageBytes) {
+        throw 'Minecraft skin image exceeded the maximum allowed size.'
+    }
 
     $responseStream = $response.GetResponseStream()
-    $fileStream = [System.IO.File]::Create($tempPath)
     try {
-        $responseStream.CopyTo($fileStream)
+        $bytesWritten = Copy-ResponseStreamBounded -Source $responseStream -DestinationPath $tempPath -MaxBytes $maxImageBytes
     }
     finally {
         if ($null -ne $responseStream) {
             $responseStream.Dispose()
         }
-        $fileStream.Dispose()
     }
+    Write-DebugLog ('DOWNLOAD bytes=' + $bytesWritten)
 
     if (-not (Test-PngSignature $tempPath)) {
         Write-DebugLog ("PNG signature validation failed for tempPath='" + $tempPath + "'")
         throw 'MineSkin returned an invalid PNG image.'
     }
+    Convert-ToCleanPng -Path $tempPath
 
     Move-Item -LiteralPath $tempPath -Destination $finalPath -Force
     $tempPath = $null

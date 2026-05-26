@@ -1,5 +1,6 @@
 return function(app)
     local state = app.state
+    local schema = app.schema
     local methods = app.methods
     local trim = app.trim
     local setVariable = app.setVariable
@@ -28,6 +29,7 @@ return function(app)
         setVariable('SettingsButtonDisabledTextColor', SKIN:GetVariable('SettingsPalette4', ''))
         setVariable('SettingsToggleFillOnColor', SKIN:GetVariable('SettingsPalette6', ''))
         setVariable('SettingsToggleFillOffColor', '0,0,0,0')
+        setVariable('SettingsTabActiveTextColor', resolvedMode == 'dark' and SKIN:GetVariable('SettingsPalette2', '') or SKIN:GetVariable('SettingsPalette5', ''))
     end
 
     function methods.themeDisplayText()
@@ -39,10 +41,11 @@ return function(app)
         setVariable('ActionSettingsClose_TextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
         setVariable('ActionSettingsRefresh_BgColor', SKIN:GetVariable('SettingsButtonBgColor', ''))
         setVariable('ActionSettingsRefresh_TextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
-        setVariable('ActionSettingsTabPrev_BgColor', SKIN:GetVariable('SettingsButtonBgColor', ''))
-        setVariable('ActionSettingsTabPrev_TextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
-        setVariable('ActionSettingsTabNext_BgColor', SKIN:GetVariable('SettingsButtonBgColor', ''))
-        setVariable('ActionSettingsTabNext_TextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
+        for index = 1, #schema.tabs do
+            local active = index == state.currentTabIndex
+            setVariable('ActionSettingsTab' .. tostring(index) .. '_BgColor', active and SKIN:GetVariable('SettingsPalette6', '') or SKIN:GetVariable('SettingsButtonBgColor', ''))
+            setVariable('ActionSettingsTab' .. tostring(index) .. '_TextColor', active and SKIN:GetVariable('SettingsTabActiveTextColor', '') or SKIN:GetVariable('SettingsButtonTextColor', ''))
+        end
         setVariable('ActionSettingsPageCurrent_BgColor', SKIN:GetVariable('SettingsButtonBgColor', ''))
         setVariable('ActionSettingsPageCurrent_TextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
     end
