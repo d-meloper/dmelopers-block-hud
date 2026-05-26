@@ -1,0 +1,126 @@
+name: public-export-approval
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  public-export-approval:
+    name: public-export-approval
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@v4
+
+      - name: Validate public release branch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $headRef = '${{ github.head_ref }}'
+          if ($headRef -notlike 'publish/*') {
+            throw "This public repository accepts proposal PRs for discussion, but release approval PRs must come from a publish/* branch created by the maintainer publication tooling."
+          }
+
+          $root = (Get-Location).Path
+          $paths = @(Get-ChildItem -LiteralPath $root -Force -Recurse | Where-Object {
+            $_.FullName -notmatch '[\\/]\.git([\\/]|$)'
+          } | ForEach-Object {
+            $_.FullName.Substring($root.Length).TrimStart('\', '/') -replace '\\', '/'
+          })
+
+          $requiredFiles = @(
+            'README.md',
+            'README.ko-KR.md',
+            'LICENSE',
+            'THIRD_PARTY_NOTICES.md',
+            'THIRD_PARTY_NOTICES.ko-KR.md',
+            'SECURITY.md',
+            'SECURITY.ko-KR.md',
+            'SUPPORT.md',
+            'SUPPORT.ko-KR.md',
+            'CONTRIBUTING.md',
+            'CONTRIBUTING.ko-KR.md',
+            'CODE_OF_CONDUCT.md',
+            'CODE_OF_CONDUCT.ko-KR.md',
+            '.github/ISSUE_TEMPLATE/bug_report.yml',
+            '.github/ISSUE_TEMPLATE/feature_request.yml',
+            '.github/ISSUE_TEMPLATE/support_question.yml',
+            '.github/ISSUE_TEMPLATE/config.yml',
+            '.github/PULL_REQUEST_TEMPLATE.md',
+            '.github/workflows/public-export-approval.yml'
+          )
+          foreach ($requiredFile in $requiredFiles) {
+            if (-not (Test-Path -LiteralPath (Join-Path $root $requiredFile) -PathType Leaf)) {
+              throw "Required public repository file is missing: $requiredFile"
+            }
+          }
+
+          $forbiddenExact = @(
+            'AGENTS.md',
+            'CODEX_GUIDE.md',
+            'ImplementationChecklist.md',
+            '@Resources/Customs/Data/MinecraftSkinHistory.txt',
+            '@Resources/Customs/Data/ProgramActionLabels.txt',
+            '@Resources/Customs/Data/VersionManagerLaunchState.json',
+            '@Resources/Customs/Data/VersionManagerSources.json',
+            '@Resources/Customs/Data/VersionManagerUpdateCache.json',
+            '@Resources/Customs/Data/VersionManagerZPosBootstrap.state'
+          )
+          $forbiddenPrefixes = @(
+            'docs/',
+            'DistDatas/',
+            '.codex/',
+            '.githooks/',
+            '.vscode/',
+            'MigrationBackup/',
+            'Logs/',
+            'temp/',
+            'VersionManagerExports/',
+            '@Resources/Customs/Images/Data/',
+            '@Resources/Customs/Data/VersionManagerDownloads/'
+          )
+
+          foreach ($path in $paths) {
+            if ($forbiddenExact -contains $path) {
+              throw "Forbidden source-only path found in public branch: $path"
+            }
+            foreach ($prefix in $forbiddenPrefixes) {
+              if ($path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "Forbidden source-only path found in public branch: $path"
+              }
+            }
+            if ($path -match '\.(zip|rmskin)$') {
+              throw "Release assets must be attached to GitHub Releases, not committed to the public branch: $path"
+            }
+          }
+
+          $textExtensions = @('.ini', '.inc', '.lua', '.ps1', '.cmd', '.txt', '.json', '.md', '.yml', '.yaml')
+          $secretPatterns = @(
+            '(?i)[A-Z]:\\Users\\[^\\\r\n]+\\',
+            '(?i)[A-Z]:\\Documents and Settings\\[^\\\r\n]+\\',
+            '(?i)\bgithub_pat_[A-Za-z0-9_]{20,}\b',
+            '(?i)\bgh[pousr]_[A-Za-z0-9_]{20,}\b',
+            '(?i)\bsk-[A-Za-z0-9]{20,}\b'
+          )
+
+          $files = @(Get-ChildItem -LiteralPath $root -Force -Recurse -File | Where-Object {
+            $_.FullName -notmatch '[\\/]\.git([\\/]|$)' -and
+            $textExtensions -contains $_.Extension
+          })
+          foreach ($file in $files) {
+            $relative = $file.FullName.Substring($root.Length).TrimStart('\', '/') -replace '\\', '/'
+            $content = Get-Content -LiteralPath $file.FullName -Raw
+            foreach ($pattern in $secretPatterns) {
+              if ($content -match $pattern) {
+                throw "Forbidden private path or token-like content found in public branch file: $relative"
+              }
+            }
+          }
+
+          Write-Host "Public release branch validation passed for $headRef."

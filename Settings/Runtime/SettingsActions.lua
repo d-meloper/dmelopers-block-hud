@@ -861,6 +861,13 @@ return function(app)
     end
     local function warnProtectedPendingHelperCloseBlocked(loadKind, source)
         logNotice('Blocked Settings close during protected helper run (' .. tostring(source or 'unknown') .. '): ' .. tostring(loadKind or ''))
+        if methods.ShowModalAlertByKeys then
+            methods.ShowModalAlertByKeys(
+                'warn',
+                'Settings_Notice_LegacyBlockedSwitch',
+                'You cannot switch to another action while old-data import is running.'
+            )
+        end
     end
     local function reactivateSettingsAfterProtectedClose(loadKind)
         local currentConfig = trim(SKIN:GetVariable('CURRENTCONFIG', ''))
@@ -2381,6 +2388,12 @@ return function(app)
 
 
         local pendingValue = trim(SKIN:GetVariable('SettingsPendingInputValue', ''))
+        if field.key == 'minecraftSkinUsernameDraft' then
+            local inputMeasure = SKIN:GetMeasure('MeasureSharedInput')
+            if inputMeasure then
+                pendingValue = trim(inputMeasure:GetStringValue() or pendingValue)
+            end
+        end
 
 
 
@@ -3615,6 +3628,21 @@ return function(app)
 
             local pendingMinecraftSkinUsername = trim(SKIN:GetVariable('MinecraftSkinUsernameDraft', ''))
 
+            if methods.isValidMinecraftSkinUsername and not methods.isValidMinecraftSkinUsername(pendingMinecraftSkinUsername) then
+                methods.syncMinecraftSkinDraftFromCanonical()
+                local invalidUsernameMessage = methods.localize('Settings_Notice_MinecraftInvalidUsernameBlocked', 'Minecraft skin apply was blocked because the username is invalid.')
+                logNotice(invalidUsernameMessage)
+                if methods.ShowModalAlertByKeys then
+                    methods.ShowModalAlertByKeys(
+                        'error',
+                        'Settings_Notice_MinecraftInvalidUsernameBlocked',
+                        invalidUsernameMessage
+                    )
+                end
+                methods.renderActivePage()
+                return
+            end
+
 
 
 
@@ -3691,66 +3719,6 @@ return function(app)
 
 
 
-            local localMinecraftSkinResult = methods.resolveLocalMinecraftSkinResult and methods.resolveLocalMinecraftSkinResult(pendingMinecraftSkinUsername) or nil
-
-
-
-
-
-            if localMinecraftSkinResult then
-
-
-
-
-
-                state.pendingLoadBeforeSnapshot = beforeMinecraftSkinSnapshot
-
-
-
-
-
-                state.pendingLoadHistoryLabel = field.historyLabel
-
-
-
-
-
-                methods.applyMinecraftSkinFetchResult(localMinecraftSkinResult)
-
-
-
-
-
-                state.pendingLoadBeforeSnapshot = nil
-
-
-
-
-
-                state.pendingLoadHistoryLabel = nil
-
-
-
-
-
-                methods.renderActivePage()
-
-
-
-
-
-                return
-
-
-
-
-
-            end
-
-
-
-
-
             methods.ScheduleDropdownDataLoad(field.key, 0, 'minecraftSkinApply', false, {
 
 
@@ -3781,7 +3749,7 @@ return function(app)
 
 
 
-                delayTicks = 0,
+                delayTicks = 1,
 
 
 
@@ -4036,7 +4004,14 @@ return function(app)
 
 
 
-                    methods.ResetTabToDefaults(field.tabId, field.historyLabel, { suppressHistory = true })
+                    if methods.ResetTabToDefaults(field.tabId, field.historyLabel, { suppressHistory = true }) == false then
+                        if methods.refreshRowsAndHistoryVisuals then
+                            methods.refreshRowsAndHistoryVisuals()
+                        else
+                            methods.renderActivePage()
+                        end
+                        return
+                    end
 
 
 
@@ -4275,6 +4250,70 @@ return function(app)
     end
 
 
+
+
+
+
+
+    function methods.SelectTab(tabIdOrIndex)
+
+        local requested = trim(tabIdOrIndex)
+
+        if requested == '' then
+            return false
+        end
+
+        local targetIndex = tonumber(requested)
+
+        if targetIndex ~= nil then
+            targetIndex = math.floor(targetIndex)
+        end
+
+        if targetIndex == nil then
+
+            for index, tab in ipairs(schema.tabs) do
+
+                if trim(tab and tab.id or '') == requested then
+
+                    targetIndex = index
+
+                    break
+
+                end
+
+            end
+
+        end
+
+        if targetIndex == nil or targetIndex < 1 or targetIndex > #schema.tabs then
+            return false
+        end
+
+        if methods.isLoadingVisible() then
+
+            if methods.CancelPendingLoad() == false then
+
+                return false
+
+            end
+
+            methods.clearPendingRefreshState()
+
+        end
+
+        methods.clearPendingConfirmation()
+
+        methods.closeDropdownInternal()
+
+        state.currentTabIndex = targetIndex
+
+        state.currentPageByTab[state.currentTabIndex] = 1
+
+        methods.renderActivePage()
+
+        return true
+
+    end
 
 
 
@@ -4925,6 +4964,13 @@ function methods.ResetToDefaults()
     local defaultSnapshot, missingKeys = methods.loadDefaultSnapshot(resetFieldKeys)
     if not defaultSnapshot then
         logNotice('Settings default snapshot is incomplete: ' .. table.concat(missingKeys or {}, ', '))
+        if methods.ShowModalAlertByKeys then
+            methods.ShowModalAlertByKeys(
+                'error',
+                'ModalAlert_SettingsDefaultsUnavailable',
+                'Reset to defaults was canceled because the default data could not be read.'
+            )
+        end
         methods.renderActivePage()
         return
     end

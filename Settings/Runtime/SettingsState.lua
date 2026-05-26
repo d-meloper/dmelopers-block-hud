@@ -2,7 +2,7 @@ return function(tabCount)
 
 
 
-    local resolvedTabCount = tonumber(tabCount) or 6
+    local resolvedTabCount = tonumber(tabCount) or 7
 
 
 
