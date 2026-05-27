@@ -124,6 +124,12 @@ For questions, bug reports, suggestions, or ideas, please use the survey form be
 
 [DMeloper's Block HUD Support Form](https://www.notion.so/35d2dc0bb4ae81248fd3f54ba15cceaf?pvs=21)
 
+For GitHub contribution proposals, read the contributing guide before opening a pull request.
+
+[Contributing guide](CONTRIBUTING.md)
+
+This public repository is a distribution surface, not the implementation source of truth. Community pull requests are reviewed as proposals, and accepted changes may be applied by the maintainer through the private development workspace before they appear in a release approval pull request.
+
 When reporting a bug, include as much of the following information as possible.
 
 - Skin version
@@ -139,6 +145,7 @@ When reporting a bug, include as much of the following information as possible.
 ## Support
 
 - Bugs and feature requests: use GitHub Issues.
+- Code, documentation, or localization proposals: read `CONTRIBUTING.md` before opening a pull request.
 - Security reports: follow `SECURITY.md`; do not open public security issues.
 - Installation and usage help: see `SUPPORT.md` first.
 

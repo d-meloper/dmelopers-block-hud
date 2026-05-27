@@ -1091,6 +1091,176 @@ function Write-Utf8Text {
     [System.IO.File]::WriteAllText($Path, $Content, $script:Utf8NoBom)
 }
 
+function Test-PathStartsWith {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Prefix
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or [string]::IsNullOrWhiteSpace($Prefix)) {
+        return $false
+    }
+
+    $normalizedPath = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    $normalizedPrefix = [System.IO.Path]::GetFullPath($Prefix).TrimEnd('\', '/')
+    return (
+        $normalizedPath.Equals($normalizedPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $normalizedPath.StartsWith($normalizedPrefix + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $normalizedPath.StartsWith($normalizedPrefix + [System.IO.Path]::AltDirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
+    )
+}
+
+function Test-SystemPSModulePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $systemPrefixes = New-Object System.Collections.Generic.List[string]
+    foreach ($prefix in @($env:WINDIR, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if (-not [string]::IsNullOrWhiteSpace($prefix)) {
+            $systemPrefixes.Add($prefix)
+        }
+    }
+
+    foreach ($prefix in $systemPrefixes) {
+        if (Test-PathStartsWith -Path $Path -Prefix $prefix) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Get-UserPSModulePathCandidates {
+    $candidates = New-Object System.Collections.Generic.List[object]
+    $entries = @([string]$env:PSModulePath -split [regex]::Escape([System.IO.Path]::PathSeparator))
+
+    $index = 0
+    foreach ($entry in $entries) {
+        $trimmed = ([string]$entry).Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed)) {
+            $index++
+            continue
+        }
+
+        try {
+            $full = [System.IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($trimmed)).TrimEnd('\', '/')
+        }
+        catch {
+            $index++
+            continue
+        }
+
+        if (Test-SystemPSModulePath -Path $full) {
+            $index++
+            continue
+        }
+
+        $candidates.Add([pscustomobject]@{
+            Path = $full
+            Index = $index
+        })
+        $index++
+    }
+
+    return @($candidates | Sort-Object -Property Index | ForEach-Object { [string]$_.Path })
+}
+
+function Test-SourceInstallerNeedsRootConfigNameCompat {
+    param([Parameter(Mandatory = $true)][string]$SourceRoot)
+
+    $installerPath = Join-RootPath -Root $SourceRoot -RelativePath 'tools\InstallVersionRelease.ps1'
+    if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
+        return $false
+    }
+
+    $content = Read-TextSmart -Path $installerPath
+    $usesRootConfigName = ($content -match '\bGet-RootConfigName\b')
+    $definesRootConfigName = ($content -match '(?m)^\s*function\s+Get-RootConfigName\b')
+    return ($usesRootConfigName -and -not $definesRootConfigName)
+}
+
+function New-RootConfigNameCompatModuleContent {
+    return @'
+function Get-RootConfigName {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $leaf = Split-Path -Path $Root -Leaf
+    if ([string]::IsNullOrWhiteSpace($leaf)) {
+        throw "Could not derive a root config name from [$Root]."
+    }
+
+    return $leaf
+}
+
+Export-ModuleMember -Function Get-RootConfigName
+'@
+}
+
+function New-RootConfigNameCompatManifestContent {
+    return @'
+@{
+    RootModule = 'DMeloperBlockHudCompat.psm1'
+    ModuleVersion = '1.2.1'
+    GUID = '7e2698fc-2f2e-4cda-b6e8-b0df5cbf8931'
+    Author = 'DMeloper'
+    CompanyName = 'DMeloper'
+    Copyright = '(c) DMeloper. All rights reserved.'
+    Description = 'Compatibility shim for DMeloper Block HUD v1.2.0 skin-manager updates.'
+    PowerShellVersion = '5.1'
+    FunctionsToExport = @('Get-RootConfigName')
+    CmdletsToExport = @()
+    VariablesToExport = @()
+    AliasesToExport = @()
+}
+'@
+}
+
+function Install-RootConfigNameCompatModule {
+    param([Parameter(Mandatory = $true)][string]$SourceRoot)
+
+    if (-not (Test-SourceInstallerNeedsRootConfigNameCompat -SourceRoot $SourceRoot)) {
+        return
+    }
+
+    $moduleName = 'DMeloperBlockHudCompat'
+    $moduleContent = New-RootConfigNameCompatModuleContent
+    $manifestContent = New-RootConfigNameCompatManifestContent
+    $errors = New-Object System.Collections.Generic.List[string]
+
+    foreach ($basePath in Get-UserPSModulePathCandidates) {
+        $moduleDirectory = Join-Path $basePath $moduleName
+        $probePath = Join-Path $moduleDirectory '.write-test'
+        $modulePath = Join-Path $moduleDirectory ($moduleName + '.psm1')
+        $manifestPath = Join-Path $moduleDirectory ($moduleName + '.psd1')
+
+        try {
+            if (-not $script:Cmdlet.ShouldProcess($moduleDirectory, 'Install v1.2.0 updater Get-RootConfigName compatibility module')) {
+                $errors.Add(("{0}: module install was skipped by ShouldProcess" -f $moduleDirectory))
+                continue
+            }
+
+            if (-not (Test-Path -LiteralPath $moduleDirectory -PathType Container)) {
+                New-Item -ItemType Directory -Path $moduleDirectory -Force | Out-Null
+            }
+
+            [System.IO.File]::WriteAllText($probePath, 'ok', $script:Utf8NoBom)
+            Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
+            [System.IO.File]::WriteAllText($modulePath, $moduleContent, $script:Utf8NoBom)
+            [System.IO.File]::WriteAllText($manifestPath, $manifestContent, $script:Utf8NoBom)
+            Write-Log ("Installed v1.2.0 updater compatibility module for Get-RootConfigName: {0}" -f $moduleDirectory)
+            return
+        }
+        catch {
+            $errors.Add(("{0}: {1}" -f $moduleDirectory, $_.Exception.Message))
+        }
+        finally {
+            Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $detail = if ($errors.Count -gt 0) { $errors -join ' | ' } else { 'No writable user PSModulePath entry was available.' }
+    throw "Could not install the v1.2.0 updater compatibility module required for Get-RootConfigName autoload. $detail"
+}
+
 function Test-Utf16LeBomStrict {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -1212,7 +1382,8 @@ function Merge-VariablesFile {
         [switch]$SameKeysOnly,
         [string[]]$ExcludeKeyPatterns = @(),
         [System.Collections.Specialized.OrderedDictionary]$Backfill,
-        [hashtable]$ImageRenameMap
+        [hashtable]$ImageRenameMap,
+        [hashtable]$UnavailableImageAssets
     )
 
     $targetVariables = Read-VariablesFile -Path $TargetPath
@@ -1253,7 +1424,7 @@ function Merge-VariablesFile {
 
         $value = $sourceVariables[$key]
         if ($key -match '_Image$') {
-            $value = Rename-ImageValue -Value $value -RenameMap $ImageRenameMap
+            $value = Repair-ImportImageValue -Key $key -Value $value -UnavailableImageAssets $UnavailableImageAssets -ImageRenameMap $ImageRenameMap
         }
 
         Set-MapValue -Map $targetVariables -Key $key -Value $value
@@ -1373,6 +1544,47 @@ function Rename-ImageValue {
     }
 
     return $Value
+}
+
+function Test-UnavailableImportImageValue {
+    param(
+        [AllowNull()]
+        [string]$Value,
+        [hashtable]$UnavailableImageAssets
+    )
+
+    if (-not $UnavailableImageAssets -or [string]::IsNullOrWhiteSpace($Value)) {
+        return $false
+    }
+
+    $asset = Normalize-ImageAssetForMigration -Value $Value
+    if ([string]::IsNullOrWhiteSpace($asset)) {
+        return $false
+    }
+
+    if ($asset.Equals('more.png', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $false
+    }
+
+    return $UnavailableImageAssets.ContainsKey($asset)
+}
+
+function Repair-ImportImageValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Key,
+        [AllowNull()]
+        [string]$Value,
+        [hashtable]$UnavailableImageAssets,
+        [hashtable]$ImageRenameMap
+    )
+
+    if (Test-UnavailableImportImageValue -Value $Value -UnavailableImageAssets $UnavailableImageAssets) {
+        Write-Log ("Cleared unavailable item image reference during import: {0}={1}" -f $Key, (Normalize-ImageAssetForMigration -Value $Value))
+        return ''
+    }
+
+    return (Rename-ImageValue -Value $Value -RenameMap $ImageRenameMap)
 }
 
 function Merge-UniqueLines {
@@ -2500,9 +2712,16 @@ function Assert-ImportableItemImageReferences {
         }
     }
 
-    if ($missingAssets.Count -gt 0) {
-        throw ("Legacy import aborted because source item data references image assets that are unavailable in both source and target catalogs: {0}" -f ($missingAssets.ToArray() -join ', '))
+    $unavailableAssets = New-CaseInsensitiveHashtable
+    foreach ($asset in $missingAssets) {
+        $unavailableAssets[$asset] = $true
     }
+
+    if ($missingAssets.Count -gt 0) {
+        Write-Log ("Legacy import will clear unavailable item image references instead of blocking import: {0}" -f ($missingAssets.ToArray() -join ', '))
+    }
+
+    return $unavailableAssets
 }
 
 function Test-TruthyLegacySetting {
@@ -2801,13 +3020,14 @@ function Set-ItemSectionValues {
         [string]$Prefix,
         [Parameter(Mandatory = $true)]
         [hashtable]$Values,
-        [hashtable]$ImageRenameMap
+        [hashtable]$ImageRenameMap,
+        [hashtable]$UnavailableImageAssets
     )
 
     foreach ($field in @('Image', 'Label', 'Action', 'Qty')) {
         $value = if ($Values.ContainsKey($field)) { [string]$Values[$field] } else { '' }
         if ($field -eq 'Image') {
-            $value = Rename-ImageValue -Value $value -RenameMap $ImageRenameMap
+            $value = Repair-ImportImageValue -Key "${Prefix}_${field}" -Value $value -UnavailableImageAssets $UnavailableImageAssets -ImageRenameMap $ImageRenameMap
         }
         Set-MapValue -Map $Variables -Key "${Prefix}_${field}" -Value $value
     }
@@ -2854,7 +3074,8 @@ function Move-HotbarSlot10ToInventoryIfCustom {
         [string]$SourcePrefix,
         [Parameter(Mandatory = $true)]
         [string]$Context,
-        [hashtable]$ImageRenameMap
+        [hashtable]$ImageRenameMap,
+        [hashtable]$UnavailableImageAssets
     )
 
     if ((Test-ItemSectionEmpty -Variables $SourceVariables -Prefix $SourcePrefix) -or (Test-ReservedHotbarSlot10Section -Variables $SourceVariables -Prefix $SourcePrefix)) {
@@ -2867,7 +3088,7 @@ function Move-HotbarSlot10ToInventoryIfCustom {
         return $false
     }
 
-    Set-ItemSectionValues -Variables $InventoryVariables -Prefix $targetPrefix -Values (Get-ItemSectionValues -Variables $SourceVariables -Prefix $SourcePrefix) -ImageRenameMap $ImageRenameMap
+    Set-ItemSectionValues -Variables $InventoryVariables -Prefix $targetPrefix -Values (Get-ItemSectionValues -Variables $SourceVariables -Prefix $SourcePrefix) -ImageRenameMap $ImageRenameMap -UnavailableImageAssets $UnavailableImageAssets
     Write-Log "$Context slot 10 custom data moved to $targetPrefix to preserve the v1.1 inventory button."
     return $true
 }
@@ -2878,7 +3099,8 @@ function Move-LegacyHotbarSlot10IfCustom {
         [string]$SourceHotbarPath,
         [Parameter(Mandatory = $true)]
         [string]$TargetInventoryPath,
-        [hashtable]$ImageRenameMap
+        [hashtable]$ImageRenameMap,
+        [hashtable]$UnavailableImageAssets
     )
 
     if (-not (Test-Path -LiteralPath $SourceHotbarPath -PathType Leaf)) {
@@ -2887,7 +3109,7 @@ function Move-LegacyHotbarSlot10IfCustom {
 
     $sourceVariables = Read-VariablesFile -Path $SourceHotbarPath
     $inventoryVariables = Read-VariablesFile -Path $TargetInventoryPath
-    $changed = Move-HotbarSlot10ToInventoryIfCustom -SourceVariables $sourceVariables -InventoryVariables $inventoryVariables -SourcePrefix 'HotbarItem_Slot10' -Context 'Legacy hotbar' -ImageRenameMap $ImageRenameMap
+    $changed = Move-HotbarSlot10ToInventoryIfCustom -SourceVariables $sourceVariables -InventoryVariables $inventoryVariables -SourcePrefix 'HotbarItem_Slot10' -Context 'Legacy hotbar' -ImageRenameMap $ImageRenameMap -UnavailableImageAssets $UnavailableImageAssets
     if (-not $changed) {
         return
     }
@@ -2919,7 +3141,8 @@ function Commit-EditorDraftIfActive {
         [string]$TargetHotbarPath,
         [Parameter(Mandatory = $true)]
         [string]$TargetInventoryPath,
-        [hashtable]$ImageRenameMap
+        [hashtable]$ImageRenameMap,
+        [hashtable]$UnavailableImageAssets
     )
 
     if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
@@ -2946,7 +3169,7 @@ function Commit-EditorDraftIfActive {
         $field = $matches[2]
         $value = [string]$sourceVariables[$key]
         if ($field -eq 'Image') {
-            $value = Rename-ImageValue -Value $value -RenameMap $ImageRenameMap
+            $value = Repair-ImportImageValue -Key $key -Value $value -UnavailableImageAssets $UnavailableImageAssets -ImageRenameMap $ImageRenameMap
         }
 
         if ($slot -eq 'Slot10') {
@@ -2971,7 +3194,7 @@ function Commit-EditorDraftIfActive {
             $value = if ($draftSlot10.Contains($sourceKey)) { $draftSlot10[$sourceKey] } else { '' }
             Set-MapValue -Map $slot10Values -Key "DraftSlot10_${field}" -Value $value
         }
-        $inventoryChanged = (Move-HotbarSlot10ToInventoryIfCustom -SourceVariables $slot10Values -InventoryVariables $inventoryVariables -SourcePrefix 'DraftSlot10' -Context 'Active editor draft') -or $inventoryChanged
+        $inventoryChanged = (Move-HotbarSlot10ToInventoryIfCustom -SourceVariables $slot10Values -InventoryVariables $inventoryVariables -SourcePrefix 'DraftSlot10' -Context 'Active editor draft' -ImageRenameMap $ImageRenameMap -UnavailableImageAssets $UnavailableImageAssets) -or $inventoryChanged
     }
 
     if ($hotbarChanged) {
@@ -2996,7 +3219,8 @@ function Merge-EditorDraftIfActive {
         [string]$SourcePath,
         [Parameter(Mandatory = $true)]
         [string]$TargetPath,
-        [hashtable]$ImageRenameMap
+        [hashtable]$ImageRenameMap,
+        [hashtable]$UnavailableImageAssets
     )
 
     if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
@@ -3020,7 +3244,7 @@ function Merge-EditorDraftIfActive {
     foreach ($key in $sourceVariables.Keys) {
         $value = $sourceVariables[$key]
         if ($key -match '_Image$') {
-            $value = Rename-ImageValue -Value $value -RenameMap $ImageRenameMap
+            $value = Repair-ImportImageValue -Key $key -Value $value -UnavailableImageAssets $UnavailableImageAssets -ImageRenameMap $ImageRenameMap
         }
 
         Set-MapValue -Map $targetVariables -Key $key -Value $value
@@ -3133,12 +3357,13 @@ function Invoke-Migration {
     $sourceItemImageDirectory = Join-RootPath -Root $resolvedSourceRoot -RelativePath '@Resources\Customs\Images\Items'
     $targetItemImageDirectory = Join-RootPath -Root $resolvedTargetRoot -RelativePath '@Resources\Customs\Images\Items'
     $importedLanguageCode = $null
+    $unavailableImageAssets = $null
 
     if ($ValidateOnly) {
         Preflight-SourceState -SourceRoot $resolvedSourceRoot
         $importedLanguageCode = Resolve-ImportedLanguageCode -SourceRoot $resolvedSourceRoot
         Assert-MigrationTargetImportState -Root $resolvedTargetRoot -ImportedLanguageCode $importedLanguageCode
-        Assert-ImportableItemImageReferences -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
+        $unavailableImageAssets = Assert-ImportableItemImageReferences -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
 
         Write-Log 'Legacy import validation passed.'
         return
@@ -3149,19 +3374,19 @@ function Invoke-Migration {
     $importedLanguageCode = Resolve-ImportedLanguageCode -SourceRoot $resolvedSourceRoot
     Assert-MigrationTargetImportState -Root $resolvedTargetRoot -ImportedLanguageCode $importedLanguageCode
 
-    Assert-ImportableItemImageReferences -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
+    $unavailableImageAssets = Assert-ImportableItemImageReferences -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
 
     Backup-TargetStateToTemporaryRollback -TargetRoot $resolvedTargetRoot
     $script:ImportTargetMutationStarted = $true
     Replace-DirectorySnapshot -SourceDirectory $sourceItemImageDirectory -TargetDirectory $targetItemImageDirectory
     $hotbarBackfill = New-HotbarSlot10ReservedBackfill -LanguageCode $importedLanguageCode
-    Merge-VariablesFile -SourcePath $sourceHotbarPath -TargetPath $targetHotbarPath -SameKeysOnly -ExcludeKeyPatterns @('^HotbarItem_Slot10_') -Backfill $hotbarBackfill -ImageRenameMap $imageRenameMap
+    Merge-VariablesFile -SourcePath $sourceHotbarPath -TargetPath $targetHotbarPath -SameKeysOnly -ExcludeKeyPatterns @('^HotbarItem_Slot10_') -Backfill $hotbarBackfill -ImageRenameMap $imageRenameMap -UnavailableImageAssets $unavailableImageAssets
     Normalize-HotbarSlot10ReservedLabel -TargetHotbarPath $targetHotbarPath -LanguageCode $importedLanguageCode
-    Merge-VariablesFile -SourcePath $sourceInventoryPath -TargetPath $targetInventoryPath -SameKeysOnly -ImageRenameMap $imageRenameMap
+    Merge-VariablesFile -SourcePath $sourceInventoryPath -TargetPath $targetInventoryPath -SameKeysOnly -ImageRenameMap $imageRenameMap -UnavailableImageAssets $unavailableImageAssets
     Merge-ImageAdjustmentsFile -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'ImageAdjustments.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'ImageAdjustments.inc') -ImageRenameMap $imageRenameMap
     Merge-ItemImagesCatalog -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'ItemImages.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'ItemImages.inc') -ImageRenameMap $imageRenameMap
     Rebuild-ImageAdjustmentsCatalog -TargetPath (Join-RootPath -Root $targetData -RelativePath 'ImageAdjustments.inc') -ImageDirectory $targetItemImageDirectory
-    Move-LegacyHotbarSlot10IfCustom -SourceHotbarPath $sourceHotbarPath -TargetInventoryPath $targetInventoryPath -ImageRenameMap $imageRenameMap
+    Move-LegacyHotbarSlot10IfCustom -SourceHotbarPath $sourceHotbarPath -TargetInventoryPath $targetInventoryPath -ImageRenameMap $imageRenameMap -UnavailableImageAssets $unavailableImageAssets
     Merge-ResponsiveLayoutState -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'ResponsiveLayoutState.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'ResponsiveLayoutState.inc') -SourceRoot $resolvedSourceRoot
     Merge-LineFile -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'EditorFavoritesCatalog.txt') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'EditorFavoritesCatalog.txt')
 
@@ -3177,6 +3402,7 @@ function Invoke-Migration {
         $script:EphemeralRollbackRoot = ''
     }
 
+    Install-RootConfigNameCompatModule -SourceRoot $resolvedSourceRoot
     Write-Log 'Legacy import completed.'
 }
 
