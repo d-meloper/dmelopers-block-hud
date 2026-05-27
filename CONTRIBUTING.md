@@ -4,7 +4,9 @@ English | [한국어](CONTRIBUTING.ko-KR.md)
 
 Contributions are welcome when they fit the project direction and can be reviewed safely.
 
-This public repository is the distribution surface for the skin. Maintainer-owned release branches are reviewed here before they become public releases, while implementation changes are prepared in the maintainer's private development workspace first.
+This public repository is the distribution surface and review surface for the skin. It is not the implementation source of truth. Maintainer-owned release branches are reviewed here before they become public releases, while implementation changes are prepared in the maintainer's private development workspace first.
+
+Community pull requests are welcome as proposal and review input. Please do not expect a community PR to be merged directly into public `main`. If a proposal is accepted, the maintainer applies it in the private development workspace, validates it there, and publishes it back here through a maintainer release approval PR.
 
 ## Before You Start
 
@@ -14,7 +16,7 @@ Open an issue first for larger changes, behavior changes, packaging changes, or 
 
 - Rainmeter `.ini` and `.inc` files must remain UTF-16 LE with BOM.
 - Lua runtime code should remain compatible with Lua 5.1.
-- Do not commit local runtime state, logs, backups, generated caches, or private paths.
+- Do not commit built distribution trees, ZIP/RMSKIN release assets, generated caches, local runtime state, logs, backups, or private paths.
 - Keep public-facing wording user-friendly and avoid internal workflow terminology.
 - Korea and Global packages install to the same skin folder: `DMeloper's Block HUD`.
 
@@ -30,7 +32,11 @@ Please include:
 
 Community pull requests are treated as proposals. If a change is accepted, the maintainer will apply it through the private development workspace and publish it back here through a release approval pull request.
 
-Release approval pull requests use `publish/v<version>` branches, must pass the `public-export-approval` check, and are merged manually before the GitHub Release tag and assets are finalized.
+Do not create `publish/v<version>` branches unless you are the maintainer preparing an official release approval PR. The `publish/v<version>` branch pattern and the `public-export-approval` check are maintainer release approval tools, not requirements for normal community PRs.
+
+A community PR may show a failing `public-export-approval` check because non-release branches are intentionally guarded. That failure does not block discussion or review of the proposal.
+
+Release approval pull requests are maintainer-only. They use `publish/v<version>` branches, must pass the `public-export-approval` check, and are merged manually before the GitHub Release tag and assets are finalized.
 
 ## Public Release Policy
 
