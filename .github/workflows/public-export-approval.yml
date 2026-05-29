@@ -16,18 +16,98 @@ jobs:
     steps:
       - name: Check out pull request
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Validate public release branch
         shell: pwsh
+        env:
+          PR_HEAD_REF: ${{ github.head_ref }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $headRef = '${{ github.head_ref }}'
-          if ($headRef -notlike 'publish/*') {
-            throw "This public repository accepts proposal PRs for discussion, but release approval PRs must come from a publish/* branch created by the maintainer publication tooling."
+          function Test-OrdinalContains {
+            param(
+              [Parameter(Mandatory = $true)][string[]]$AllowedValues,
+              [Parameter(Mandatory = $true)][string]$Value
+            )
+
+            foreach ($allowedValue in $AllowedValues) {
+              if ([string]::Equals($allowedValue, $Value, [System.StringComparison]::Ordinal)) {
+                return $true
+              }
+            }
+            return $false
+          }
+
+          $headRef = [string]$env:PR_HEAD_REF
+          $headRepository = [string]$env:PR_HEAD_REPOSITORY
+          $baseRepository = [string]$env:PR_BASE_REPOSITORY
+          if ([string]::IsNullOrWhiteSpace($headRef) -or [string]::IsNullOrWhiteSpace($headRepository) -or [string]::IsNullOrWhiteSpace($baseRepository)) {
+            throw "Could not resolve public PR head branch and repository context."
+          }
+
+          if (-not [string]::Equals($headRepository, $baseRepository, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Community or fork PRs are proposal PRs for review only. Mergeable public publication PRs must come from this public repository through the maintainer publication workflow. Port accepted changes into the source workspace and republish through publish/v<version> or publish/metadata-<topic>."
+          }
+
+          $isReleaseApproval = $headRef -cmatch '^publish/v[0-9]+(?:\.[0-9]+)*$'
+          $isMetadataOnly = $headRef -cmatch '^publish/metadata-[a-z0-9][a-z0-9-]*$'
+          if (-not $isReleaseApproval -and -not $isMetadataOnly) {
+            throw "This public repository accepts proposal PRs for discussion, but mergeable maintainer PRs must use publish/v<version> for release approval or publish/metadata-<topic> for metadata-only publication."
           }
 
           $root = (Get-Location).Path
+          $baseSha = [string]$env:PR_BASE_SHA
+          $headSha = [string]$env:PR_HEAD_SHA
+          if ([string]::IsNullOrWhiteSpace($baseSha) -or [string]::IsNullOrWhiteSpace($headSha)) {
+            throw "Could not resolve public PR base/head SHAs."
+          }
+          $changedFiles = @(git diff --name-only $baseSha $headSha | ForEach-Object { $_ -replace '\\', '/' } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not resolve changed files for public PR validation."
+          }
+          if ($changedFiles.Count -eq 0) {
+            throw "Public PR contains no changed files."
+          }
+
+          $metadataOnlyAllowedFiles = @(
+            'README.md',
+            'README.ko-KR.md',
+            'LICENSE',
+            'THIRD_PARTY_NOTICES.md',
+            'THIRD_PARTY_NOTICES.ko-KR.md',
+            'SECURITY.md',
+            'SECURITY.ko-KR.md',
+            'SUPPORT.md',
+            'SUPPORT.ko-KR.md',
+            'CONTRIBUTING.md',
+            'CONTRIBUTING.ko-KR.md',
+            'CODE_OF_CONDUCT.md',
+            'CODE_OF_CONDUCT.ko-KR.md',
+            'assets/hero-screenshot.png',
+            '.github/ISSUE_TEMPLATE/bug_report.yml',
+            '.github/ISSUE_TEMPLATE/feature_request.yml',
+            '.github/ISSUE_TEMPLATE/support_question.yml',
+            '.github/ISSUE_TEMPLATE/config.yml',
+            '.github/FUNDING.yml',
+            '.github/PULL_REQUEST_TEMPLATE.md',
+            '.github/workflows/public-export-approval.yml'
+          )
+
+          if ($isMetadataOnly) {
+            foreach ($changedFile in $changedFiles) {
+              if (-not (Test-OrdinalContains -AllowedValues $metadataOnlyAllowedFiles -Value $changedFile)) {
+                throw "Metadata-only PR changed a non-metadata path: $changedFile"
+              }
+            }
+            Write-Host "Metadata-only public PR validation is limited to approved public metadata paths."
+          }
+
           $paths = @(Get-ChildItem -LiteralPath $root -Force -Recurse | Where-Object {
             $_.FullName -notmatch '[\\/]\.git([\\/]|$)'
           } | ForEach-Object {
