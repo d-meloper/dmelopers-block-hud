@@ -90,13 +90,18 @@ jobs:
             'CODE_OF_CONDUCT.md',
             'CODE_OF_CONDUCT.ko-KR.md',
             'assets/hero-screenshot.png',
+            'assets/badges/release.svg',
+            'assets/badges/downloads.svg',
+            'assets/badges/stars.svg',
+            'assets/badges/license.svg',
             '.github/ISSUE_TEMPLATE/bug_report.yml',
             '.github/ISSUE_TEMPLATE/feature_request.yml',
             '.github/ISSUE_TEMPLATE/support_question.yml',
             '.github/ISSUE_TEMPLATE/config.yml',
             '.github/FUNDING.yml',
             '.github/PULL_REQUEST_TEMPLATE.md',
-            '.github/workflows/public-export-approval.yml'
+            '.github/workflows/public-export-approval.yml',
+            '.github/workflows/update-readme-badges.yml'
           )
 
           if ($isMetadataOnly) {
@@ -134,7 +139,8 @@ jobs:
             '.github/ISSUE_TEMPLATE/config.yml',
             '.github/FUNDING.yml',
             '.github/PULL_REQUEST_TEMPLATE.md',
-            '.github/workflows/public-export-approval.yml'
+            '.github/workflows/public-export-approval.yml',
+            '.github/workflows/update-readme-badges.yml'
           )
           foreach ($requiredFile in $requiredFiles) {
             if (-not (Test-Path -LiteralPath (Join-Path $root $requiredFile) -PathType Leaf)) {

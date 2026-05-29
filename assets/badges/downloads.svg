@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="142" height="28" role="img" aria-label="DOWNLOADS: 429">
+  <title>DOWNLOADS: 429</title>
+  <rect width="88" height="28" fill="#4A4F63"/>
+  <rect x="88" width="54" height="28" fill="#FFB07C"/>
+  <g fill="#ffffff" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11" font-weight="700" letter-spacing="1.2">
+    <text x="44" y="18" text-anchor="middle">DOWNLOADS</text>
+  </g>
+  <g fill="#111111" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11" font-weight="700" letter-spacing="1.2">
+    <text x="115" y="18" text-anchor="middle">429</text>
+  </g>
+</svg>

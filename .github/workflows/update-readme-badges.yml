@@ -1,0 +1,198 @@
+name: update-readme-badges
+
+on:
+  schedule:
+    - cron: '17 3 */2 * *'
+  workflow_dispatch:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: readme-badges-${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || 'scheduled-snapshot' }}
+  cancel-in-progress: false
+
+jobs:
+  update-readme-badges:
+    name: update-readme-badges
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'pull_request_target' ||
+      (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (
+          startsWith(github.event.pull_request.head.ref, 'publish/v') ||
+          startsWith(github.event.pull_request.head.ref, 'publish/metadata-')
+        )
+      )
+    env:
+      TARGET_REF: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || 'publish/metadata-readme-badge-snapshots' }}
+      BASE_REF: main
+      GITHUB_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || 'main' }}
+          persist-credentials: true
+
+      - name: Refresh badge snapshots
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $allowedFiles = @(
+            'assets/badges/release.svg',
+            'assets/badges/downloads.svg',
+            'assets/badges/stars.svg',
+            'assets/badges/license.svg'
+          )
+
+          function Ensure-Directory {
+            param([Parameter(Mandatory = $true)][string]$Path)
+
+            if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+              New-Item -ItemType Directory -Path $Path -Force | Out-Null
+            }
+          }
+
+          function Escape-SvgText {
+            param([Parameter(Mandatory = $true)][string]$Text)
+
+            return [System.Security.SecurityElement]::Escape($Text)
+          }
+
+          function New-BadgeSvg {
+            param(
+              [Parameter(Mandatory = $true)][string]$Label,
+              [Parameter(Mandatory = $true)][string]$Message,
+              [Parameter(Mandatory = $true)][string]$LabelColor,
+              [Parameter(Mandatory = $true)][string]$MessageColor,
+              [string]$MessageTextColor = '#111111'
+            )
+
+            $displayLabel = $Label.ToUpperInvariant()
+            $displayMessage = $Message.ToUpperInvariant()
+            $labelWidth = [Math]::Max(76, 16 + ($displayLabel.Length * 8))
+            $messageWidth = [Math]::Max(54, 16 + ($displayMessage.Length * 8))
+            $width = $labelWidth + $messageWidth
+            $labelCenter = [Math]::Floor($labelWidth / 2)
+            $messageCenter = $labelWidth + [Math]::Floor($messageWidth / 2)
+            $labelText = Escape-SvgText -Text $displayLabel
+            $messageText = Escape-SvgText -Text $displayMessage
+
+            return @"
+          <svg xmlns="http://www.w3.org/2000/svg" width="$width" height="28" role="img" aria-label="${labelText}: ${messageText}">
+            <title>${labelText}: ${messageText}</title>
+            <rect width="$labelWidth" height="28" fill="$LabelColor"/>
+            <rect x="$labelWidth" width="$messageWidth" height="28" fill="$MessageColor"/>
+            <g fill="#ffffff" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11" font-weight="700" letter-spacing="1.2">
+              <text x="$labelCenter" y="18" text-anchor="middle">$labelText</text>
+            </g>
+            <g fill="$MessageTextColor" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11" font-weight="700" letter-spacing="1.2">
+              <text x="$messageCenter" y="18" text-anchor="middle">$messageText</text>
+            </g>
+          </svg>
+          "@
+          }
+
+          function Write-TextIfChanged {
+            param(
+              [Parameter(Mandatory = $true)][string]$Path,
+              [Parameter(Mandatory = $true)][string]$Text
+            )
+
+            if ((Test-Path -LiteralPath $Path -PathType Leaf) -and ([System.IO.File]::ReadAllText($Path) -ceq $Text)) {
+              return
+            }
+            [System.IO.File]::WriteAllText($Path, $Text, [System.Text.UTF8Encoding]::new($false))
+          }
+
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+
+          $repo = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY"
+          $releases = @(Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases?per_page=100")
+          $stableReleases = @($releases | Where-Object { $_.draft -eq $false -and $_.prerelease -eq $false })
+          $latestRelease = $stableReleases | Select-Object -First 1
+          if ($null -eq $latestRelease) {
+            throw "No stable public release was found for $env:GITHUB_REPOSITORY."
+          }
+
+          $downloadCount = 0
+          foreach ($release in $stableReleases) {
+            foreach ($asset in @($release.assets)) {
+              $downloadCount += [int]$asset.download_count
+            }
+          }
+
+          $licenseText = 'MIT'
+          if ($null -ne $repo.license -and -not [string]::IsNullOrWhiteSpace([string]$repo.license.spdx_id) -and [string]$repo.license.spdx_id -ne 'NOASSERTION') {
+            $licenseText = [string]$repo.license.spdx_id
+          }
+
+          Ensure-Directory -Path 'assets/badges'
+          Write-TextIfChanged -Path 'assets/badges/release.svg' -Text (New-BadgeSvg -Label 'release' -Message ([string]$latestRelease.tag_name) -LabelColor '#2F334D' -MessageColor '#9FE870')
+          Write-TextIfChanged -Path 'assets/badges/downloads.svg' -Text (New-BadgeSvg -Label 'downloads' -Message ([string]$downloadCount) -LabelColor '#4A4F63' -MessageColor '#FFB07C')
+          Write-TextIfChanged -Path 'assets/badges/stars.svg' -Text (New-BadgeSvg -Label 'stars' -Message ([string]$repo.stargazers_count) -LabelColor '#2F334D' -MessageColor '#C6C4FF')
+          Write-TextIfChanged -Path 'assets/badges/license.svg' -Text (New-BadgeSvg -Label 'license' -Message $licenseText -LabelColor '#4A4F63' -MessageColor '#AED8FF')
+
+          $statusLines = @(git status --porcelain=v1 | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+          if ($statusLines.Count -eq 0) {
+            Write-Host 'Badge snapshots are already current.'
+            return
+          }
+
+          $changedFiles = @($statusLines | ForEach-Object { $_.Substring(3) -replace '\\', '/' })
+          foreach ($changedFile in $changedFiles) {
+            if ($allowedFiles -notcontains $changedFile) {
+              throw "Badge workflow changed an unauthorized path: $changedFile"
+            }
+          }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- @allowedFiles
+
+          $stagedFiles = @(git diff --cached --name-only | ForEach-Object { $_ -replace '\\', '/' })
+          foreach ($stagedFile in $stagedFiles) {
+            if ($allowedFiles -notcontains $stagedFile) {
+              throw "Badge workflow staged an unauthorized path: $stagedFile"
+            }
+          }
+          if ($stagedFiles.Count -eq 0) {
+            Write-Host 'No badge changes were staged.'
+            return
+          }
+
+          git commit -m 'Update README badge snapshots'
+
+          if ('${{ github.event_name }}' -ne 'pull_request_target') {
+            git branch -M $env:TARGET_REF
+          }
+          git push origin "HEAD:$env:TARGET_REF"
+
+          if ('${{ github.event_name }}' -ne 'pull_request_target') {
+            $existingPr = @(gh pr list --head $env:TARGET_REF --base $env:BASE_REF --state open --json number,url --limit 1 | ConvertFrom-Json)
+            if ($existingPr.Count -gt 0) {
+              Write-Host "Updated existing badge snapshot PR: $($existingPr[0].url)"
+            }
+            else {
+              gh pr create `
+                --base $env:BASE_REF `
+                --head $env:TARGET_REF `
+                --title 'Update README badge snapshots' `
+                --body 'Automated metadata-only PR that refreshes the generated README badge SVG snapshots. No release assets, tags, or runtime skin files are changed.'
+            }
+          }

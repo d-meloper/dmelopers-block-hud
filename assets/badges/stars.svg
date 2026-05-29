@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="130" height="28" role="img" aria-label="STARS: 20">
+  <title>STARS: 20</title>
+  <rect width="76" height="28" fill="#2F334D"/>
+  <rect x="76" width="54" height="28" fill="#C6C4FF"/>
+  <g fill="#ffffff" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11" font-weight="700" letter-spacing="1.2">
+    <text x="38" y="18" text-anchor="middle">STARS</text>
+  </g>
+  <g fill="#111111" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11" font-weight="700" letter-spacing="1.2">
+    <text x="103" y="18" text-anchor="middle">20</text>
+  </g>
+</svg>
