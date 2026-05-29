@@ -5,9 +5,9 @@
 [English](README.md) | 한국어
 
 <p align="center">
-  <a href="https://github.com/d-meloper/dmelopers-block-hud/releases/latest"><img alt="Latest release" src="https://img.shields.io/badge/release-v1.2.1-9FE870?style=for-the-badge&labelColor=2F334D"></a>
-  <a href="https://github.com/d-meloper/dmelopers-block-hud/releases"><img alt="Total downloads" src="https://img.shields.io/badge/downloads-429-FFB07C?style=for-the-badge&labelColor=4A4F63"></a>
-  <a href="https://github.com/d-meloper/dmelopers-block-hud/stargazers"><img alt="GitHub stars" src="https://img.shields.io/badge/stars-20-C6C4FF?style=for-the-badge&labelColor=2F334D"></a>
+  <a href="https://github.com/d-meloper/dmelopers-block-hud/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/d-meloper/dmelopers-block-hud?style=for-the-badge&label=release&labelColor=2F334D&color=9FE870"></a>
+  <a href="https://github.com/d-meloper/dmelopers-block-hud/releases"><img alt="Total downloads" src="https://img.shields.io/github/downloads/d-meloper/dmelopers-block-hud/total?style=for-the-badge&label=downloads&labelColor=4A4F63&color=FFB07C"></a>
+  <a href="https://github.com/d-meloper/dmelopers-block-hud/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/d-meloper/dmelopers-block-hud?style=for-the-badge&label=stars&labelColor=2F334D&color=C6C4FF"></a>
   <a href="https://github.com/d-meloper/dmelopers-block-hud/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-AED8FF?style=for-the-badge&labelColor=4A4F63"></a>
 </p>
 
