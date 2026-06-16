@@ -15,6 +15,7 @@ return function(app)
 
 
     local state = app.state
+    local schema = app.schema
 
 
 
@@ -391,6 +392,8 @@ return function(app)
 
         setVariable('SettingsRow' .. rowIndex .. '_LabelX', SKIN:GetVariable('SlotSettingsRow' .. rowIndex .. '_LabelTextX', '0'))
 
+        setVariable('SettingsRow' .. rowIndex .. '_LabelY', SKIN:GetVariable('SlotSettingsRow' .. rowIndex .. '_LabelTextY', '0'))
+
 
 
 
@@ -406,6 +409,8 @@ return function(app)
 
 
         setVariable('SettingsRow' .. rowIndex .. '_LabelW', SKIN:GetVariable('SlotSettingsRow' .. rowIndex .. '_LabelW', '0'))
+
+        setVariable('SettingsRow' .. rowIndex .. '_LabelH', SKIN:GetVariable('SlotSettingsRow' .. rowIndex .. '_LabelH', '0'))
 
 
 
@@ -470,6 +475,87 @@ return function(app)
 
 
         setVariable('SettingsRow' .. rowIndex .. '_Field_H', SKIN:GetVariable('SlotSettingsRow' .. rowIndex .. '_ControlH', '0'))
+
+        local prefix = 'SettingsRow' .. tostring(rowIndex)
+        local slotPrefix = 'SlotSettingsRow' .. tostring(rowIndex)
+        local labelX = pixelValue(methods.numericVariable(slotPrefix .. '_LabelTextX', 0), 0)
+        local labelY = pixelValue(methods.numericVariable(slotPrefix .. '_LabelTextY', 0), 0)
+        local labelW = pixelValue(methods.numericVariable(slotPrefix .. '_LabelW', 0), 0)
+        local labelH = pixelValue(methods.numericVariable(slotPrefix .. '_LabelH', methods.numericVariable('SettingsTall1H', 40)), 40)
+        local controlX = pixelValue(methods.numericVariable(slotPrefix .. '_ControlX', 0), 0)
+        local controlY = pixelValue(methods.numericVariable(slotPrefix .. '_ControlY', 0), 0)
+        local controlW = pixelValue(methods.numericVariable(slotPrefix .. '_ControlW', 0), 0)
+        local controlH = pixelValue(methods.numericVariable(slotPrefix .. '_ControlH', methods.numericVariable('SettingsTall1H', 40)), 40)
+        local textPad = pixelValue(methods.numericVariable('SlotSettingsRowText_ContentPad', methods.numericVariable('SettingsInnerPad', 10)), 10)
+        local dropdownW = pixelValue(methods.numericVariable('SettingsDropdownButtonW', 24), 24)
+        local toggleSize = pixelValue(methods.numericVariable('SlotSettingsRowToggle_Size', methods.numericVariable('SettingsToggleButtonSize', 28)), 28)
+        local toggleInset = pixelValue(methods.numericVariable('SlotSettingsRowToggle_FillInset', methods.numericVariable('SettingsToggleFillInset', 7)), 7)
+        local stepperFieldW = pixelValue(methods.numericVariable('SlotSettingsRowStepperFieldW', methods.numericVariable('SettingsStepperFieldW', 0)), 0)
+        local stepperButtonGap = pixelValue(methods.numericVariable('SlotSettingsRowStepperButtonGap', 4), 4)
+        local stepperButtonW = pixelValue(methods.numericVariable('SlotSettingsRowStepperButtonW', methods.numericVariable('SettingsStepperButtonW', 24)), 24)
+        local actionButtonW = pixelValue(methods.numericVariable('SlotSettingsRowActionButtonW', methods.numericVariable('SettingsActionButtonW', 110)), 110)
+
+        local dropdownX = controlX + controlW - dropdownW
+        local toggleX = controlX + controlW - toggleSize
+        local toggleY = controlY + pixelValue((controlH - toggleSize) / 2, 0)
+        local stepperMinusX = controlX + stepperFieldW + stepperButtonGap
+        local stepperPlusX = stepperMinusX + stepperButtonW + stepperButtonGap
+        local actionX = controlX + controlW - actionButtonW
+
+        setVariable(prefix .. '_LabelX', tostring(labelX))
+        setVariable(prefix .. '_LabelY', tostring(labelY))
+        setVariable(prefix .. '_LabelW', tostring(labelW))
+        setVariable(prefix .. '_LabelH', tostring(labelH))
+        setVariable(prefix .. '_Field_X', tostring(controlX))
+        setVariable(prefix .. '_Field_Y', tostring(controlY))
+        setVariable(prefix .. '_Field_W', tostring(controlW))
+        setVariable(prefix .. '_Field_H', tostring(controlH))
+        setVariable(prefix .. '_FieldContentX', tostring(controlX + textPad))
+        setVariable(prefix .. '_FieldContentY', tostring(controlY + textPad))
+        setVariable(prefix .. '_FieldContentW', tostring(math.max(0, controlW - (2 * textPad))))
+        setVariable(prefix .. '_FieldContentH', tostring(math.max(0, controlH - (2 * textPad))))
+        setVariable(prefix .. '_DropdownButton_X', tostring(dropdownX))
+        setVariable(prefix .. '_DropdownButton_Y', tostring(controlY))
+        setVariable(prefix .. '_DropdownButton_W', tostring(dropdownW))
+        setVariable(prefix .. '_DropdownButton_H', tostring(controlH))
+        setVariable(prefix .. '_DropdownButton_LabelX', tostring(dropdownX + pixelValue(dropdownW / 2, 0)))
+        setVariable(prefix .. '_DropdownButton_LabelY', tostring(controlY + pixelValue(controlH / 2, 0)))
+        setVariable(prefix .. '_Toggle_X', tostring(toggleX))
+        setVariable(prefix .. '_Toggle_Y', tostring(toggleY))
+        setVariable(prefix .. '_Toggle_W', tostring(toggleSize))
+        setVariable(prefix .. '_Toggle_H', tostring(toggleSize))
+        setVariable(prefix .. '_ToggleFill_X', tostring(toggleX + toggleInset))
+        setVariable(prefix .. '_ToggleFill_Y', tostring(toggleY + toggleInset))
+        setVariable(prefix .. '_ToggleFill_W', tostring(math.max(0, toggleSize - (2 * toggleInset))))
+        setVariable(prefix .. '_ToggleFill_H', tostring(math.max(0, toggleSize - (2 * toggleInset))))
+        setVariable(prefix .. '_StepperField_X', tostring(controlX))
+        setVariable(prefix .. '_StepperField_Y', tostring(controlY))
+        setVariable(prefix .. '_StepperField_W', tostring(stepperFieldW))
+        setVariable(prefix .. '_StepperField_H', tostring(controlH))
+        setVariable(prefix .. '_StepperMinus_X', tostring(stepperMinusX))
+        setVariable(prefix .. '_StepperMinus_Y', tostring(controlY))
+        setVariable(prefix .. '_StepperMinus_W', tostring(stepperButtonW))
+        setVariable(prefix .. '_StepperMinus_H', tostring(controlH))
+        setVariable(prefix .. '_StepperMinus_LabelX', tostring(stepperMinusX + pixelValue(stepperButtonW / 2, 0)))
+        setVariable(prefix .. '_StepperMinus_LabelY', tostring(controlY + pixelValue(controlH / 2, 0)))
+        setVariable(prefix .. '_StepperPlus_X', tostring(stepperPlusX))
+        setVariable(prefix .. '_StepperPlus_Y', tostring(controlY))
+        setVariable(prefix .. '_StepperPlus_W', tostring(stepperButtonW))
+        setVariable(prefix .. '_StepperPlus_H', tostring(controlH))
+        setVariable(prefix .. '_StepperPlus_LabelX', tostring(stepperPlusX + pixelValue(stepperButtonW / 2, 0)))
+        setVariable(prefix .. '_StepperPlus_LabelY', tostring(controlY + pixelValue(controlH / 2, 0)))
+        setVariable(prefix .. '_Action_X', tostring(actionX))
+        setVariable(prefix .. '_Action_Y', tostring(controlY))
+        setVariable(prefix .. '_Action_W', tostring(actionButtonW))
+        setVariable(prefix .. '_Action_H', tostring(controlH))
+        setVariable(prefix .. '_Action_LabelX', tostring(actionX + pixelValue(actionButtonW / 2, 0)))
+        setVariable(prefix .. '_Action_LabelY', tostring(controlY + pixelValue(controlH / 2, 0)))
+        setVariable(prefix .. '_ActionSecondary_X', tostring(actionX))
+        setVariable(prefix .. '_ActionSecondary_Y', tostring(controlY))
+        setVariable(prefix .. '_ActionSecondary_W', tostring(actionButtonW))
+        setVariable(prefix .. '_ActionSecondary_H', tostring(controlH))
+        setVariable(prefix .. '_ActionSecondary_LabelX', tostring(actionX + pixelValue(actionButtonW / 2, 0)))
+        setVariable(prefix .. '_ActionSecondary_LabelY', tostring(controlY + pixelValue(controlH / 2, 0)))
 
 
 
@@ -581,7 +667,15 @@ return function(app)
 
 
 
-        local labelW = (field and field.wideTextField) and 96 or (methods.numericVariable('SettingsRowLabelW', 0) or 0)
+        local labelW = methods.numericVariable('SettingsRowLabelW', 0) or 0
+
+        if field and field.wideTextField then
+
+            labelW = tonumber(field.wideTextFieldLabelW) or 96
+
+        end
+
+        labelW = pixelValue(labelW, 0)
 
 
 
@@ -1558,6 +1652,12 @@ return function(app)
 
         state.currentRowActionByIndex[rowIndex] = nil
 
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryHidden', '1')
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryText', '')
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryCommand', '')
+
+        state.currentRowSecondaryActionByIndex[rowIndex] = nil
+
 
 
 
@@ -1677,15 +1777,129 @@ return function(app)
         inventory = 'Settings_Tab_Inventory',
         clock = 'Settings_Tab_Clock',
         ui = 'Settings_Tab_UI',
+        jukebox = 'Settings_Content_Jukebox',
+        herobrine = 'Settings_Content_Herobrine',
     }
 
     function methods.tabDisplayText(tab)
         local fallback = trim(tab and tab.name or '')
+        local labelVariable = trim(tab and tab.labelVariable or '')
+        if labelVariable ~= '' then
+            return '#' .. labelVariable .. '#'
+        end
         local key = settingsTabLocalizationKeyById[trim(tab and tab.id or '')]
         if key == nil or key == '' then
             return fallback
         end
         return trim(methods.localize(key, fallback))
+    end
+
+    local function setTabSlotGeometry(index, x, y, w, h, labelPad)
+        local prefix = 'SlotSettingsTab' .. tostring(index)
+        setVariable(prefix .. '_X', tostring(x))
+        setVariable(prefix .. '_Y', tostring(y))
+        setVariable(prefix .. '_W', tostring(w))
+        setVariable(prefix .. '_H', tostring(h))
+        setVariable(prefix .. '_LabelX', tostring(x + (w / 2)))
+        setVariable(prefix .. '_LabelY', tostring(y + (h / 2)))
+        setVariable(prefix .. '_LabelW', tostring(math.max(0, w - (2 * labelPad))))
+    end
+
+    local function restoreNormalTabGeometry()
+        local labelPad = methods.numericVariable('SettingsTabLabelPad', 3) or 3
+        local tabH = methods.numericVariable('SettingsTabSlotH', methods.numericVariable('SettingsTall1H', 40)) or 40
+        local contentX = methods.numericVariable('SettingsContentX', 0) or 0
+        local contentW = methods.numericVariable('SettingsContentW', 0) or 0
+        local gap = methods.numericVariable('SettingsTabGap', 0) or 0
+        local row1Y = methods.numericVariable('SettingsTabStripY', 0) or 0
+        local rowGap = methods.numericVariable('SettingsTabRowGap', 0) or 0
+        local row2Y = row1Y + tabH + rowGap
+        local row1W = math.max(0, (contentW - (3 * gap)) / 4)
+        local row2W = math.max(0, (contentW - (2 * gap)) / 3)
+
+        setTabSlotGeometry(1, contentX, row1Y, row1W, tabH, labelPad)
+        setTabSlotGeometry(3, contentX + row1W + gap, row1Y, row1W, tabH, labelPad)
+        setTabSlotGeometry(6, contentX + ((row1W + gap) * 2), row1Y, row1W, tabH, labelPad)
+        setTabSlotGeometry(7, contentX + ((row1W + gap) * 3), row1Y, row1W, tabH, labelPad)
+        setTabSlotGeometry(5, contentX, row2Y, row2W, tabH, labelPad)
+        setTabSlotGeometry(4, contentX + row2W + gap, row2Y, row2W, tabH, labelPad)
+        setTabSlotGeometry(2, contentX + ((row2W + gap) * 2), row2Y, row2W, tabH, labelPad)
+    end
+
+    local function applyContentTabGeometry(tabCount)
+        local count = math.max(1, tonumber(tabCount) or 1)
+        local contentX = methods.numericVariable('SettingsContentX', 0) or 0
+        local contentW = methods.numericVariable('SettingsContentW', 0) or 0
+        local gap = methods.numericVariable('SettingsTabGap', 0) or 0
+        local y = methods.numericVariable('SettingsTabStripY', 0) or 0
+        local h = methods.numericVariable('SettingsTabSlotH', methods.numericVariable('SettingsTall1H', 40)) or 40
+        local labelPad = methods.numericVariable('SettingsTabLabelPad', 3) or 3
+        local w = math.max(0, (contentW - ((count - 1) * gap)) / count)
+        for index = 1, 7 do
+            if index <= count then
+                local x = contentX + ((index - 1) * (w + gap))
+                setTabSlotGeometry(index, x, y, w, h, labelPad)
+            else
+                setTabSlotGeometry(index, contentX, y, 0, h, labelPad)
+            end
+        end
+    end
+
+    local function isHerobrineStatsPage(tab)
+        return state.contentMode == true
+            and trim(tab and tab.id or '') == 'herobrine'
+            and methods.activePageIndex() == 2
+    end
+
+    local function applyRowSlotGeometry(contentMode)
+        local rowH = methods.numericVariable('SettingsTall1H', 40) or 40
+        local rowGap = methods.numericVariable('SettingsRowGap', methods.numericVariable('SettingsSectionGap', 12)) or 12
+        local row1Y
+        if contentMode then
+            row1Y = (methods.numericVariable('SettingsTabStripY', 0) or 0) + (methods.numericVariable('SettingsTabSlotH', rowH) or rowH) + (methods.numericVariable('SettingsTabOptionsGap', 20) or 20)
+        else
+            row1Y = methods.numericVariable('SettingsRow1Y', 0) or 0
+        end
+        if contentMode and isHerobrineStatsPage(methods.activeTab and methods.activeTab() or nil) then
+            row1Y = row1Y + rowH + rowGap
+        end
+
+        local labelX = methods.numericVariable('SettingsRowLabelX', methods.numericVariable('SettingsContentX', 0)) or 0
+        local labelW = methods.numericVariable('SettingsRowLabelW', 0) or 0
+        local controlX = methods.numericVariable('SettingsRowControlX', 0) or 0
+        local controlW = methods.numericVariable('SettingsRowControlW', 0) or 0
+        local dropdownW = methods.numericVariable('SettingsDropdownButtonW', 24) or 24
+
+        for index = 1, state.rowsPerPage do
+            local y = row1Y + ((index - 1) * (rowH + rowGap))
+            setVariable('SlotSettingsRow' .. index .. '_LabelX', tostring(labelX))
+            setVariable('SlotSettingsRow' .. index .. '_LabelY', tostring(y))
+            setVariable('SlotSettingsRow' .. index .. '_LabelW', tostring(labelW))
+            setVariable('SlotSettingsRow' .. index .. '_LabelH', tostring(rowH))
+            setVariable('SlotSettingsRow' .. index .. '_LabelTextX', tostring(labelX))
+            setVariable('SlotSettingsRow' .. index .. '_LabelTextY', tostring(y + (rowH / 2)))
+            setVariable('SlotSettingsRow' .. index .. '_ControlX', tostring(controlX))
+            setVariable('SlotSettingsRow' .. index .. '_ControlY', tostring(y))
+            setVariable('SlotSettingsRow' .. index .. '_ControlW', tostring(controlW))
+            setVariable('SlotSettingsRow' .. index .. '_ControlH', tostring(rowH))
+            setVariable('SlotSettingsRow' .. index .. '_DropdownButton_X', tostring(controlX + controlW - dropdownW))
+            setVariable('SlotSettingsRow' .. index .. '_DropdownButton_Y', tostring(y))
+            setVariable('SlotSettingsRow' .. index .. '_DropdownButton_W', tostring(dropdownW))
+            setVariable('SlotSettingsRow' .. index .. '_DropdownButton_H', tostring(rowH))
+            setVariable('SlotSettingsRow' .. index .. '_DropdownButton_LabelX', tostring(controlX + controlW - (dropdownW / 2)))
+            setVariable('SlotSettingsRow' .. index .. '_DropdownButton_LabelY', tostring(y + (rowH / 2)))
+        end
+    end
+
+    function methods.applyActiveModeLayout()
+        setVariable('SettingsContentMode', state.contentMode == true and '1' or '0')
+        local activeTabs = methods.activeTabs and methods.activeTabs() or schema.tabs
+        if state.contentMode == true then
+            applyContentTabGeometry(#activeTabs)
+        else
+            restoreNormalTabGeometry()
+        end
+        applyRowSlotGeometry(state.contentMode == true)
     end
 
     function methods.fieldLabelText(field)
@@ -1714,6 +1928,7 @@ return function(app)
             resetIndicatorsSettings = 'Settings_Field_resetTab_Action',
             resetInventorySettings = 'Settings_Field_resetTab_Action',
             resetClockSettings = 'Settings_Field_resetTab_Action',
+            resetHerobrineSettings = 'Settings_Field_resetTab_Action',
             resetHotbarSkinPositions = 'Settings_Field_resetPosition_Action',
             resetIndicatorsSkinPositions = 'Settings_Field_resetPosition_Action',
             resetInventorySkinPositions = 'Settings_Field_resetPosition_Action',
@@ -1741,6 +1956,42 @@ return function(app)
         end
 
         return methods.localize(localizationKey, '')
+    end
+
+    function methods.configureHerobrineStatsHeader(tab)
+        local showHeader = state.contentMode == true
+            and trim(tab and tab.id or '') == 'herobrine'
+            and methods.activePageIndex() == 2
+
+        if not showHeader then
+            setVariable('SettingsHerobrineStatsHeaderHidden', '1')
+            setVariable('SettingsHerobrineStatsHeaderText', '')
+            SKIN:Bang('!HideMeter', 'MeterSettingsHerobrineStatsHeader')
+            SKIN:Bang('!UpdateMeter', 'MeterSettingsHerobrineStatsHeader')
+            return
+        end
+
+        local row1Y = methods.numericVariable('SlotSettingsRow1_LabelY', methods.numericVariable('SettingsRow1Y', 0)) or 0
+        local rowH = methods.numericVariable('SlotSettingsRow1_LabelH', methods.numericVariable('SettingsTall1H', 40)) or 40
+        local rowGap = methods.numericVariable('SettingsRowGap', methods.numericVariable('SettingsSectionGap', 12)) or 12
+        local headerH = math.max(12, methods.numericVariable('SettingsHerobrineStatsHeaderH', 18) or 18)
+        local headerSlotY = row1Y - rowH - rowGap
+        local contentX = methods.numericVariable('SettingsContentX', 0) or 0
+        local contentW = methods.numericVariable('SettingsContentW', 0) or 0
+        local titleRef = methods.localizationVariableRef and methods.localizationVariableRef('Settings_HerobrineStats_Title') or ''
+
+        if titleRef == '' then
+            titleRef = methods.localize('Settings_HerobrineStats_Title', 'Herobrine stats')
+        end
+
+        setVariable('SettingsHerobrineStatsHeaderHidden', '0')
+        setVariable('SettingsHerobrineStatsHeaderText', titleRef)
+        setVariable('SettingsHerobrineStatsHeaderX', tostring(contentX + (contentW / 2)))
+        setVariable('SettingsHerobrineStatsHeaderY', tostring(math.max(0, headerSlotY + (rowH / 2))))
+        setVariable('SettingsHerobrineStatsHeaderW', tostring(contentW))
+        setVariable('SettingsHerobrineStatsHeaderH', tostring(headerH))
+        SKIN:Bang('!ShowMeter', 'MeterSettingsHerobrineStatsHeader')
+        SKIN:Bang('!UpdateMeter', 'MeterSettingsHerobrineStatsHeader')
     end
 
 
@@ -1893,7 +2144,7 @@ return function(app)
 
 
 
-        setVariable('SettingsRow' .. rowIndex .. '_FieldCommand', '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "PrepareTextField(\'' .. field.key .. '\')"][!UpdateMeasure MeasureSharedInput][!CommandMeasure MeasureSharedInput "ExecuteBatch 1-2"]')
+        setVariable('SettingsRow' .. rowIndex .. '_FieldCommand', '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "PrepareTextField(\'' .. field.key .. '\')"][!CommandMeasure MeasureSettingsCommit "OpenPreparedTextField()"]')
 
 
 
@@ -2162,6 +2413,21 @@ return function(app)
 
 
     end
+    function methods.formatDurationSeconds(value)
+        local totalSeconds = math.max(0, math.floor(tonumber(value) or 0))
+        local hours = math.floor(totalSeconds / 3600)
+        local minutes = math.floor((totalSeconds % 3600) / 60)
+        local seconds = totalSeconds % 60
+        local template = trim(methods.localize('Settings_DurationFormat', '%1 h %2 min %3 sec'))
+        if template == '' then
+            template = '%1 h %2 min %3 sec'
+        end
+        template = template:gsub('%%1', tostring(hours))
+        template = template:gsub('%%2', tostring(minutes))
+        template = template:gsub('%%3', tostring(seconds))
+        return template
+    end
+
 
 
 
@@ -2180,8 +2446,13 @@ return function(app)
     function methods.configureReadonlyRow(rowIndex, field)
 
         local displayValue = ''
+        local displayVariable = trim(field and field.displayVariable or '')
 
-        if field and field.key == 'appVersion' then
+        if displayVariable ~= '' then
+
+            displayValue = trim(SKIN:GetVariable(displayVariable, field.displayFallback or ''))
+
+        elseif field and field.key == 'appVersion' then
 
             displayValue = methods.appVersionDisplayValue()
 
@@ -2189,8 +2460,18 @@ return function(app)
 
         if displayValue == '' then
 
+            displayValue = trim(field and field.displayFallback or '')
+
+        end
+
+        if displayValue == '' and field and field.key == 'appVersion' then
+
             displayValue = 'v?'
 
+        end
+
+        if trim(field and field.displayFormatter or '') == 'durationSeconds' then
+            displayValue = methods.formatDurationSeconds(displayValue)
         end
 
         setVariable('SettingsRow' .. rowIndex .. '_FieldHidden', '0')
@@ -2325,6 +2606,104 @@ return function(app)
 
 
 
+    function methods.configureSegmentedRow(rowIndex, field, isDisabled)
+
+        local options = field.segmentedOptions or {}
+        local primary = options[1] or { value = '', fallback = '' }
+        local secondary = options[2] or { value = '', fallback = '' }
+        local currentValue = methods.normalizeFieldValue(field, methods.readFieldValue(field), 'wide')
+        local primaryValue = methods.normalizeFieldValue(field, primary.value or '', 'wide')
+        local secondaryValue = methods.normalizeFieldValue(field, secondary.value or '', 'wide')
+        local primarySelected = currentValue == primaryValue
+        local secondarySelected = currentValue == secondaryValue
+
+        local controlX = methods.numericVariable('SlotSettingsRow' .. rowIndex .. '_ControlX', 0) or 0
+        local controlY = methods.numericVariable('SlotSettingsRow' .. rowIndex .. '_ControlY', 0) or 0
+        local controlW = methods.numericVariable('SlotSettingsRow' .. rowIndex .. '_ControlW', 0) or 0
+        local controlH = methods.numericVariable('SlotSettingsRow' .. rowIndex .. '_ControlH', methods.numericVariable('SettingsTall1H', 40)) or 40
+        local controlScale = tonumber(field.segmentedControlScale or 1) or 1
+        if controlScale > 1 and controlW > 0 then
+            local contentX = pixelValue(methods.numericVariable('SettingsContentX', methods.numericVariable('SettingsRowLabelX', 0)), 0)
+            local contentW = pixelValue(methods.numericVariable('SettingsContentW', 0), 0)
+            local contentRight = contentW > 0 and (contentX + contentW) or (controlX + controlW)
+            local controlRight = math.min(controlX + controlW, contentRight)
+            local desiredW = pixelValue(controlW * controlScale, controlW)
+            controlW = math.min(math.max(controlW, desiredW), math.max(controlW, contentRight - contentX))
+            controlX = pixelValue(math.max(contentX, controlRight - controlW), 0)
+
+            local labelGap = pixelValue(methods.numericVariable('SettingsRowControlGap', 12), 12)
+            local labelX = pixelValue(methods.numericVariable('SettingsRowLabelX', contentX), contentX)
+            setVariable('SettingsRow' .. rowIndex .. '_LabelW', tostring(math.max(0, controlX - labelGap - labelX)))
+        end
+        local splitGap = pixelValue(methods.numericVariable('SettingsDropdownButtonGap', 4), 4)
+        local primaryW = math.max(0, pixelValue((controlW - splitGap) / 2, 0))
+        local secondaryW = math.max(0, controlW - splitGap - primaryW)
+        local secondaryX = controlX + primaryW + splitGap
+        local labelY = controlY + (controlH / 2)
+
+        local function optionLabel(option)
+            local key = trim(option and option.labelKey or '')
+            local fallback = trim(option and (option.fallback or option.label or option.value) or '')
+            if key ~= '' then
+                return trim(methods.localize(key, fallback))
+            end
+            return fallback
+        end
+
+        local function optionBgColor(selected)
+            if isDisabled then
+                return SKIN:GetVariable('SettingsButtonDisabledBgColor', '')
+            end
+            if selected then
+                return SKIN:GetVariable('SettingsPalette6', SKIN:GetVariable('SettingsButtonBgColor', ''))
+            end
+            return SKIN:GetVariable('SettingsButtonBgColor', '')
+        end
+
+        local function optionTextColor(selected)
+            if isDisabled then
+                return SKIN:GetVariable('SettingsButtonDisabledTextColor', '')
+            end
+            if selected then
+                return SKIN:GetVariable('SettingsTabActiveTextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
+            end
+            return SKIN:GetVariable('SettingsButtonTextColor', '')
+        end
+
+        setVariable('SettingsRow' .. rowIndex .. '_FieldHidden', '1')
+        setVariable('SettingsRow' .. rowIndex .. '_FieldBgHidden', '1')
+        setVariable('SettingsRow' .. rowIndex .. '_DropdownButtonHidden', '1')
+        setVariable('SettingsRow' .. rowIndex .. '_DropdownButtonText', dropdownClosedText(rowIndex))
+        setVariable('SettingsRow' .. rowIndex .. '_ActionHidden', '0')
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryHidden', '0')
+
+        setVariable('SettingsRow' .. rowIndex .. '_Action_X', tostring(controlX))
+        setVariable('SettingsRow' .. rowIndex .. '_Action_Y', tostring(controlY))
+        setVariable('SettingsRow' .. rowIndex .. '_Action_W', tostring(primaryW))
+        setVariable('SettingsRow' .. rowIndex .. '_Action_H', tostring(controlH))
+        setVariable('SettingsRow' .. rowIndex .. '_Action_LabelX', tostring(controlX + (primaryW / 2)))
+        setVariable('SettingsRow' .. rowIndex .. '_Action_LabelY', tostring(labelY))
+        setVariable('SettingsRow' .. rowIndex .. '_ActionText', optionLabel(primary))
+        setVariable('SettingsRow' .. rowIndex .. '_ActionCommand', '')
+        setVariable('SettingsRow' .. rowIndex .. '_ActionBgColor', optionBgColor(primarySelected))
+        setVariable('SettingsRow' .. rowIndex .. '_ActionTextColor', optionTextColor(primarySelected))
+
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondary_X', tostring(secondaryX))
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondary_Y', tostring(controlY))
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondary_W', tostring(secondaryW))
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondary_H', tostring(controlH))
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondary_LabelX', tostring(secondaryX + (secondaryW / 2)))
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondary_LabelY', tostring(labelY))
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryText', optionLabel(secondary))
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryCommand', '')
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryBgColor', optionBgColor(secondarySelected))
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryTextColor', optionTextColor(secondarySelected))
+
+        state.currentRowActionByIndex[rowIndex] = isDisabled and nil or { kind = 'selectSegmentedOption', fieldKey = field.key, value = primaryValue }
+        state.currentRowSecondaryActionByIndex[rowIndex] = isDisabled and nil or { kind = 'selectSegmentedOption', fieldKey = field.key, value = secondaryValue }
+
+    end
+
     function methods.configureStepperRow(rowIndex, field)
 
 
@@ -2391,7 +2770,7 @@ return function(app)
 
 
 
-        setVariable('SettingsRow' .. rowIndex .. '_StepperFieldCommand', '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "PrepareTextField(\'' .. field.key .. '\')"][!UpdateMeasure MeasureSharedInput][!CommandMeasure MeasureSharedInput "ExecuteBatch 1-2"]')
+        setVariable('SettingsRow' .. rowIndex .. '_StepperFieldCommand', '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "PrepareTextField(\'' .. field.key .. '\')"][!CommandMeasure MeasureSettingsCommit "OpenPreparedTextField()"]')
 
 
 
@@ -4121,6 +4500,28 @@ return function(app)
 
 
                     methods.configureToggleRow(rowIndex, field, isFieldDisabled)
+
+
+
+
+
+
+
+
+
+
+                elseif field.controlType == 'segmented' then
+
+
+
+
+
+
+
+
+
+
+                    methods.configureSegmentedRow(rowIndex, field, isFieldDisabled)
 
 
 
@@ -6305,6 +6706,9 @@ function methods.refreshVisuals()
 
             'MeterSettingsTopResetBG', 'MeterSettingsTopResetLabel',
 
+            'MeterSettingsTopContentBG', 'MeterSettingsTopContentLabel',
+            'MeterSettingsTopRefreshBG', 'MeterSettingsTopRefreshLabel',
+
 
 
 
@@ -7024,22 +7428,9 @@ function methods.refreshVisuals()
 
 
         local tab = methods.activeTab()
+        methods.applyActiveModeLayout()
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-        setVariable('SettingsTabDisplayText', methods.tabDisplayText(tab))
 
 
 
@@ -7079,6 +7470,15 @@ function methods.refreshVisuals()
 
 
 
+
+
+
+
+
+
+
+
+        methods.configureHerobrineStatsHeader(tab)
 
 
 

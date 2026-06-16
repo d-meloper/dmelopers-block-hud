@@ -2,6 +2,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$CurrentTargetRoot,
     [Parameter(Mandatory = $true)][string]$PackagePath,
+    [string]$ExpectedReleaseVariant,
     [switch]$NonInteractive,
     [switch]$EmitResultPairs
 )
@@ -18,6 +19,7 @@ catch {
 }
 
 . (Join-Path $PSScriptRoot 'Localization.Common.ps1')
+. (Join-Path $PSScriptRoot 'VersionManager.ReleaseCatalog.ps1')
 
 $script:LogMessages = New-Object System.Collections.Generic.List[string]
 $script:LogPath = Get-BlockHudCanonicalLogPath -ScriptRoot $PSScriptRoot
@@ -244,6 +246,79 @@ function Get-SkinMetadata {
     }
 }
 
+function Read-VariablesFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $map = [ordered]@{}
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $map
+    }
+
+    foreach ($rawLine in ((Read-TextSmart -Path $Path) -split "`r?`n")) {
+        $line = [string]$rawLine
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+        if ($line.TrimStart().StartsWith('[') -or $line.TrimStart().StartsWith(';')) {
+            continue
+        }
+        $parts = $line -split '=', 2
+        if ($parts.Length -ne 2) {
+            continue
+        }
+        $map[$parts[0].Trim()] = [string]$parts[1]
+    }
+
+    return $map
+}
+
+function Get-GeneralSettingsPath {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    Join-RootPath -Root $Root -RelativePath '@Resources\Customs\Settings\General.inc'
+}
+
+function Get-SupportSettingsPath {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    Join-RootPath -Root $Root -RelativePath '@Resources\Customs\Settings\Support.inc'
+}
+
+function Get-SkinRootReleaseVariant {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $general = Read-VariablesFile -Path (Get-GeneralSettingsPath -Root $Root)
+    $support = Read-VariablesFile -Path (Get-SupportSettingsPath -Root $Root)
+    $languageCode = if ([string]::IsNullOrWhiteSpace([string]$general['LanguageCode'])) { 'en-US' } else { [string]$general['LanguageCode'] }
+    $assetPattern = if ([string]::IsNullOrWhiteSpace([string]$support['UpdateReleaseAssetPattern'])) { '' } else { [string]$support['UpdateReleaseAssetPattern'] }
+
+    return (Normalize-BlockHudReleaseVariant `
+        -ConfiguredReleaseVariant ([string]$support['UpdateReleaseVariant']) `
+        -LanguageCode $languageCode `
+        -AssetPattern $assetPattern)
+}
+
+function Assert-ExpectedReleaseVariant {
+    param(
+        [Parameter(Mandatory = $true)][string]$ActualReleaseVariant,
+        [AllowNull()][string]$ExpectedReleaseVariant,
+        [Parameter(Mandatory = $true)][string]$Context
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ExpectedReleaseVariant)) {
+        return
+    }
+
+    if (-not [string]::Equals($ExpectedReleaseVariant, 'Korea', [System.StringComparison]::OrdinalIgnoreCase) -and
+        -not [string]::Equals($ExpectedReleaseVariant, 'Global', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw ("ExpectedReleaseVariant must be Korea or Global. value={0}" -f [string]$ExpectedReleaseVariant)
+    }
+    $expected = Normalize-BlockHudReleaseVariant -ConfiguredReleaseVariant $ExpectedReleaseVariant -LanguageCode '' -AssetPattern ''
+    if (-not [string]::Equals($ActualReleaseVariant, $expected, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw ("{0} release variant did not match ExpectedReleaseVariant. expected={1} actual={2}" -f $Context, $expected, $ActualReleaseVariant)
+    }
+}
+
 function ConvertTo-SkinVersion {
     param(
         [AllowNull()][string]$VersionText,
@@ -329,74 +404,6 @@ function Get-RainmeterConfigPath {
     }
 
     return ''
-}
-
-function Ensure-RainmeterIniNativeMethods {
-    if ('BlockHudRainmeterIniNative' -as [type]) {
-        return
-    }
-
-    Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
-
-public static class BlockHudRainmeterIniNative
-{
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    public static extern uint GetPrivateProfileString(string section, string key, string defaultValue, StringBuilder returnValue, uint size, string filePath);
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    public static extern bool WritePrivateProfileString(string section, string key, string value, string filePath);
-}
-'@
-}
-
-function Get-RainmeterIniValue {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$Section,
-        [Parameter(Mandatory = $true)][string]$Key
-    )
-
-    Ensure-RainmeterIniNativeMethods
-    $buffer = New-Object System.Text.StringBuilder 256
-    [void][BlockHudRainmeterIniNative]::GetPrivateProfileString($Section, $Key, '', $buffer, [uint32]$buffer.Capacity, $Path)
-    return $buffer.ToString()
-}
-
-function Set-RainmeterIniValue {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$Section,
-        [Parameter(Mandatory = $true)][string]$Key,
-        [Parameter(Mandatory = $true)][string]$Value
-    )
-
-    Ensure-RainmeterIniNativeMethods
-    if (-not [BlockHudRainmeterIniNative]::WritePrivateProfileString($Section, $Key, $Value, $Path)) {
-        throw "Failed to write Rainmeter.ini value: [$Section] $Key"
-    }
-}
-
-function Ensure-HotbarLoadOrder {
-    param([Parameter(Mandatory = $true)][string]$Root)
-
-    $configPath = Get-RainmeterConfigPath
-    if ([string]::IsNullOrWhiteSpace($configPath)) {
-        Write-Log 'Rainmeter.ini was not found; Hotbar LoadOrder pre-sync was skipped.' 'WARN'
-        return
-    }
-
-    $section = (Get-RootConfigName -Root $Root) + '\Hotbar'
-    $current = Get-RainmeterIniValue -Path $configPath -Section $section -Key 'LoadOrder'
-    if ([string]::Equals($current, '100', [System.StringComparison]::Ordinal)) {
-        Write-Log ("Hotbar LoadOrder already 100 for [{0}]." -f $section)
-        return
-    }
-
-    Set-RainmeterIniValue -Path $configPath -Section $section -Key 'LoadOrder' -Value '100'
-    Write-Log ("Set Hotbar LoadOrder=100 for [{0}] before Rainmeter refresh." -f $section)
 }
 
 function Get-RainmeterExecutablePath {
@@ -707,52 +714,33 @@ function Get-ConfigName {
     return ($RootConfigName + '\' + $RelativeConfigPath.Trim('\'))
 }
 
-function Get-PersistentConfigSpecs {
-    @(
-        [PSCustomObject]@{ RelativePath = 'Hotbar'; FileName = 'Hotbar.ini' }
-        [PSCustomObject]@{ RelativePath = 'Clock'; FileName = 'Clock.ini' }
-        [PSCustomObject]@{ RelativePath = 'ClockSprite'; FileName = 'ClockSprite.ini' }
-        [PSCustomObject]@{ RelativePath = 'Indicators\Heart'; FileName = 'Heart.ini' }
-        [PSCustomObject]@{ RelativePath = 'Indicators\Armor'; FileName = 'Armor.ini' }
-        [PSCustomObject]@{ RelativePath = 'Indicators\Food'; FileName = 'Food.ini' }
-        [PSCustomObject]@{ RelativePath = 'Indicators\Air'; FileName = 'Air.ini' }
-        [PSCustomObject]@{ RelativePath = 'Indicators\Exp'; FileName = 'Exp.ini' }
-    )
+function Get-ZPosBootstrapSpec {
+    [PSCustomObject]@{ RelativePath = 'Bootstrap'; FileName = 'ZPosBootstrap.ini' }
 }
 
-function Invoke-ActivatePersistentConfigList {
+function Invoke-ActivateZPosBootstrap {
     param(
-        [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)][object[]]$Specs
+        [Parameter(Mandatory = $true)][string]$Root
     )
 
+    $spec = Get-ZPosBootstrapSpec
     $rootConfigName = Get-RootConfigName -Root $Root
-    $candidateCount = 0
-    foreach ($spec in $Specs) {
-        if (-not (Test-ConfigFileExists -Root $Root -RelativePath ([string]$spec.RelativePath) -FileName ([string]$spec.FileName))) {
-            Write-Log ("Skipping missing persistent config [{0}]" -f (Get-ConfigName -RootConfigName $rootConfigName -RelativeConfigPath ([string]$spec.RelativePath))) 'WARN'
-            continue
-        }
-
-        $candidateCount++
-        $configName = Get-ConfigName -RootConfigName $rootConfigName -RelativeConfigPath ([string]$spec.RelativePath)
-        Write-Log ("Activating [{0}] ({1})" -f $configName, [string]$spec.FileName)
-        Invoke-RainmeterBang -Bang '!ActivateConfig' -Arguments @($configName, [string]$spec.FileName)
+    if (-not (Test-ConfigFileExists -Root $Root -RelativePath ([string]$spec.RelativePath) -FileName ([string]$spec.FileName))) {
+        throw ("Fixed-root update is missing the z-position bootstrap skin: {0}\{1}" -f $Root, [string]$spec.RelativePath)
     }
 
-    if ($candidateCount -le 0) {
-        throw ("Fixed-root update has no persistent activation candidates: {0}" -f $Root)
-    }
+    $configName = Get-ConfigName -RootConfigName $rootConfigName -RelativeConfigPath ([string]$spec.RelativePath)
+    Write-Log ("Activating z-position bootstrap [{0}] ({1})" -f $configName, [string]$spec.FileName)
+    Invoke-RainmeterBang -Bang '!ActivateConfig' -Arguments @($configName, [string]$spec.FileName)
 }
 
 function Invoke-PostUpdateRefresh {
     param([Parameter(Mandatory = $true)][string]$Root)
 
-    Write-Log 'Refreshing Rainmeter app and group after fixed-root update.'
-    Ensure-HotbarLoadOrder -Root $Root
+    Write-Log 'Refreshing Rainmeter app and running z-position bootstrap after fixed-root update.'
     Invoke-RainmeterBang -Bang '!RefreshApp'
     Invoke-RainmeterBang -Bang '!RefreshGroup' -Arguments @('DMeloper')
-    Invoke-ActivatePersistentConfigList -Root $Root -Specs @(Get-PersistentConfigSpecs)
+    Invoke-ActivateZPosBootstrap -Root $Root
 }
 
 function Invoke-FixedRootReplacement {
@@ -1287,6 +1275,16 @@ function Invoke-UpdateToLatest {
 
     $currentMetadata = Get-SkinMetadata -Root $resolvedCurrentRoot
     $packageMetadata = Get-SkinMetadata -Root $packageRoot
+    $currentReleaseVariant = Get-SkinRootReleaseVariant -Root $resolvedCurrentRoot
+    Assert-ExpectedReleaseVariant -ActualReleaseVariant $currentReleaseVariant -ExpectedReleaseVariant $ExpectedReleaseVariant -Context 'CurrentTargetRoot'
+    $effectiveExpectedReleaseVariant = if ([string]::IsNullOrWhiteSpace($ExpectedReleaseVariant)) {
+        $currentReleaseVariant
+    }
+    else {
+        Normalize-BlockHudReleaseVariant -ConfiguredReleaseVariant $ExpectedReleaseVariant -LanguageCode '' -AssetPattern ''
+    }
+    $packageReleaseVariant = Get-SkinRootReleaseVariant -Root $packageRoot
+    Assert-ExpectedReleaseVariant -ActualReleaseVariant $packageReleaseVariant -ExpectedReleaseVariant $effectiveExpectedReleaseVariant -Context 'Package'
     $currentVersion = ConvertTo-SkinVersion -VersionText ([string]$currentMetadata.Version) -Context 'CurrentTargetRoot'
     $packageVersion = ConvertTo-SkinVersion -VersionText ([string]$packageMetadata.Version) -Context 'Package'
     if ($packageVersion -le $currentVersion) {
@@ -1306,6 +1304,9 @@ function Invoke-UpdateToLatest {
     Write-Log ("PackageRoot: {0}" -f $packageRoot)
     Write-Log ("CurrentVersion: {0}" -f [string]$currentMetadata.Version)
     Write-Log ("LatestVersion: {0}" -f [string]$packageMetadata.Version)
+    Write-Log ("CurrentReleaseVariant: {0}" -f $currentReleaseVariant)
+    Write-Log ("PackageReleaseVariant: {0}" -f $packageReleaseVariant)
+    Write-Log ("ExpectedReleaseVariant: {0}" -f $effectiveExpectedReleaseVariant)
     Write-Log ("PackageIdentity: {0}" -f $identityName)
     Write-Log ("DestinationRoot: {0}" -f $latestRoot)
     Write-Log 'DestinationRoot policy: fixed package identity root; version-suffixed side-by-side update roots are disabled.'

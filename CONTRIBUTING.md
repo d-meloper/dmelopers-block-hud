@@ -4,9 +4,9 @@ English | [한국어](CONTRIBUTING.ko-KR.md)
 
 Contributions are welcome when they fit the project direction and can be reviewed safely.
 
-This public repository is the distribution surface and review surface for the skin. It is not the implementation source of truth. Maintainer-owned release branches are reviewed here before they become public releases, while implementation changes are prepared in the maintainer's private development workspace first.
+This public repository is the distribution and review surface for the skin. Maintainer-owned release branches are reviewed here before they become public releases.
 
-Community pull requests are welcome as proposal and review input. Please do not expect a community PR to be merged directly into public `main`. If a proposal is accepted, the maintainer applies it in the private development workspace, validates it there, and publishes it back here through a maintainer release approval PR or a maintainer metadata-only PR.
+Community pull requests are welcome as proposal and review input. Please do not expect a community PR to be merged directly into public `main`. If a proposal is accepted, the maintainer validates it and publishes it here through a maintainer release approval PR or a maintainer metadata-only PR.
 
 ## Before You Start
 
@@ -30,7 +30,7 @@ Please include:
 - Screenshots or recordings for visual changes.
 - Any packaging or update implications.
 
-Community pull requests are treated as proposals. If a change is accepted, the maintainer will apply it through the private development workspace and publish it back here through a release approval pull request or metadata-only pull request, depending on the change.
+Community pull requests are treated as proposals. If a change is accepted, the maintainer will publish it here through a release approval pull request or metadata-only pull request, depending on the change.
 
 Do not create `publish/v<version>` branches unless you are the maintainer preparing an official release approval PR. Do not create `publish/metadata-<topic>` branches unless you are the maintainer preparing an approved public metadata-only PR. These branch patterns and the `public-export-approval` check are maintainer publication tools, not requirements for normal community PRs.
 

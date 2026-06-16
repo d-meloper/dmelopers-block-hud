@@ -12,6 +12,41 @@ return function(app)
 
     local logNotice = app.logNotice
 
+    local function normalizeStartupAutoRunOutput(raw)
+        local normalized = tostring(raw or ''):gsub('%z', '')
+        normalized = normalized:gsub('^\239\187\191', '')
+        return normalized
+    end
+
+    local function parseStartupAutoRunResult(raw, fallback)
+        local normalized = normalizeStartupAutoRunOutput(raw)
+        local values = methods.parseCommandCaptureVariables(normalized)
+        local literal = trim(values.DMEL_VALUE or '')
+        if literal ~= '0' and literal ~= '1' then
+            literal = ''
+            for line in normalized:gmatch('[^\r\n]+') do
+                local candidate = trim(line):gsub('^\239\187\191', '')
+                if candidate == '0' or candidate == '1' then
+                    literal = candidate
+                end
+            end
+        end
+
+        local status = string.upper(trim(values.DMEL_STATUS or ''))
+        if status == '' and literal ~= '' then
+            status = 'OK'
+        end
+
+        return {
+            status = status,
+            literal = literal ~= '' and literal or methods.normalizeToggleValue(fallback),
+            hasLiteral = literal == '0' or literal == '1',
+            code = trim(values.DMEL_CODE or ''),
+            message = trim(values.DMEL_MESSAGE or ''),
+            normalizedOutput = normalized,
+        }
+    end
+
     local function defaultLoadingMessage()
         return methods.localize('Settings_Loading', 'Loading...\\nPlease wait.')
     end
@@ -200,7 +235,7 @@ return function(app)
 
         setVariable('SettingsPendingRefreshBatchTotal', '0')
 
-        SKIN:Bang('!DisableMeasure', 'MeasureSettingsDeferredRefresh')
+        SKIN:Bang('!CommandMeasure', 'MeasureSettingsDeferredRefresh', 'Stop 1')
 
     end
 
@@ -217,6 +252,8 @@ return function(app)
         state.pendingLoadDelayTicksRemaining = 0
         state.pendingLoadReopenDropdown = false
         state.pendingLoadValue = nil
+        state.pendingLoadTexturePath = nil
+        state.pendingLoadUsername = nil
         state.pendingLoadBeforeSnapshot = nil
         state.pendingLoadHistoryLabel = nil
         if abandonReason ~= '' then
@@ -230,7 +267,7 @@ return function(app)
         setVariable('SettingsPendingLoadKind', '')
         setVariable('SettingsPendingLoadFieldKey', '')
         setVariable('SettingsPendingLoadRowIndex', '0')
-        SKIN:Bang('!DisableMeasure', 'MeasureSettingsDeferredLoad')
+        SKIN:Bang('!CommandMeasure', 'MeasureSettingsDeferredLoad', 'Stop 1')
     end
     function methods.clearPendingLoadHelperState()
         state.pendingLoadHelperRunning = false
@@ -240,7 +277,7 @@ return function(app)
         state.pendingLoadHelperStartedAt = 0
         state.pendingLoadHelperDeadlineAt = 0
         state.pendingLoadHelperTimeoutSeconds = 0
-        SKIN:Bang('!DisableMeasure', 'MeasureSettingsHelperWatchdog')
+        SKIN:Bang('!CommandMeasure', 'MeasureSettingsHelperWatchdog', 'Stop 1')
     end
     function methods.getIgnoredPendingLoadHelperCompletion(helperKind)
         local resolvedKind = trim(helperKind or '')
@@ -268,13 +305,6 @@ return function(app)
             return
         end
         state.ignoredPendingLoadHelpers[resolvedKind] = nil
-    end
-    function methods.pendingLoadHelperTimeoutSeconds(loadKind)
-        loadKind = trim(loadKind or '')
-        if loadKind == 'legacyImport' then
-            return 300
-        end
-        return 0
     end
     function methods.rememberIgnoredPendingLoadHelperCompletion(reason)
         local helperKind = trim(state.pendingLoadHelperKind or '')
@@ -320,6 +350,7 @@ return function(app)
         methods.setLoadingVisible(false)
         logNotice('Settings helper timed out: loadKind=' .. tostring(loadKind) .. ' helperKind=' .. tostring(helperKind) .. ' timeoutSeconds=' .. tostring(timeoutSeconds))
         local shouldAlertTimeout = loadKind == 'minecraftSkinApply'
+            or loadKind == 'minecraftSkinFileAttach'
             or loadKind == 'startupAutoRunApply'
             or (loadKind == 'computerInfo' and state.pendingLoadFieldKey == 'refreshComputerInfo')
         if methods.ShowModalAlertByKeys and shouldAlertTimeout then
@@ -369,13 +400,6 @@ return function(app)
                 .. ' status='
                 .. tostring(status))
         methods.clearIgnoredPendingLoadHelperCompletion(helperKind)
-        if status == 'OK' and loadKind == 'legacyImport' then
-            methods.finishLegacyImportWithRefresh({
-                message = trim(values.DMEL_MESSAGE or methods.localize('Settings_Notice_LegacyRefreshLate', 'Old-data import finished late, so the skin was refreshed.')),
-                sourcePath = trim(values.DMEL_SOURCEPATH or ''),
-                logPath = trim(values.DMEL_LOGPATH or ''),
-            })
-        end
         return true
     end
     function methods.runCommandMeasureOutput(measureName)
@@ -400,6 +424,7 @@ return function(app)
         options = options or {}
         local loadKind = trim(options.loadKind or state.pendingLoadKind or '')
         local shouldAlertStartFailure = loadKind == 'minecraftSkinApply'
+            or loadKind == 'minecraftSkinFileAttach'
             or loadKind == 'startupAutoRunApply'
             or (loadKind == 'computerInfo' and state.pendingLoadFieldKey == 'refreshComputerInfo')
         local ignoredPendingHelper = methods.getIgnoredPendingLoadHelperCompletion(helperKind)
@@ -436,14 +461,15 @@ return function(app)
         if type(startedAt) == 'number' and startedAt > 0 and timeoutSeconds > 0 then
             state.pendingLoadHelperStartedAt = startedAt
             state.pendingLoadHelperDeadlineAt = startedAt + timeoutSeconds
-            SKIN:Bang('!EnableMeasure', 'MeasureSettingsHelperWatchdog')
+            SKIN:Bang('!CommandMeasure', 'MeasureSettingsHelperWatchdog', 'Stop 1')
+            SKIN:Bang('!CommandMeasure', 'MeasureSettingsHelperWatchdog', 'Execute 1')
         else
             state.pendingLoadHelperStartedAt = 0
             state.pendingLoadHelperDeadlineAt = 0
-            SKIN:Bang('!DisableMeasure', 'MeasureSettingsHelperWatchdog')
+            SKIN:Bang('!CommandMeasure', 'MeasureSettingsHelperWatchdog', 'Stop 1')
         end
         setVariable(argsVariableName, tostring(args or ''))
-        SKIN:Bang('!DisableMeasure', 'MeasureSettingsDeferredLoad')
+        SKIN:Bang('!CommandMeasure', 'MeasureSettingsDeferredLoad', 'Stop 1')
         SKIN:Bang('!UpdateMeasure', measureName)
         SKIN:Bang('!CommandMeasure', measureName, 'Run')
         return true
@@ -630,7 +656,13 @@ return function(app)
 
     end
 
-    function methods.minecraftSkinFetchArguments(username)
+    function methods.minecraftSkinFetchArguments(username, model)
+        local resolvedModel = 'wide'
+        if methods.normalizeMinecraftSkinModelInput then
+            resolvedModel = methods.normalizeMinecraftSkinModelInput(model)
+        elseif string.lower(trim(model)) == 'slim' then
+            resolvedModel = 'slim'
+        end
 
         return '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File '
 
@@ -644,11 +676,15 @@ return function(app)
 
             .. methods.escapeCommandArgument(methods.playerSkinImageDirectoryPath())
 
+            .. ' -Model '
+
+            .. methods.escapeCommandArgument(resolvedModel)
+
             .. ' -TimeoutSeconds 12'
 
     end
 
-    function methods.startMinecraftSkinFetch(username)
+    function methods.startMinecraftSkinFetch(username, model, loadKind)
 
         return methods.startRunCommandHelper(
 
@@ -658,9 +694,9 @@ return function(app)
 
             'SettingsMinecraftSkinHelperArgs',
 
-            methods.minecraftSkinFetchArguments(username),
+            methods.minecraftSkinFetchArguments(username, model),
             {
-                loadKind = 'minecraftSkinApply',
+                loadKind = trim(loadKind or '') ~= '' and trim(loadKind or '') or 'minecraftSkinApply',
                 timeoutSeconds = 25,
             }
 
@@ -668,11 +704,64 @@ return function(app)
 
     end
 
+    function methods.minecraftSkinFilePickerScriptPath()
+        return trim(SKIN:GetVariable('CURRENTPATH', '')) .. 'PickMinecraftSkinFile.ps1'
+    end
+
+    function methods.minecraftSkinFilePickerArguments(model, sourcePath, username, options)
+        options = options or {}
+        local resolvedModel = 'wide'
+        if methods.normalizeMinecraftSkinModelInput then
+            resolvedModel = methods.normalizeMinecraftSkinModelInput(model)
+        elseif string.lower(trim(model)) == 'slim' then
+            resolvedModel = 'slim'
+        end
+
+        local command = '-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+            .. methods.escapeCommandArgument(methods.minecraftSkinFilePickerScriptPath())
+            .. ' -OutputDirectory '
+            .. methods.escapeCommandArgument(methods.playerSkinImageDirectoryPath())
+            .. ' -Model '
+            .. methods.escapeCommandArgument(resolvedModel)
+        if trim(sourcePath or '') ~= '' then
+            command = command
+                .. ' -SourcePath '
+                .. methods.escapeCommandArgument(trim(sourcePath))
+        end
+        if trim(username or '') ~= '' then
+            command = command
+                .. ' -Username '
+                .. methods.escapeCommandArgument(trim(username))
+        end
+        if trim(options.initialDirectory or '') ~= '' then
+            command = command
+                .. ' -InitialDirectory '
+                .. methods.escapeCommandArgument(trim(options.initialDirectory))
+        end
+        if options.acceptRenderedBody == true then
+            command = command .. ' -AcceptRenderedBody'
+        end
+        return command
+    end
+
+    function methods.startMinecraftSkinFilePicker(model, sourcePath, username, loadKind, options)
+        return methods.startRunCommandHelper(
+            'minecraftSkinFile',
+            'MeasureSettingsMinecraftSkinFileRun',
+            'SettingsMinecraftSkinFileHelperArgs',
+            methods.minecraftSkinFilePickerArguments(model, sourcePath, username, options),
+            {
+                loadKind = trim(loadKind or '') ~= '' and trim(loadKind or '') or 'minecraftSkinFileAttach',
+                timeoutSeconds = trim(sourcePath or '') ~= '' and 25 or 120,
+            }
+        )
+    end
+
     function methods.startupAutoRunHelperArguments(mode)
 
         return '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
 
-            .. methods.escapeCommandArgument(methods.startupAutoRunScriptPath())
+            .. methods.escapeCommandArgument('.\\StartupAutoRun.ps1')
 
             .. ' -Mode '
 
@@ -684,6 +773,8 @@ return function(app)
 
         local mode = desiredLiteral == nil and 'probe' or (methods.normalizeToggleValue(desiredLiteral) == '1' and 'enable' or 'disable')
 
+        local args = methods.startupAutoRunHelperArguments(mode)
+
         return methods.startRunCommandHelper(
 
             'startupAutoRun',
@@ -692,7 +783,7 @@ return function(app)
 
             'SettingsStartupAutoRunHelperArgs',
 
-            methods.startupAutoRunHelperArguments(mode)
+            args
 
         )
 
@@ -709,46 +800,6 @@ return function(app)
 
     end
 
-    function methods.legacyImportScriptPath()
-
-        return methods.settingsSkinRootPath() .. '\\tools\\ImportFromOldVersion.ps1'
-
-    end
-
-    function methods.legacyImportHelperArguments()
-
-        return '-STA -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
-
-            .. methods.escapeCommandArgument(methods.legacyImportScriptPath())
-
-            .. ' -TargetRoot '
-
-            .. methods.escapeCommandArgument(methods.settingsSkinRootPath())
-
-            .. ' -ConfirmDetectedSource -EmitResultPairs'
-
-    end
-
-    function methods.startLegacyImportHelper()
-
-        return methods.startRunCommandHelper(
-
-            'legacyImport',
-
-            'MeasureSettingsLegacyImportRun',
-
-            'SettingsLegacyImportHelperArgs',
-
-            methods.legacyImportHelperArguments(),
-
-            {
-                loadKind = 'legacyImport',
-                timeoutSeconds = methods.pendingLoadHelperTimeoutSeconds('legacyImport'),
-            }
-
-        )
-
-    end
     function methods.openVersionManagerScriptPath()
         return methods.settingsSkinRootPath() .. '\\tools\\OpenVersionManager.ps1'
     end
@@ -1150,6 +1201,8 @@ return function(app)
         state.pendingLoadReopenDropdown = reopenAfterLoad ~= false
 
         state.pendingLoadValue = options.pendingValue
+        state.pendingLoadTexturePath = options.pendingTexturePath
+        state.pendingLoadUsername = options.pendingUsername
 
         state.pendingLoadBeforeSnapshot = options.beforeSnapshot
 
@@ -1165,7 +1218,8 @@ return function(app)
 
         methods.renderActivePage()
 
-        SKIN:Bang('!EnableMeasure', 'MeasureSettingsDeferredLoad')
+        SKIN:Bang('!CommandMeasure', 'MeasureSettingsDeferredLoad', 'Stop 1')
+        SKIN:Bang('!CommandMeasure', 'MeasureSettingsDeferredLoad', 'Execute 1')
 
     end
 
@@ -1175,15 +1229,6 @@ return function(app)
 
         if state.pendingLoadHelperRunning == true then
             local activeLoadKind = trim(state.pendingLoadHelperLoadKind or state.pendingLoadKind or '')
-            if activeLoadKind == 'legacyImport' then
-                logNotice('Settings action blocked while old-data import is running.')
-                showModalAlert(
-                    'warn',
-                    'Settings_Notice_LegacyBlockedSwitch',
-                    'You cannot switch to another action while old-data import is running.'
-                )
-                return false
-            end
             methods.clearPendingLoadState({
                 abandonActiveHelperReason = 'canceled',
                 clearIgnoredHelper = false,
@@ -1294,7 +1339,8 @@ return function(app)
 
         local currentLiteral = methods.normalizeToggleValue(methods.readFieldValue(field))
 
-        local actualLiteral = methods.normalizeToggleValue(methods.parseStartupAutoRunLiteral(output, currentLiteral))
+        local result = parseStartupAutoRunResult(output, currentLiteral)
+        local actualLiteral = methods.normalizeToggleValue(result.literal)
 
         methods.persistStartupAutoRunCache(actualLiteral)
 
@@ -1308,22 +1354,22 @@ return function(app)
 
 
 
-    local function startupAutoRunOutputHasLiteral(output)
-        for line in tostring(output or ''):gmatch('[^\r\n]+') do
-            local value = trim(line)
-            if value == '0' or value == '1' then
-                return true
-            end
-        end
-        return false
-    end
-
     function methods.applyStartupAutoRunApplyOutput(output, field)
 
         local previousLiteral = field and methods.readFieldValue(field) or '0'
+        local result = parseStartupAutoRunResult(output, previousLiteral)
+        local succeeded = result.status == 'OK' and result.hasLiteral
+        local actualLiteral = methods.normalizeToggleValue(result.literal)
 
-        if not startupAutoRunOutputHasLiteral(output) then
-            logNotice('Startup auto-run helper did not return a valid toggle state.')
+        if not succeeded then
+            logNotice(
+                'Startup auto-run helper failed: status='
+                    .. result.status
+                    .. ' code='
+                    .. result.code
+                    .. ' hasLiteral='
+                    .. tostring(result.hasLiteral)
+            )
             if methods.ShowModalAlertByKeys then
                 methods.ShowModalAlertByKeys(
                     'error',
@@ -1332,8 +1378,6 @@ return function(app)
                 )
             end
         end
-
-        local actualLiteral = methods.normalizeToggleValue(methods.parseStartupAutoRunLiteral(output, previousLiteral))
 
         methods.persistStartupAutoRunCache(actualLiteral)
 
@@ -1345,7 +1389,7 @@ return function(app)
 
         methods.persistStartupAutoRunSetting(actualLiteral, { force = true, currentLiteral = previousLiteral })
 
-        if state.pendingLoadBeforeSnapshot and field then
+        if succeeded and state.pendingLoadBeforeSnapshot and field then
 
             methods.pushHistory(state.pendingLoadHistoryLabel or field.historyLabel, state.pendingLoadBeforeSnapshot, {
 
@@ -1368,8 +1412,19 @@ return function(app)
         local status = result and result.status or ''
 
         local resolvedImagePath = trim(result and result.imagePath or '')
+        local resolvedTexturePath = trim(result and result.texturePath or '')
+        local resolvedModel = ''
+        if result and result.model ~= nil then
+            if methods.normalizeMinecraftSkinModelInput then
+                resolvedModel = methods.normalizeMinecraftSkinModelInput(result.model)
+            elseif string.lower(trim(result.model)) == 'slim' then
+                resolvedModel = 'slim'
+            else
+                resolvedModel = 'wide'
+            end
+        end
 
-        methods.appendMinecraftSkinDebugLog('applyMinecraftSkinFetchResult status=' .. tostring(status) .. ' username=' .. tostring(result and result.username or '') .. ' imagePath=' .. tostring(resolvedImagePath) .. ' message=' .. tostring(result and result.message or ''))
+        methods.appendMinecraftSkinDebugLog('applyMinecraftSkinFetchResult status=' .. tostring(status) .. ' username=' .. tostring(result and result.username or '') .. ' imagePath=' .. tostring(resolvedImagePath) .. ' texturePath=' .. tostring(resolvedTexturePath) .. ' model=' .. tostring(resolvedModel) .. ' message=' .. tostring(result and result.message or ''))
 
         if status == 'OK' and canonicalField then
 
@@ -1377,10 +1432,19 @@ return function(app)
             local targetSet = {}
 
             methods.applyFieldValue(canonicalField, result.username, { targetSet = targetSet })
+            if resolvedModel ~= '' then
+                local modelField = methods.getField('minecraftSkinModel')
+                if modelField then
+                    methods.applyFieldValue(modelField, resolvedModel, { targetSet = targetSet })
+                else
+                    methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinModel', resolvedModel)
+                end
+            end
 
             methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinImagePath', resolvedImagePath)
 
             methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinImagePathVerified', '1')
+            methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinTexturePath', resolvedTexturePath)
 
             if methods.syncInventoryPlayerSkinLiveState then
 
@@ -1412,6 +1476,7 @@ return function(app)
             methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinImagePath', '')
 
             methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinImagePathVerified', '0')
+            methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinTexturePath', '')
 
             if methods.syncInventoryPlayerSkinLiveState then
 
@@ -1461,90 +1526,135 @@ return function(app)
 
     end
 
+    function methods.applyMinecraftSkinFileAttachResult(result)
+        result = result or {}
+        local status = string.upper(trim(result.status or ''))
+        local message = trim(result.message or '')
+        local imagePath = trim(result.imagePath or '')
+        local texturePath = trim(result.texturePath or '')
+        local model = trim(result.model or '')
+        local username = trim(result.username or '')
+        local logPath = trim(result.logPath or '')
 
+        methods.appendMinecraftSkinDebugLog('applyMinecraftSkinFileAttachResult status=' .. tostring(status) .. ' imagePath=' .. tostring(imagePath) .. ' texturePath=' .. tostring(texturePath) .. ' model=' .. tostring(model) .. ' message=' .. tostring(message) .. ' logPath=' .. tostring(logPath))
 
-    function methods.finishLegacyImportWithRefresh(result)
-
-        local details = {}
-
-        if result.message ~= '' then
-            details[#details + 1] = result.message
-        end
-        if result.sourcePath ~= '' then
-            details[#details + 1] = 'source=' .. result.sourcePath
-        end
-        if result.logPath ~= '' then
-            details[#details + 1] = 'log=' .. result.logPath
-        end
-
-        if #details > 0 then
-            logNotice('Legacy import completed: ' .. table.concat(details, ' | '))
-        else
-            logNotice('Legacy import completed.')
+        if status == 'CANCEL' then
+            logNotice('Minecraft skin file attachment canceled.')
+            return
         end
 
-
-        methods.clearPendingLoadState()
-        methods.clearPendingRefreshState()
-        methods.setLoadingVisible(false)
-        SKIN:Bang('!RefreshGroup', 'DMeloper')
-    end
-
-    function methods.handleLegacyImportHelperResult(values)
-
-        local result = {
-            status = string.upper(trim(values.DMEL_STATUS or '')),
-            sourcePath = trim(values.DMEL_SOURCEPATH or ''),
-            logPath = trim(values.DMEL_LOGPATH or ''),
-            message = trim(values.DMEL_MESSAGE or ''),
-        }
-
-        if result.status == 'OK' then
-            methods.finishLegacyImportWithRefresh(result)
-            return false
+        if status == 'OK' and imagePath ~= '' then
+            if username == '' then
+                username = 'A'
+            end
+            methods.applyMinecraftSkinFetchResult({
+                status = 'OK',
+                username = username,
+                imagePath = imagePath,
+                texturePath = texturePath,
+                model = model,
+                message = '',
+            })
+            if methods.syncMinecraftSkinDraft then
+                methods.syncMinecraftSkinDraft('')
+            end
+            return
         end
 
-        local details = {}
-
-        if result.message ~= '' then
-            details[#details + 1] = result.message
-        end
-        if result.sourcePath ~= '' then
-            details[#details + 1] = 'source=' .. result.sourcePath
-        end
-        if result.logPath ~= '' then
-            details[#details + 1] = 'log=' .. result.logPath
+        if message == '' then
+            message = methods.localize('ModalAlert_MinecraftSkinFileInvalid', 'Attach a correct 64x64 PNG Minecraft skin texture.')
         end
 
-        local status = result.status
-
-        if status == '' then
-            status = 'ERROR'
-            details[#details + 1] = 'missing DMEL_STATUS output'
-        end
-
-        if #details == 0 then
-            details[#details + 1] = status == 'CANCEL' and methods.localize('Settings_Notice_LegacyCanceled', 'Old-data import was canceled.') or methods.localize('Settings_Notice_LegacyFailed', 'Old-data import failed. Check the log folder for details.')
-        end
-
-        logNotice('Legacy import ' .. string.lower(status) .. ': ' .. table.concat(details, ' | '))
-        if status ~= 'CANCEL' then
-            showModalAlert(
-                status == 'WARN' and 'warn' or 'error',
-                'ModalAlert_LegacyImportFailed',
-                'Old-data import could not be completed. Check that the selected old skin folder is valid and try again.',
-                result.logPath
+        logNotice(methods.localizeFormat('Settings_Notice_MinecraftSkinFileFailed', { message }, message))
+        if methods.ShowModalAlertByKeys then
+            methods.ShowModalAlertByKeys(
+                'error',
+                'ModalAlert_MinecraftSkinFileInvalid',
+                message,
+                logPath
             )
         end
-        return true
     end
+
+    function methods.restorePendingMinecraftSkinModelSelection()
+        local snapshot = state.pendingLoadBeforeSnapshot
+        if not snapshot then
+            return
+        end
+
+        local previousModel = trim(snapshot.minecraftSkinModel or '')
+        if previousModel == '' then
+            return
+        end
+
+        local modelField = methods.getField('minecraftSkinModel')
+        if not modelField then
+            methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinModel', previousModel)
+            return
+        end
+
+        methods.applyFieldValue(modelField, previousModel, { targetSet = {} })
+    end
+
+    function methods.applyMinecraftSkinTextureRenderResult(result)
+        result = result or {}
+        local status = string.upper(trim(result.status or ''))
+        local message = trim(result.message or '')
+        local imagePath = trim(result.imagePath or '')
+        local texturePath = trim(result.texturePath or '')
+        local model = trim(result.model or '')
+        local username = trim(result.username or '')
+        local logPath = trim(result.logPath or '')
+
+        if username == '' then
+            local canonicalField = methods.getField('minecraftSkinUsername')
+            username = canonicalField and trim(methods.readFieldValue(canonicalField)) or ''
+        end
+
+        methods.appendMinecraftSkinDebugLog('applyMinecraftSkinTextureRenderResult status=' .. tostring(status) .. ' username=' .. tostring(username) .. ' imagePath=' .. tostring(imagePath) .. ' texturePath=' .. tostring(texturePath) .. ' model=' .. tostring(model) .. ' message=' .. tostring(message) .. ' logPath=' .. tostring(logPath))
+
+        if status == 'OK' and imagePath ~= '' then
+            methods.applyMinecraftSkinFetchResult({
+                status = 'OK',
+                username = username,
+                imagePath = imagePath,
+                texturePath = texturePath,
+                model = model,
+                message = '',
+            })
+            if methods.syncMinecraftSkinDraft then
+                methods.syncMinecraftSkinDraft(username)
+            end
+            return
+        end
+
+        if message == '' then
+            message = methods.localize('ModalAlert_MinecraftSkinFileInvalid', 'Attach a correct 64x64 PNG Minecraft skin texture.')
+        end
+
+        if methods.restorePendingMinecraftSkinModelSelection then
+            methods.restorePendingMinecraftSkinModelSelection()
+        end
+
+        logNotice(methods.localizeFormat('Settings_Notice_MinecraftSkinFileFailed', { message }, message))
+        if methods.ShowModalAlertByKeys then
+            methods.ShowModalAlertByKeys(
+                'error',
+                'ModalAlert_MinecraftSkinFileInvalid',
+                message,
+                logPath
+            )
+        end
+    end
+
+
 
     function methods.handleOpenVersionManagerHelperResult(values)
         local status = string.upper(trim(values.DMEL_STATUS or ''))
         local logPath = trim(values.DMEL_LOGPATH or '')
         local message = trim(values.DMEL_MESSAGE or '')
 
-        if status == '' or status == 'OK' or status == 'CANCEL' then
+        if status == 'OK' or status == 'CANCEL' then
             if methods.clearVersionManagerLaunchPending then
                 methods.clearVersionManagerLaunchPending()
             end
@@ -1563,12 +1673,8 @@ return function(app)
                 details[#details + 1] = 'Version manager launch confirmation timed out.'
             end
             logNotice('Version manager warning: ' .. table.concat(details, ' | '))
-            showModalAlert(
-                'warn',
-                'ModalAlert_VersionManagerFailed',
-                'Skins could not be opened from Settings. Refresh the skin and try again.',
-                logPath
-            )
+            -- The launcher has started; keep the Settings watchdog pending so
+            -- slower packaged installs can still report the eventual shown/error state.
             return
         end
 
@@ -1585,6 +1691,10 @@ return function(app)
         end
         if #details == 0 then
             details[#details + 1] = 'Version manager failed.'
+        end
+        if status == '' then
+            status = 'ERROR'
+            details[#details + 1] = 'missing DMEL_STATUS output'
         end
 
 
@@ -1754,10 +1864,31 @@ return function(app)
                 status = trim(values.DMEL_STATUS or ''),
                 username = trim(values.DMEL_USERNAME or ''),
                 imagePath = trim(values.DMEL_IMAGEPATH or ''),
+                texturePath = trim(values.DMEL_TEXTUREPATH or ''),
+                model = trim(values.DMEL_MODEL or ''),
                 message = trim(values.DMEL_MESSAGE or ''),
+                logPath = trim(values.DMEL_LOGPATH or values.DMEL_DEBUGLOG or ''),
             })
-        elseif loadKind == 'legacyImport' then
-            shouldFinishLoadCycle = methods.handleLegacyImportHelperResult(values)
+        elseif loadKind == 'minecraftSkinFileAttach' then
+            methods.applyMinecraftSkinFileAttachResult({
+                status = trim(values.DMEL_STATUS or ''),
+                username = trim(values.DMEL_USERNAME or ''),
+                imagePath = trim(values.DMEL_IMAGEPATH or ''),
+                texturePath = trim(values.DMEL_TEXTUREPATH or ''),
+                model = trim(values.DMEL_MODEL or ''),
+                message = trim(values.DMEL_MESSAGE or ''),
+                logPath = trim(values.DMEL_LOGPATH or ''),
+            })
+        elseif loadKind == 'minecraftSkinModelRender' then
+            methods.applyMinecraftSkinTextureRenderResult({
+                status = trim(values.DMEL_STATUS or ''),
+                username = trim(values.DMEL_USERNAME or state.pendingLoadUsername or ''),
+                imagePath = trim(values.DMEL_IMAGEPATH or ''),
+                texturePath = trim(values.DMEL_TEXTUREPATH or state.pendingLoadTexturePath or ''),
+                model = trim(values.DMEL_MODEL or state.pendingLoadValue or ''),
+                message = trim(values.DMEL_MESSAGE or ''),
+                logPath = trim(values.DMEL_LOGPATH or values.DMEL_DEBUGLOG or ''),
+            })
         end
         if shouldFinishLoadCycle ~= false then
             methods.finishPendingLoadCycle()
@@ -1878,14 +2009,30 @@ return function(app)
             end
 
 
+            if string.lower(requestedUsername) == 'a' then
 
-            local localResult = methods.resolveLocalMinecraftSkinResult(requestedUsername)
+                local localResult = methods.resolveLocalMinecraftSkinResult(requestedUsername)
 
-            methods.appendMinecraftSkinDebugLog('RunPendingLoad localResult=' .. tostring(localResult ~= nil))
+                methods.appendMinecraftSkinDebugLog('RunPendingLoad attachedLocalResult=' .. tostring(localResult ~= nil))
 
-            if localResult then
+                if localResult then
 
-                methods.applyMinecraftSkinFetchResult(localResult)
+                    methods.applyMinecraftSkinFetchResult(localResult)
+
+                    methods.finishPendingLoadCycle()
+
+                    return
+
+                end
+
+                methods.applyMinecraftSkinFileAttachResult({
+                    status = 'ERROR',
+                    username = 'A',
+                    imagePath = '',
+                    texturePath = '',
+                    message = methods.localize('Settings_Notice_MinecraftSkinFileMissing', 'The attached Minecraft skin file cache is missing. Attach the 64x64 PNG skin texture again.'),
+                    logPath = '',
+                })
 
                 methods.finishPendingLoadCycle()
 
@@ -1895,13 +2042,88 @@ return function(app)
 
 
 
-            started = methods.startMinecraftSkinFetch(requestedUsername)
+            local modelField = methods.getField('minecraftSkinModel')
+            local currentModel = modelField and methods.readFieldValue(modelField) or SKIN:GetVariable('MinecraftSkinModel', 'wide')
+            local requestedModel = methods.normalizeMinecraftSkinModelInput and methods.normalizeMinecraftSkinModelInput(currentModel) or (string.lower(trim(currentModel)) == 'slim' and 'slim' or 'wide')
+            started = methods.startMinecraftSkinFetch(requestedUsername, requestedModel, 'minecraftSkinApply')
 
             methods.appendMinecraftSkinDebugLog('RunPendingLoad helperStarted=' .. tostring(started))
 
-        elseif loadKind == 'legacyImport' then
+        elseif loadKind == 'minecraftSkinFileAttach' then
 
-            started = methods.startLegacyImportHelper()
+            local requestedModel = trim(state.pendingLoadValue or '')
+            local initialDirectory = methods.playerSkinImageDirectoryPath and methods.playerSkinImageDirectoryPath() or ''
+
+            methods.appendMinecraftSkinDebugLog('RunPendingLoad minecraftSkinFileAttach model=' .. tostring(requestedModel) .. ' initialDirectory=' .. tostring(initialDirectory))
+
+            started = methods.startMinecraftSkinFilePicker(requestedModel, nil, 'A', 'minecraftSkinFileAttach', {
+                acceptRenderedBody = true,
+                initialDirectory = initialDirectory,
+            })
+
+            methods.appendMinecraftSkinDebugLog('RunPendingLoad filePickerStarted=' .. tostring(started))
+        elseif loadKind == 'minecraftSkinModelRender' then
+
+            local requestedModel = trim(state.pendingLoadValue or '')
+            if methods.normalizeMinecraftSkinModelInput then
+                requestedModel = methods.normalizeMinecraftSkinModelInput(requestedModel)
+            elseif string.lower(requestedModel) ~= 'slim' then
+                requestedModel = 'wide'
+            end
+            local requestedUsername = trim(state.pendingLoadUsername or '')
+            if requestedUsername == '' then
+                local canonicalField = methods.getField('minecraftSkinUsername')
+                requestedUsername = canonicalField and trim(methods.readFieldValue(canonicalField)) or ''
+            end
+            local texturePath = trim(state.pendingLoadTexturePath or '')
+            if texturePath == '' and methods.resolveCurrentMinecraftSkinTexturePath then
+                texturePath = methods.resolveCurrentMinecraftSkinTexturePath(requestedUsername)
+            end
+
+            methods.appendMinecraftSkinDebugLog('RunPendingLoad minecraftSkinModelRender username=' .. tostring(requestedUsername) .. ' model=' .. tostring(requestedModel) .. ' texturePath=' .. tostring(texturePath))
+
+            if texturePath ~= '' then
+                started = methods.startMinecraftSkinFilePicker(requestedModel, texturePath, requestedUsername, 'minecraftSkinModelRender')
+                methods.appendMinecraftSkinDebugLog('RunPendingLoad modelRenderHelperStarted=' .. tostring(started))
+            elseif requestedUsername ~= '' then
+                local localResult = methods.resolveLocalMinecraftSkinResult and methods.resolveLocalMinecraftSkinResult(requestedUsername) or nil
+                if localResult and trim(localResult.imagePath or '') ~= '' and trim(localResult.texturePath or '') == '' then
+                    localResult.model = requestedModel
+                    methods.appendMinecraftSkinDebugLog('RunPendingLoad modelRender reused body-only cache imagePath=' .. tostring(localResult.imagePath))
+                    methods.applyMinecraftSkinTextureRenderResult(localResult)
+                    methods.finishPendingLoadCycle()
+                    return
+                end
+
+                if string.lower(requestedUsername) ~= 'a' then
+                    started = methods.startMinecraftSkinFetch(requestedUsername, requestedModel, 'minecraftSkinModelRender')
+                    methods.appendMinecraftSkinDebugLog('RunPendingLoad modelRenderFetchStarted=' .. tostring(started))
+                else
+                    methods.applyMinecraftSkinTextureRenderResult({
+                        status = 'ERROR',
+                        username = requestedUsername,
+                        imagePath = '',
+                        texturePath = '',
+                        model = requestedModel,
+                        message = methods.localize('Settings_Notice_MinecraftSkinFileMissing', 'The attached Minecraft skin file cache is missing. Attach the 64x64 PNG skin texture again.'),
+                        logPath = '',
+                    })
+                    methods.finishPendingLoadCycle()
+                    return
+                end
+            else
+                methods.applyMinecraftSkinTextureRenderResult({
+                    status = 'ERROR',
+                    username = requestedUsername,
+                    imagePath = '',
+                    texturePath = '',
+                    model = requestedModel,
+                    message = methods.localize('Settings_Notice_MinecraftSkinFileMissing', 'The attached Minecraft skin file cache is missing. Attach the 64x64 PNG skin texture again.'),
+                    logPath = '',
+                })
+                methods.finishPendingLoadCycle()
+                return
+            end
 
         end
 
@@ -1911,6 +2133,9 @@ return function(app)
 
             logNotice('Settings helper could not be started for pending load: ' .. tostring(loadKind or ''))
 
+            if loadKind == 'minecraftSkinModelRender' and methods.restorePendingMinecraftSkinModelSelection then
+                methods.restorePendingMinecraftSkinModelSelection()
+            end
 
             if methods.getIgnoredPendingLoadHelperCompletion(loadKind) then
                 methods.clearPendingLoadState({ clearIgnoredHelper = false })

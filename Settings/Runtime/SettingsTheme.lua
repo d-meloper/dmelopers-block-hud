@@ -41,8 +41,17 @@ return function(app)
         setVariable('ActionSettingsClose_TextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
         setVariable('ActionSettingsRefresh_BgColor', SKIN:GetVariable('SettingsButtonBgColor', ''))
         setVariable('ActionSettingsRefresh_TextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
-        for index = 1, #schema.tabs do
+        local contentMode = state.contentMode == true
+        setVariable('ActionSettingsContent_BgColor', contentMode and SKIN:GetVariable('SettingsPalette6', '') or SKIN:GetVariable('SettingsButtonBgColor', ''))
+        setVariable('ActionSettingsContent_TextColor', contentMode and SKIN:GetVariable('SettingsTabActiveTextColor', '') or SKIN:GetVariable('SettingsButtonTextColor', ''))
+        local activeTabs = methods.activeTabs and methods.activeTabs() or schema.tabs
+        for index = 1, 7 do
+            local tab = activeTabs[index]
+            local hasTab = tab ~= nil
             local active = index == state.currentTabIndex
+            setVariable('ActionSettingsTab' .. tostring(index) .. '_Hidden', hasTab and '0' or '1')
+            setVariable('ActionSettingsTab' .. tostring(index) .. '_Command', hasTab and ('[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "SelectTab(\'' .. tostring(tab.id or index) .. '\')"]') or '')
+            setVariable('ActionSettingsTab' .. tostring(index) .. '_LabelText', hasTab and methods.tabDisplayText(tab) or '')
             setVariable('ActionSettingsTab' .. tostring(index) .. '_BgColor', active and SKIN:GetVariable('SettingsPalette6', '') or SKIN:GetVariable('SettingsButtonBgColor', ''))
             setVariable('ActionSettingsTab' .. tostring(index) .. '_TextColor', active and SKIN:GetVariable('SettingsTabActiveTextColor', '') or SKIN:GetVariable('SettingsButtonTextColor', ''))
         end

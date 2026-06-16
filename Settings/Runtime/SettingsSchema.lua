@@ -210,6 +210,10 @@ return {
 
         Settings = { config = 'Settings', file = 'Settings.ini' },
 
+        Jukebox = { config = 'ExtraContent\\Jukebox', file = 'Jukebox.ini' },
+        JukeboxDiscSlot = { config = 'ExtraContent\\Jukebox\\DiscSlot', file = 'JukeboxDiscSlot.ini' },
+        Herobrine = { config = 'ExtraContent\\Herobrine', file = 'Herobrine.ini' },
+
 
 
 
@@ -416,7 +420,7 @@ return {
 
 
 
-        { id = 'inventory', name = '인벤토리', fields = { 'inventoryItemSize', 'inventoryTooltipSize', 'inventoryBottomRow', 'minecraftSkinUsernameDraft', 'hideSteve', 'hideUsageGuide', 'hideSkinFolderButton', 'hideEditButton', 'hideSettingsButton', 'inventoryEnabled', 'inventoryDraggable', 'inventoryDragSnap', 'inventoryRefreshPositionLock', 'resetInventorySettings', 'resetInventorySkinPositions' } },
+        { id = 'inventory', name = '인벤토리', fields = { 'inventoryItemSize', 'inventoryTooltipSize', 'inventoryBottomRow', 'minecraftSkinUsernameDraft', 'minecraftSkinModel', 'attachMinecraftSkinFile', 'hideSteve', 'hideUsageGuide', 'hideSkinFolderButton', 'hideEditButton', 'hideSettingsButton', 'inventoryEnabled', 'inventoryDraggable', 'inventoryDragSnap', 'inventoryRefreshPositionLock', 'resetInventorySettings', 'resetInventorySkinPositions' } },
 
 
 
@@ -466,19 +470,10 @@ return {
 
     },
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+    contentTabs = {
+        { id = 'jukebox', name = 'Jukebox', labelVariable = 'Loc_Settings_Content_Jukebox', fields = { 'jukeboxEnabled', 'jukeboxPlaybackSourceMode', 'jukebox2DMode', 'jukeboxDisableNoteAnimation', 'jukeboxDraggable', 'jukeboxDragSnap' } },
+        { id = 'herobrine', name = 'Herobrine', labelVariable = 'Loc_Settings_Content_Herobrine', fields = { 'herobrineEnabled', 'herobrineTotalAppearances', 'herobrineCaptures', 'herobrineVisibleSeconds', 'refreshHerobrineStats' } },
+    },
 
     fields = {
 
@@ -745,7 +740,7 @@ return {
         language = {
             key = 'language', tabId = 'general', pageId = 2, controlType = 'text', dropdownId = 'language', wideTextField = true, label = '언어',
             settingsFile = 'General', variableName = 'LanguageCode', valueType = 'string', historyLabel = '언어 변경',
-            refreshTargets = { 'Settings', 'Inventory', 'InventoryBG', 'Hotbar', 'Clock', 'Editor', 'IndicatorHeart', 'IndicatorArmor', 'IndicatorFood', 'IndicatorAir', 'IndicatorExp' },
+            refreshTargets = { 'Settings', 'Inventory', 'InventoryBG', 'Hotbar', 'Clock', 'Editor', 'Jukebox', 'JukeboxDiscSlot', 'IndicatorHeart', 'IndicatorArmor', 'IndicatorFood', 'IndicatorAir', 'IndicatorExp' },
         },
 
         appVersion = {
@@ -762,15 +757,6 @@ return {
 
         },
 
-        importLegacyData = {
-
-            key = 'importLegacyData', tabId = 'general', pageId = 2, controlType = 'action', label = '기존 데이터 불러오기',
-
-            settingsFile = 'State', variableName = 'SettingsThemeMode', valueType = 'string', historyLabel = '기존 데이터 불러오기', refreshTargets = {},
-
-            defaultActionText = '불러오기',
-
-        },
         startupAutoRun = {
 
             key = 'startupAutoRun', tabId = 'general', pageId = 1, controlType = 'toggle', label = '윈도우 시작 시 자동 실행',
@@ -929,6 +915,90 @@ return {
 
 
 
+
+        jukeboxEnabled = {
+            key = 'jukeboxEnabled', tabId = 'jukebox', pageId = 1, controlType = 'toggle', label = 'Enabled',
+            settingsFile = 'General', variableName = 'EnableJukeboxSkin', valueType = 'bool',
+            historyLabel = 'Jukebox enabled toggle', refreshTargets = {},
+            activateTargets = { 'Jukebox' },
+            deactivateTargets = { 'JukeboxDiscSlot', 'Jukebox' },
+        },
+
+        jukebox2DMode = {
+            key = 'jukebox2DMode', tabId = 'jukebox', pageId = 1, controlType = 'segmented', label = 'Display type',
+            settingsFile = 'General', variableName = 'EnableJukebox2DMode', valueType = 'bool',
+            historyLabel = 'Jukebox display type change', refreshTargets = { 'Jukebox' },
+            disabledWhenFieldOff = 'jukeboxEnabled',
+            segmentedOptions = {
+                { labelKey = 'Settings_Segmented_JukeboxDisplayType2D', fallback = '2D', value = '1' },
+                { labelKey = 'Settings_Segmented_JukeboxDisplayType3D', fallback = '3D', value = '0' },
+            },
+        },
+
+        jukeboxDisableNoteAnimation = {
+            key = 'jukeboxDisableNoteAnimation', tabId = 'jukebox', pageId = 1, controlType = 'toggle', label = 'Disable Jukebox animation',
+            settingsFile = 'General', variableName = 'DisableJukeboxNoteAnimation', valueType = 'bool',
+            historyLabel = 'Jukebox animation toggle', refreshTargets = { 'Jukebox' },
+            disabledWhenFieldOff = 'jukeboxEnabled',
+        },
+
+        jukeboxPlaybackSourceMode = {
+            key = 'jukeboxPlaybackSourceMode', tabId = 'jukebox', pageId = 1, controlType = 'segmented', label = 'Playback source',
+            settingsFile = 'General', variableName = 'JukeboxPlaybackSourceMode', valueType = 'string',
+            historyLabel = 'Jukebox playback source mode change', refreshTargets = { 'Jukebox' },
+            disabledWhenFieldOff = 'jukeboxEnabled',
+            segmentedControlScale = 1.5,
+            segmentedOptions = {
+                { labelKey = 'Settings_Segmented_JukeboxPlaybackSourceLocal', fallback = 'Audio files', value = 'local' },
+                { labelKey = 'Settings_Segmented_JukeboxPlaybackSourceExternal', fallback = 'Music app', value = 'external' },
+            },
+        },
+
+        jukeboxDraggable = {
+            key = 'jukeboxDraggable', tabId = 'jukebox', pageId = 2, controlType = 'toggle', label = 'Allow drag',
+            settingsFile = 'General', variableName = 'AllowJukeboxDrag', valueType = 'bool',
+            historyLabel = 'Jukebox draggable toggle', refreshTargets = {}, windowOptionName = 'Draggable', windowOptionTargetIds = { 'Jukebox' },
+            disabledWhenFieldOff = 'jukeboxEnabled',
+        },
+
+        jukeboxDragSnap = {
+            key = 'jukeboxDragSnap', tabId = 'jukebox', pageId = 2, controlType = 'toggle', label = 'Snap while dragging',
+            settingsFile = 'General', variableName = 'AllowJukeboxSnapEdges', valueType = 'bool',
+            historyLabel = 'Jukebox drag snap toggle', refreshTargets = {}, windowOptionName = 'SnapEdges', windowOptionTargetIds = { 'Jukebox' },
+            disabledWhenFieldOff = 'jukeboxEnabled',
+        },
+
+        herobrineEnabled = {
+            key = 'herobrineEnabled', tabId = 'herobrine', pageId = 1, controlType = 'toggle', label = 'Enabled',
+            settingsFile = 'General', variableName = 'EnableHerobrineSkin', valueType = 'bool',
+            historyLabel = 'Herobrine enabled toggle', activateTargets = { 'Herobrine' }, deactivateTargets = { 'Herobrine' }, refreshTargets = {},
+        },
+        resetHerobrineSettings = {
+            key = 'resetHerobrineSettings', tabId = 'herobrine', pageId = 1, controlType = 'action', label = 'Reset to defaults',
+            settingsFile = 'State', variableName = 'SettingsThemeMode', valueType = 'string', historyLabel = 'Herobrine tab reset', refreshTargets = {},
+            requiresConfirmation = true, defaultActionText = 'Reset tab', actionStyle = 'danger',
+        },
+
+        herobrineTotalAppearances = {
+            key = 'herobrineTotalAppearances', tabId = 'herobrine', pageId = 2, controlType = 'readonly', label = 'Total appearances',
+            displayVariable = 'HerobrineTotalAppearances', displayFallback = '0',
+        },
+
+        herobrineVisibleSeconds = {
+            key = 'herobrineVisibleSeconds', tabId = 'herobrine', pageId = 2, controlType = 'readonly', label = 'Visible time',
+            displayVariable = 'HerobrineVisibleSeconds', displayFallback = '0', displayFormatter = 'durationSeconds',
+        },
+
+        herobrineCaptures = {
+            key = 'herobrineCaptures', tabId = 'herobrine', pageId = 2, controlType = 'readonly', label = 'Captures',
+            displayVariable = 'HerobrineCaptures', displayFallback = '0',
+        },
+
+        refreshHerobrineStats = {
+            key = 'refreshHerobrineStats', tabId = 'herobrine', pageId = 2, controlType = 'action', label = 'Stats refresh',
+            settingsFile = 'State', variableName = 'SettingsThemeMode', valueType = 'string', historyLabel = 'Herobrine stats refresh', refreshTargets = {},
+            defaultActionText = 'Refresh',
+        },
 
         hotbarSlotSize = {
 
@@ -2592,7 +2662,7 @@ return {
 
         minecraftSkinUsernameDraft = {
 
-            key = 'minecraftSkinUsernameDraft', tabId = 'inventory', pageId = 2, controlType = 'text', dropdownId = 'minecraftSkinHistory', wideTextField = true, label = '스티브 스킨',
+            key = 'minecraftSkinUsernameDraft', tabId = 'inventory', pageId = 2, controlType = 'text', dropdownId = 'minecraftSkinHistory', wideTextField = true, wideTextFieldLabelW = 144, label = '스킨 적용 닉네임',
 
             settingsFile = 'State', variableName = 'MinecraftSkinUsernameDraft', valueType = 'string', historyLabel = '마인크래프트 닉네임 입력', refreshTargets = {},
 
@@ -2600,6 +2670,21 @@ return {
 
             sessionOnly = true,
 
+        },
+
+        minecraftSkinModel = {
+            key = 'minecraftSkinModel', tabId = 'inventory', pageId = 2, controlType = 'segmented', label = '스킨 유형',
+            settingsFile = 'Support', variableName = 'MinecraftSkinModel', valueType = 'string', historyLabel = '마인크래프트 스킨 유형 변경', refreshTargets = {},
+            segmentedOptions = {
+                { labelKey = 'Settings_Segmented_MinecraftSkinModelWide', fallback = 'Wide', value = 'wide' },
+                { labelKey = 'Settings_Segmented_MinecraftSkinModelSlim', fallback = 'Slim', value = 'slim' },
+            },
+        },
+
+        attachMinecraftSkinFile = {
+            key = 'attachMinecraftSkinFile', tabId = 'inventory', pageId = 2, controlType = 'action', label = '스킨 파일',
+            settingsFile = 'State', variableName = 'SettingsThemeMode', valueType = 'string', historyLabel = '마인크래프트 스킨 파일 첨부', refreshTargets = {},
+            defaultActionText = '찾아보기',
         },
 
 
@@ -3258,7 +3343,7 @@ clockType = {
 
 
 
-            refreshTargets = { 'Hotbar', 'Inventory', 'Editor', 'Clock', 'IndicatorHeart', 'IndicatorArmor', 'IndicatorFood', 'IndicatorAir', 'IndicatorExp' },
+            refreshTargets = { 'Hotbar', 'Inventory', 'Editor', 'JukeboxDiscSlot', 'Clock', 'IndicatorHeart', 'IndicatorArmor', 'IndicatorFood', 'IndicatorAir', 'IndicatorExp' },
 
 
 
@@ -3917,7 +4002,7 @@ clockType = {
 
 
 
-            historyLabel = '슬롯 하이라이트 끄기 전환', refreshTargets = { 'Hotbar', 'Inventory' },
+            historyLabel = '슬롯 하이라이트 끄기 전환', refreshTargets = { 'Hotbar', 'Inventory', 'JukeboxDiscSlot' },
 
 
 
@@ -3992,7 +4077,7 @@ clockType = {
 
 
 
-            historyLabel = '툴팁 위치 고정 전환', refreshTargets = { 'Hotbar', 'Inventory' },
+            historyLabel = '툴팁 위치 고정 전환', refreshTargets = { 'Hotbar', 'Inventory', 'JukeboxDiscSlot' },
 
 
 
@@ -4214,7 +4299,7 @@ clockType = {
 
 
 
-        'inventoryItemSize', 'inventoryTooltipSize', 'inventoryBottomRow', 'minecraftSkinUsername', 'inventoryEnabled', 'inventoryDraggable', 'inventoryDragSnap', 'inventoryRefreshPositionLock',
+        'inventoryItemSize', 'inventoryTooltipSize', 'inventoryBottomRow', 'minecraftSkinUsername', 'minecraftSkinModel', 'inventoryEnabled', 'inventoryDraggable', 'inventoryDragSnap', 'inventoryRefreshPositionLock',
 
 
 
@@ -4233,6 +4318,20 @@ clockType = {
         'clockType', 'clockSpriteSize', 'clock24Hour', 'clockHideMeridiem', 'clockTimeSize', 'clockDateSize', 'clockTextColor', 'clockTextGap', 'clockEnabled', 'clockDraggable', 'clockDragSnap',
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+        'jukeboxPlaybackSourceMode', 'herobrineEnabled',
 
 
 

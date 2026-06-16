@@ -18,14 +18,8 @@ local function lower(value)
     return tostring(value or ''):lower()
 end
 
-local function fileSize(path)
-    local handle = io.open(path, 'rb')
-    if not handle then
-        return nil
-    end
-    local size = handle:seek('end') or 0
-    handle:close()
-    return size
+local function upper(value)
+    return tostring(value or ''):upper()
 end
 
 local function parseLine(line)
@@ -41,6 +35,33 @@ local function parseLine(line)
     }
 end
 
+local function parsePairs(output)
+    local pairs = {}
+    output = tostring(output or '')
+    for line in output:gmatch('[^\r\n]+') do
+        local key, value = line:match('^([%w_]+)=(.*)$')
+        if key then
+            pairs[key] = value or ''
+        end
+    end
+    return pairs
+end
+
+local function parseEntries(values)
+    local entries = {}
+    local count = tonumber(values.DMEL_ENTRY_COUNT or '0') or 0
+    for index = 1, count do
+        local prefix = 'DMEL_ENTRY_' .. tostring(index) .. '_'
+        entries[#entries + 1] = {
+            level = trim(values[prefix .. 'LEVEL']),
+            timeText = trim(values[prefix .. 'TIME']),
+            source = trim(values[prefix .. 'SOURCE']),
+            message = trim(values[prefix .. 'MESSAGE']),
+        }
+    end
+    return entries
+end
+
 function M.New(options)
     options = options or {}
     local monitor = {
@@ -54,9 +75,8 @@ function M.New(options)
         skin = options.skin or SKIN,
     }
 
-    function monitor:initialize()
-        local size = fileSize(self.logPath)
-        self.offset = size or 0
+    function monitor:initialize(offset)
+        self.offset = tonumber(offset) or 0
         return true
     end
 
@@ -108,42 +128,26 @@ function M.New(options)
         return false
     end
 
-    function monitor:update()
-        local path = self.logPath
-        if path == '' then
+    function monitor:handleOutput(output)
+        local values = parsePairs(output)
+        if upper(values.DMEL_STATUS) ~= 'OK' then
             return false
         end
 
-        local size = fileSize(path)
-        if not size then
-            self.offset = 0
-            return false
+        local handled = false
+        for _, entry in ipairs(parseEntries(values)) do
+            if self:handleEntry(entry) then
+                handled = true
+            end
         end
-
-        if self.offset == nil or size < self.offset then
-            self.offset = size
-            return false
-        end
-
-        if size == self.offset then
-            return false
-        end
-
-        local handle = io.open(path, 'rb')
-        if not handle then
-            return false
-        end
-
-        handle:seek('set', self.offset)
-        for line in handle:lines() do
-            self:handleEntry(parseLine(line))
-        end
-        self.offset = handle:seek() or size
-        handle:close()
-        return true
+        self.offset = tonumber(values.DMEL_OFFSET) or self.offset or 0
+        return handled
     end
 
     return monitor
 end
+
+M.parsePairs = parsePairs
+M.parseLine = parseLine
 
 return M

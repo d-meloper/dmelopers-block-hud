@@ -135,7 +135,7 @@ For GitHub contribution proposals, read the contributing guide before opening a 
 
 [Contributing guide](CONTRIBUTING.md)
 
-This public repository is a distribution surface, not the implementation source of truth. Community pull requests are reviewed as proposals, and accepted changes may be applied by the maintainer through the private development workspace before they appear in a release approval pull request.
+This public repository is the distribution and review surface for public releases. Community pull requests are reviewed as proposals, and accepted changes may appear through a maintainer release approval pull request after validation.
 
 When reporting a bug, include as much of the following information as possible.
 

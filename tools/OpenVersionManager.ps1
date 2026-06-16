@@ -40,6 +40,7 @@ catch {
 . (Join-Path $PSScriptRoot 'Localization.Common.ps1')
 . (Join-Path $PSScriptRoot 'VersionManager.UpdateCache.ps1')
 . (Join-Path $PSScriptRoot 'VersionManager.UiState.ps1')
+. (Join-Path $PSScriptRoot 'VersionManager.ReleaseCatalog.ps1')
 
 $script:LogPath = Get-BlockHudCanonicalLogPath -ScriptRoot $PSScriptRoot
 
@@ -652,11 +653,21 @@ function Get-ImportHelperPath {
 function Get-VersionCatalogHelperPath {
     param([Parameter(Mandatory = $true)][string]$Root)
 
+    $managerLocalHelper = Join-Path $PSScriptRoot 'GetVersionReleaseCatalog.ps1'
+    if (Test-Path -LiteralPath $managerLocalHelper -PathType Leaf) {
+        return $managerLocalHelper
+    }
+
     Join-RootPath -Root $Root -RelativePath 'tools\GetVersionReleaseCatalog.ps1'
 }
 
 function Get-VersionReleaseInstallHelperPath {
     param([Parameter(Mandatory = $true)][string]$Root)
+
+    $managerLocalHelper = Join-Path $PSScriptRoot 'InstallVersionRelease.ps1'
+    if (Test-Path -LiteralPath $managerLocalHelper -PathType Leaf) {
+        return $managerLocalHelper
+    }
 
     Join-RootPath -Root $Root -RelativePath 'tools\InstallVersionRelease.ps1'
 }
@@ -933,37 +944,33 @@ function Draw-VersionManagerStatusBadge {
 function Get-ReleaseVariantForLanguageCode {
     param([AllowNull()][string]$LanguageCode)
 
-    $normalized = ([string]$LanguageCode).Trim()
-    if ([string]::Equals($normalized, 'ko-KR', [System.StringComparison]::OrdinalIgnoreCase)) {
-        return 'Korea'
-    }
-
-    return 'Global'
+    return (Get-BlockHudReleaseVariantForLanguageCode -LanguageCode $LanguageCode)
 }
 
 function Get-FixedUpdateZipAssetName {
     param([AllowNull()][string]$LanguageCode)
 
-    if ([string]::Equals(([string]$LanguageCode).Trim(), 'ko-KR', [System.StringComparison]::OrdinalIgnoreCase)) {
-        return 'DMelopers-Block-HUD_Korea.zip'
-    }
-
-    return 'DMelopers-Block-HUD_Global.zip'
+    return (Get-BlockHudFixedUpdateZipAssetName -LanguageCode $LanguageCode)
 }
 
 function Get-UpdateConfiguration {
     param([Parameter(Mandatory = $true)][string]$Root)
 
     $support = Read-VariablesFile -Path (Get-SupportSettingsPath -Root $Root)
-    $defaultReleaseVariant = Get-ReleaseVariantForLanguageCode -LanguageCode $script:LanguageCode
-    $activeAssetPattern = Get-FixedUpdateZipAssetName -LanguageCode $script:LanguageCode
+    $configuredReleaseVariant = [string]$support['UpdateReleaseVariant']
+    $legacyAssetPattern = [string]$support['UpdateReleaseAssetPattern']
+    $defaultReleaseVariant = Normalize-BlockHudReleaseVariant `
+        -ConfiguredReleaseVariant $configuredReleaseVariant `
+        -LanguageCode $script:LanguageCode `
+        -AssetPattern $legacyAssetPattern
+    $activeAssetPattern = Get-BlockHudFixedUpdateZipAssetName -ReleaseVariant $defaultReleaseVariant -LanguageCode $script:LanguageCode
 
     [PSCustomObject]@{
         Provider = if ([string]::IsNullOrWhiteSpace([string]$support['UpdateProvider'])) { 'github' } else { [string]$support['UpdateProvider'] }
         Owner = if ([string]::IsNullOrWhiteSpace([string]$support['UpdateGithubOwner'])) { 'd-meloper' } else { [string]$support['UpdateGithubOwner'] }
         Repo = if ([string]::IsNullOrWhiteSpace([string]$support['UpdateGithubRepo'])) { 'dmelopers-block-hud' } else { [string]$support['UpdateGithubRepo'] }
         ReleaseVariant = $defaultReleaseVariant
-        ConfiguredReleaseVariant = ''
+        ConfiguredReleaseVariant = $configuredReleaseVariant
         DefaultReleaseVariant = $defaultReleaseVariant
         LegacyAssetPattern = ''
         AssetPatternKorea = 'DMelopers-Block-HUD_Korea.zip'
@@ -1200,10 +1207,13 @@ function Resolve-ActiveUpdateAssetPattern {
     param([Parameter(Mandatory = $true)]$Config)
 
     $languageCode = [string](Get-ObjectPropertyValue -Object $Config -Name 'LanguageCode' -DefaultValue $script:LanguageCode)
-    $releaseVariant = Get-ReleaseVariantForLanguageCode -LanguageCode $languageCode
+    $releaseVariant = Normalize-BlockHudReleaseVariant `
+        -ConfiguredReleaseVariant ([string](Get-ObjectPropertyValue -Object $Config -Name 'ReleaseVariant' -DefaultValue '')) `
+        -LanguageCode $languageCode `
+        -AssetPattern ([string](Get-ObjectPropertyValue -Object $Config -Name 'ActiveAssetPattern' -DefaultValue ''))
     $assetPattern = [string](Get-ObjectPropertyValue -Object $Config -Name 'ActiveAssetPattern' -DefaultValue '')
     if ([string]::IsNullOrWhiteSpace($assetPattern)) {
-        $assetPattern = Get-FixedUpdateZipAssetName -LanguageCode $languageCode
+        $assetPattern = Get-BlockHudFixedUpdateZipAssetName -ReleaseVariant $releaseVariant -LanguageCode $languageCode
     }
 
     return [PSCustomObject]@{
@@ -1427,13 +1437,48 @@ function Confirm-Dialog {
         [string]$Title = ''
     )
 
-    [System.Windows.Forms.MessageBox]::Show(
-        $Owner,
-        $Message,
-        $(if ($Title) { $Title } else { T 'Helper_VersionManager_WindowTitle' 'Skins' }),
-        [System.Windows.Forms.MessageBoxButtons]::OKCancel,
-        [System.Windows.Forms.MessageBoxIcon]::Question
-    ) -eq [System.Windows.Forms.DialogResult]::OK
+    $dialogResult = Show-VersionManagerMessageBox `
+        -Owner $Owner `
+        -Message $Message `
+        -Title $(if ($Title) { $Title } else { T 'Helper_VersionManager_WindowTitle' 'Skins' }) `
+        -Buttons ([System.Windows.Forms.MessageBoxButtons]::OKCancel) `
+        -Icon ([System.Windows.Forms.MessageBoxIcon]::Question)
+    return ($dialogResult -eq [System.Windows.Forms.DialogResult]::OK)
+}
+
+function Show-VersionManagerMessageBox {
+    param(
+        [AllowNull()][System.Windows.Forms.IWin32Window]$Owner,
+        [Parameter(Mandatory = $true)][string]$Message,
+        [string]$Title = '',
+        [System.Windows.Forms.MessageBoxButtons]$Buttons = [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]$Icon = [System.Windows.Forms.MessageBoxIcon]::None
+    )
+
+    $caption = if ($Title) { $Title } else { T 'Helper_VersionManager_WindowTitle' 'Skins' }
+    $ownerForm = $Owner -as [System.Windows.Forms.Form]
+    if ($null -eq $Owner) {
+        return [System.Windows.Forms.MessageBox]::Show($Message, $caption, $Buttons, $Icon)
+    }
+    if ($null -eq $ownerForm) {
+        return [System.Windows.Forms.MessageBox]::Show($Owner, $Message, $caption, $Buttons, $Icon)
+    }
+    if ($ownerForm.IsDisposed) {
+        return [System.Windows.Forms.MessageBox]::Show($Message, $caption, $Buttons, $Icon)
+    }
+
+    $wasTopMost = [bool]$ownerForm.TopMost
+    try {
+        $ownerForm.TopMost = $false
+        $ownerForm.Activate()
+        return [System.Windows.Forms.MessageBox]::Show($ownerForm, $Message, $caption, $Buttons, $Icon)
+    }
+    finally {
+        if (-not $ownerForm.IsDisposed) {
+            $ownerForm.TopMost = $wasTopMost
+            $ownerForm.Activate()
+        }
+    }
 }
 
 function Get-SkinRootLabel {
@@ -1517,7 +1562,7 @@ function Show-SourceEntryDialog {
 
     $resolved = Resolve-SkinRootCandidate -Candidate $pathBox.Text
     if (-not $resolved) {
-        [System.Windows.Forms.MessageBox]::Show($form, (T 'Helper_VersionManager_SourceDialog_InvalidRoot' 'The selected path is not a valid Block HUD skin root.'), $form.Text, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        Show-VersionManagerMessageBox -Owner $form -Message (T 'Helper_VersionManager_SourceDialog_InvalidRoot' 'The selected path is not a valid Block HUD skin root.') -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         $form.Dispose()
         return $null
     }
@@ -1771,145 +1816,7 @@ function Test-AssetPatternMatch {
         [Parameter(Mandatory = $true)][string]$Name
     )
 
-    return [string]::Equals($Pattern, $Name, [System.StringComparison]::OrdinalIgnoreCase)
-}
-
-function Test-GitHubApiRateLimitException {
-    param([AllowNull()]$Exception)
-
-    $current = $Exception
-    while ($null -ne $current) {
-        $response = $null
-        try {
-            $response = $current.Response
-        }
-        catch {
-            $response = $null
-        }
-
-        if ($null -ne $response) {
-            $statusCode = $null
-            try {
-                $statusCode = [int]$response.StatusCode
-            }
-            catch {
-                $statusCode = $null
-            }
-            $statusDescription = ''
-            try {
-                $statusDescription = [string]$response.StatusDescription
-            }
-            catch {
-                $statusDescription = ''
-            }
-
-            if ($statusCode -eq 429) {
-                return $true
-            }
-            if ($statusCode -eq 403 -and $statusDescription -match '(?i)rate limit') {
-                return $true
-            }
-        }
-
-        $message = [string]$current.Message
-        if ($message -match '(?i)rate limit') {
-            return $true
-        }
-        $current = $current.InnerException
-    }
-
-    return $false
-}
-
-function Invoke-GitHubWebRequestText {
-    param([Parameter(Mandatory = $true)][string]$Uri)
-
-    $headers = @{
-        'User-Agent' = 'DMeloper-Block-HUD-VersionManager'
-    }
-    $response = Invoke-WebRequest -Uri $Uri -Headers $headers -UseBasicParsing
-    return [string]$response.Content
-}
-
-function Get-GitHubReleaseAssetsFromHtml {
-    param(
-        [Parameter(Mandatory = $true)][string]$Owner,
-        [Parameter(Mandatory = $true)][string]$Repo,
-        [Parameter(Mandatory = $true)][string]$Tag
-    )
-
-    $assetsUri = 'https://github.com/{0}/{1}/releases/expanded_assets/{2}' -f $Owner, $Repo, [System.Uri]::EscapeDataString($Tag)
-    $html = Invoke-GitHubWebRequestText -Uri $assetsUri
-    $assets = New-Object System.Collections.Generic.List[object]
-    $pattern = 'href="(?<href>/{0}/{1}/releases/download/{2}/(?<name>[^"#?]+))"' -f [regex]::Escape($Owner), [regex]::Escape($Repo), [regex]::Escape($Tag)
-    foreach ($match in [regex]::Matches($html, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
-        $name = [System.Uri]::UnescapeDataString([string]$match.Groups['name'].Value)
-        if ([string]::IsNullOrWhiteSpace($name)) {
-            continue
-        }
-        [void]$assets.Add([PSCustomObject]@{
-            name = $name
-            browser_download_url = 'https://github.com' + [string]$match.Groups['href'].Value
-            size = 0
-        })
-    }
-
-    return $assets.ToArray()
-}
-
-function Invoke-GitHubReleaseCatalogHtmlFallback {
-    param(
-        [Parameter(Mandatory = $true)][string]$Owner,
-        [Parameter(Mandatory = $true)][string]$Repo
-    )
-
-    Write-Log 'GitHub API latest-release check is rate-limited; falling back to public release feed.'
-    $atomUri = 'https://github.com/{0}/{1}/releases.atom' -f $Owner, $Repo
-    $atom = Invoke-GitHubWebRequestText -Uri $atomUri
-    $entryPattern = '<entry>(?<entry>.*?)</entry>'
-    $results = New-Object System.Collections.Generic.List[object]
-    foreach ($entryMatch in [regex]::Matches($atom, $entryPattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)) {
-        $entry = [string]$entryMatch.Groups['entry'].Value
-        $tag = ''
-        if ($entry -match 'href="https://github\.com/[^/]+/[^/]+/releases/tag/(?<tag>[^"]+)"') {
-            $tag = [System.Net.WebUtility]::HtmlDecode([string]$matches['tag'])
-        }
-        if ([string]::IsNullOrWhiteSpace($tag)) {
-            continue
-        }
-
-        $title = $tag
-        if ($entry -match '<title>(?<title>.*?)</title>') {
-            $title = [System.Net.WebUtility]::HtmlDecode([string]$matches['title'])
-        }
-
-        $body = ''
-        $bodyMatch = [regex]::Match($entry, '<content[^>]*>(?<body>.*?)</content>', [System.Text.RegularExpressions.RegexOptions]::Singleline)
-        if ($bodyMatch.Success) {
-            $body = [System.Net.WebUtility]::HtmlDecode([string]$bodyMatch.Groups['body'].Value)
-            $body = [regex]::Replace($body, '<[^>]+>', ' ')
-            $body = [regex]::Replace($body, '\s+', ' ').Trim()
-        }
-
-        $updated = ''
-        if ($entry -match '<updated>(?<updated>.*?)</updated>') {
-            $updated = [string]$matches['updated']
-        }
-
-        $assets = @(Get-GitHubReleaseAssetsFromHtml -Owner $Owner -Repo $Repo -Tag $tag)
-        [void]$results.Add([PSCustomObject]@{
-            draft = $false
-            prerelease = $false
-            tag_name = $tag
-            name = $title
-            html_url = ('https://github.com/{0}/{1}/releases/tag/{2}' -f $Owner, $Repo, [System.Uri]::EscapeDataString($tag))
-            body = $body
-            published_at = $updated
-            assets = $assets
-        })
-    }
-
-    return $results.ToArray()
+    return (Test-BlockHudReleaseAssetNameMatch -ExpectedName $Pattern -ActualName $Name)
 }
 
 function Invoke-CheckLatestReleaseApi {
@@ -1918,90 +1825,20 @@ function Invoke-CheckLatestReleaseApi {
         [Parameter(Mandatory = $true)][string]$AssetPattern
     )
 
-    $headers = @{
-        'Accept' = 'application/vnd.github+json'
-        'User-Agent' = 'DMeloper-Block-HUD-VersionManager'
-        'X-GitHub-Api-Version' = '2022-11-28'
+    $selection = Get-BlockHudLatestStableReleaseSelection `
+        -Owner ([string]$Config.Owner) `
+        -Repo ([string]$Config.Repo) `
+        -AssetName $AssetPattern `
+        -UserAgent 'DMeloper-Block-HUD-VersionManager' `
+        -Log { param($Message, $Level) Write-Log -Message $Message -Level $Level }
+    if ($null -eq $selection.LatestStable) {
+        throw (New-UpdateConfigurationException -Code 'update-no-stable-release' -Message (T 'Helper_VersionManager_Update_NoStableRelease' 'The latest release is not a stable published release.'))
     }
-    $perPage = 100
-    $page = 1
-    $stable = New-Object System.Collections.Generic.List[object]
-
-    while ($true) {
-        $uri = 'https://api.github.com/repos/{0}/{1}/releases?per_page={2}&page={3}' -f $Config.Owner, $Config.Repo, $perPage, $page
-        $batch = @(Invoke-RestMethod -Uri $uri -Headers $headers -Method Get)
-        if ($batch.Count -eq 0) {
-            break
-        }
-
-        foreach ($release in $batch) {
-            if ($release.prerelease -or $release.draft) {
-                continue
-            }
-            $semanticVersion = Convert-ToVersion -VersionText ([string]$release.tag_name)
-            if ($null -eq $semanticVersion) {
-                continue
-            }
-            $hasAsset = $false
-            foreach ($asset in @($release.assets)) {
-                if (Test-AssetPatternMatch -Pattern $AssetPattern -Name ([string]$asset.name)) {
-                    $hasAsset = $true
-                    break
-                }
-            }
-            if ($hasAsset) {
-                [void]$stable.Add([PSCustomObject]@{
-                    Release = $release
-                    Version = $semanticVersion
-                })
-            }
-        }
-
-        if ($batch.Count -lt $perPage) {
-            break
-        }
-        $page++
-    }
-
-    if ($stable.Count -eq 0) {
+    if (-not [bool]$selection.HasExpectedAsset) {
         throw (New-UpdateConfigurationException -Code 'update-asset-match-failed' -Message (TF 'Helper_VersionManager_Update_AssetMismatch' @($AssetPattern) 'The expected update ZIP "%1" was not found in the latest release.'))
     }
 
-    return (@($stable | Sort-Object Version -Descending)[0].Release)
-}
-
-function Invoke-CheckLatestReleaseFallback {
-    param(
-        [Parameter(Mandatory = $true)]$Config,
-        [Parameter(Mandatory = $true)][string]$AssetPattern
-    )
-
-    $releases = @(Invoke-GitHubReleaseCatalogHtmlFallback -Owner ([string]$Config.Owner) -Repo ([string]$Config.Repo))
-    $stable = New-Object System.Collections.Generic.List[object]
-    foreach ($release in $releases) {
-        $semanticVersion = Convert-ToVersion -VersionText ([string]$release.tag_name)
-        if ($null -ne $semanticVersion) {
-            $hasAsset = $false
-            foreach ($asset in @($release.assets)) {
-                if (Test-AssetPatternMatch -Pattern $AssetPattern -Name ([string]$asset.name)) {
-                    $hasAsset = $true
-                    break
-                }
-            }
-            if (-not $hasAsset) {
-                continue
-            }
-            [void]$stable.Add([PSCustomObject]@{
-                Release = $release
-                Version = $semanticVersion
-            })
-        }
-    }
-    if ($stable.Count -eq 0) {
-        throw (New-UpdateConfigurationException -Code 'update-asset-match-failed' -Message (TF 'Helper_VersionManager_Update_AssetMismatch' @($AssetPattern) 'The expected update ZIP "%1" was not found in the latest release.'))
-    }
-
-    return (@($stable | Sort-Object Version -Descending)[0].Release)
+    return $selection.LatestStable.Release
 }
 
 function Invoke-CheckLatestRelease {
@@ -2023,17 +1860,7 @@ function Invoke-CheckLatestRelease {
         throw (New-UpdateConfigurationException -Code 'update-network-offline' -Message (T 'Helper_VersionManager_Update_Error_Offline' 'The internet connection is unavailable. Check the connection and try again.'))
     }
 
-    try {
-        $response = Invoke-CheckLatestReleaseApi -Config $Config -AssetPattern ([string]$activePattern.AssetPattern)
-    }
-    catch {
-        if (Test-GitHubApiRateLimitException -Exception $_.Exception) {
-            $response = Invoke-CheckLatestReleaseFallback -Config $Config -AssetPattern ([string]$activePattern.AssetPattern)
-        }
-        else {
-            throw
-        }
-    }
+    $response = Invoke-CheckLatestReleaseApi -Config $Config -AssetPattern ([string]$activePattern.AssetPattern)
     if ($response.prerelease -or $response.draft) {
         throw (New-UpdateConfigurationException -Code 'update-no-stable-release' -Message (T 'Helper_VersionManager_Update_NoStableRelease' 'The latest release is not a stable published release.'))
     }
@@ -2134,6 +1961,7 @@ function Invoke-VersionReleaseInstall {
         [Parameter(Mandatory = $true)][string]$Root,
         [string]$PackageUrl,
         [string]$ExpectedVersion,
+        [string]$ExpectedReleaseVariant,
         [string]$SelectedTargetRoot,
         [switch]$AllowCompatibilityWarning
     )
@@ -2161,6 +1989,9 @@ function Invoke-VersionReleaseInstall {
         if ($AllowCompatibilityWarning) {
             $arguments += '-AllowCompatibilityWarning'
         }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedReleaseVariant)) {
+        $arguments += @('-ExpectedReleaseVariant', $ExpectedReleaseVariant)
     }
 
     $output = @(& powershell @arguments 2>&1)
@@ -2572,6 +2403,9 @@ function Start-VersionManager {
     $footerClose.Text = T 'Helper_VersionManager_Common_Close' 'Close'
     $footerClose.Bounds = New-Object System.Drawing.Rectangle(660, 353, 112, 28)
     $footerClose.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $footerClose.Add_Click({
+        $form.Close()
+    })
 
     $busyOverlay = New-Object System.Windows.Forms.Panel
     $busyOverlay.Bounds = New-Object System.Drawing.Rectangle(0, 0, 784, 393)
@@ -2665,6 +2499,24 @@ function Start-VersionManager {
         [System.Windows.Forms.Application]::DoEvents()
     }
 
+    $recoverInteractiveStateAfterFailure = {
+        try {
+            & $hideBusyOverlay
+        }
+        catch {
+        }
+
+        $ui.UpdateCheckInProgress = $false
+        $ui.VersionCatalogOperationInProgress = $false
+        $ui.InstallationOperationInProgress = $false
+
+        foreach ($control in @($tabs, $footerOpenDownloadPage, $footerOpenRepositoryPage, $footerClose)) {
+            if ($null -ne $control -and -not $control.IsDisposed) {
+                $control.Enabled = $true
+            }
+        }
+    }
+
     $setCurrentVersionState = {
         param(
             [Parameter(Mandatory = $true)][ValidateSet('latest', 'unknown', 'error', 'not-latest')][string]$State,
@@ -2683,6 +2535,8 @@ function Start-VersionManager {
             [Parameter(Mandatory = $true)][string]$StageName,
             [Parameter(Mandatory = $true)][System.Exception]$Exception
         )
+
+        & $recoverInteractiveStateAfterFailure
 
         switch ($StageName) {
             'summary' { [void](Stop-VersionManagerTabLoad -TabStates $ui.TabStates -TabName 'summary') }
@@ -2785,7 +2639,13 @@ function Start-VersionManager {
 
         $entryVersion = Convert-ToVersion -VersionText ([string](Get-ObjectPropertyValue -Object $Entry -Name 'version' -DefaultValue ''))
         if ($entryVersion -and $ui.TargetVersion -and ($entryVersion -eq $ui.TargetVersion)) {
-            return $true
+            $entryVariant = [string](Get-ObjectPropertyValue -Object $Entry -Name 'release_variant' -DefaultValue '')
+            $currentVariant = [string](Get-ObjectPropertyValue -Object $ui.UpdateConfig -Name 'ReleaseVariant' -DefaultValue '')
+            return (
+                [string]::IsNullOrWhiteSpace($entryVariant) -or
+                [string]::IsNullOrWhiteSpace($currentVariant) -or
+                [string]::Equals($entryVariant, $currentVariant, [System.StringComparison]::OrdinalIgnoreCase)
+            )
         }
 
         $installedPath = [string](Get-ObjectPropertyValue -Object $Entry -Name 'installed_path' -DefaultValue '')
@@ -2920,6 +2780,7 @@ function Start-VersionManager {
         try {
             $ui.TargetVersionText = Get-SkinMetadataVersion -Root $ui.Root
             $ui.TargetVersion = Convert-ToVersion -VersionText $ui.TargetVersionText
+            $ui.UpdateConfig = Get-UpdateConfiguration -Root $ui.Root
             $ui.VersionCatalog = Invoke-VersionReleaseCatalog -Root $ui.Root
             $ui.VersionCatalogEntries = @($ui.VersionCatalog.releases)
 
@@ -3192,7 +3053,7 @@ function Start-VersionManager {
             & $refreshSettingsTab
             if (-not $Silent) {
                 $dialogMessage = Get-UpdateFriendlyMessage -ErrorCode $errorCode -DefaultMessage ([string]$_.Exception.Message) -Surface 'dialog'
-                [System.Windows.Forms.MessageBox]::Show($form, $dialogMessage, $form.Text, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+                Show-VersionManagerMessageBox -Owner $form -Message $dialogMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
             }
         }
         finally {
@@ -3232,7 +3093,7 @@ function Start-VersionManager {
             $ui.UpdateCheckInProgress = $false
             & $refreshSummary
             $dialogMessage = Get-UpdateFriendlyMessage -ErrorCode $errorCode -DefaultMessage ([string]$_.Exception.Message) -Surface 'dialog'
-            [System.Windows.Forms.MessageBox]::Show($form, $dialogMessage, $form.Text, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            Show-VersionManagerMessageBox -Owner $form -Message $dialogMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
     }
 
@@ -3305,11 +3166,11 @@ function Start-VersionManager {
             if (-not [string]::IsNullOrWhiteSpace([string]$result.LogPath)) {
                 $switchFailureMessage += "`r`n`r`n" + [string]$result.LogPath
             }
-            [System.Windows.Forms.MessageBox]::Show($form, $switchFailureMessage, $form.Text, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            Show-VersionManagerMessageBox -Owner $form -Message $switchFailureMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
         catch {
             Write-Log ("Installed skin switch failed: {0}" -f $_.Exception.ToString()) 'ERROR'
-            [System.Windows.Forms.MessageBox]::Show($form, (T 'Helper_VersionManager_Install_UseSelectedFailed' 'The selected skin could not be activated. Check the log file for details.'), $form.Text, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            Show-VersionManagerMessageBox -Owner $form -Message (T 'Helper_VersionManager_Install_UseSelectedFailed' 'The selected skin could not be activated. Check the log file for details.') -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
         finally {
             & $hideBusyOverlay
@@ -3337,6 +3198,7 @@ function Start-VersionManager {
         $expectedVersion = if ([string]::IsNullOrWhiteSpace($tagText)) { $versionText } else { $tagText }
         $assetUrl = [string](Get-ObjectPropertyValue -Object $entry -Name 'asset_url' -DefaultValue '')
         $installedPath = [string](Get-ObjectPropertyValue -Object $entry -Name 'installed_path' -DefaultValue '')
+        $releaseVariant = [string](Get-ObjectPropertyValue -Object $entry -Name 'release_variant' -DefaultValue '')
         $isInstalled = -not [string]::IsNullOrWhiteSpace($installedPath)
         $isPre12Target = Test-VersionManagerUnsupportedVersionText -VersionText $versionText
 
@@ -3382,10 +3244,10 @@ function Start-VersionManager {
             & $showBusyOverlay $busyMessage
             try {
                 $result = if ($isInstalled) {
-                    Invoke-VersionReleaseInstall -Root $ui.Root -SelectedTargetRoot $installedPath
+                    Invoke-VersionReleaseInstall -Root $ui.Root -SelectedTargetRoot $installedPath -ExpectedReleaseVariant $releaseVariant
                 }
                 else {
-                    Invoke-VersionReleaseInstall -Root $ui.Root -PackageUrl $assetUrl -ExpectedVersion $expectedVersion
+                    Invoke-VersionReleaseInstall -Root $ui.Root -PackageUrl $assetUrl -ExpectedVersion $expectedVersion -ExpectedReleaseVariant $releaseVariant
                 }
             }
             finally {
@@ -3407,7 +3269,7 @@ function Start-VersionManager {
                 }
                 & $showBusyOverlay (T 'Helper_VersionManager_Busy_InstallingSelected' 'Installing the selected version. Please do not close this window.')
                 try {
-                    $result = Invoke-VersionReleaseInstall -Root $ui.Root -PackageUrl $assetUrl -ExpectedVersion $expectedVersion -AllowCompatibilityWarning
+                    $result = Invoke-VersionReleaseInstall -Root $ui.Root -PackageUrl $assetUrl -ExpectedVersion $expectedVersion -ExpectedReleaseVariant $releaseVariant -AllowCompatibilityWarning
                 }
                 finally {
                     & $hideBusyOverlay
@@ -3442,11 +3304,11 @@ function Start-VersionManager {
             if (-not [string]::IsNullOrWhiteSpace([string]$result.LogPath)) {
                 $dialogMessage += "`r`n`r`n" + [string]$result.LogPath
             }
-            [System.Windows.Forms.MessageBox]::Show($form, $dialogMessage, $form.Text, [System.Windows.Forms.MessageBoxButtons]::OK, $dialogIcon) | Out-Null
+            Show-VersionManagerMessageBox -Owner $form -Message $dialogMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon $dialogIcon | Out-Null
         }
         catch {
             Write-Log ("Version catalog install failed: {0}" -f $_.Exception.ToString()) 'ERROR'
-            [System.Windows.Forms.MessageBox]::Show($form, (T 'Helper_VersionManager_Update_ApplyFailed' 'The update could not be applied. Check the log file for details.'), $form.Text, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            Show-VersionManagerMessageBox -Owner $form -Message (T 'Helper_VersionManager_Update_ApplyFailed' 'The update could not be applied. Check the log file for details.') -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
         finally {
             & $hideBusyOverlay
@@ -3487,19 +3349,19 @@ function Start-VersionManager {
                     Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value $result.LogPath
                 }
                 Invoke-RainmeterBang -Bang '!RefreshGroup' -Arguments @('DMeloper')
-                [System.Windows.Forms.MessageBox]::Show($form, (T 'Helper_VersionManager_Import_Success' 'Old-data import completed.'), $form.Text, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+                Show-VersionManagerMessageBox -Owner $form -Message (T 'Helper_VersionManager_Import_Success' 'Old-data import completed.') -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
             }
             elseif ($result.Status -eq 'CANCEL') {
-                [System.Windows.Forms.MessageBox]::Show($form, (T 'Helper_VersionManager_Import_Canceled' 'Old-data import was canceled.'), $form.Text, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+                Show-VersionManagerMessageBox -Owner $form -Message (T 'Helper_VersionManager_Import_Canceled' 'Old-data import was canceled.') -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
             }
             else {
-                [System.Windows.Forms.MessageBox]::Show($form, ([string]$result.Message + "`r`n`r`n" + [string]$result.LogPath), $form.Text, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+                Show-VersionManagerMessageBox -Owner $form -Message ([string]$result.Message + "`r`n`r`n" + [string]$result.LogPath) -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
             }
             & $setVersionManagerTabsDirtyForGlobalMutation
             & $refreshAll
         }
         catch {
-            [System.Windows.Forms.MessageBox]::Show($form, (T 'Helper_VersionManager_Import_Failed' 'Old-data import failed. Check the log file for details.'), $form.Text, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            Show-VersionManagerMessageBox -Owner $form -Message (T 'Helper_VersionManager_Import_Failed' 'Old-data import failed. Check the log file for details.') -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
     })
 
@@ -3538,7 +3400,7 @@ function Start-VersionManager {
             & $refreshInstallations
         }
         catch {
-            [System.Windows.Forms.MessageBox]::Show($form, (T 'Helper_VersionManager_Install_DeleteFailed' 'The selected skin could not be removed. Check the log file for details.'), $form.Text, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            Show-VersionManagerMessageBox -Owner $form -Message (T 'Helper_VersionManager_Install_DeleteFailed' 'The selected skin could not be removed. Check the log file for details.') -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
     })
 
@@ -3576,7 +3438,7 @@ function Start-VersionManager {
             [System.Windows.Forms.Clipboard]::SetText([string]$settingsLogText.Text)
         }
         catch {
-            [System.Windows.Forms.MessageBox]::Show($form, (T 'Helper_VersionManager_Log_CopyFailed' 'Could not copy the log text.'), $form.Text, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            Show-VersionManagerMessageBox -Owner $form -Message (T 'Helper_VersionManager_Log_CopyFailed' 'Could not copy the log text.') -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
     })
     $settingsLogClearButton.Add_Click({
@@ -3594,7 +3456,7 @@ function Start-VersionManager {
             & $refreshSettingsTab
         }
         catch {
-            [System.Windows.Forms.MessageBox]::Show($form, (T 'Helper_VersionManager_Log_ClearFailed' 'The logs could not be cleared. Check the log file for details.'), $form.Text, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            Show-VersionManagerMessageBox -Owner $form -Message (T 'Helper_VersionManager_Log_ClearFailed' 'The logs could not be cleared. Check the log file for details.') -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
     })
 
@@ -3721,6 +3583,22 @@ function Start-VersionManager {
     $form.Add_Shown({
         Save-VersionManagerLaunchState -Root $ui.Root -Status 'shown' -LaunchTokenValue $LaunchToken
         $initialHydrationTimer.Start()
+    })
+    $form.Add_FormClosing({
+        foreach ($timer in @($initialHydrationTimer, $deferredHydrationTimer, $autoCheckTimer)) {
+            try {
+                if ($null -ne $timer) {
+                    $timer.Stop()
+                }
+            }
+            catch {
+            }
+        }
+        try {
+            & $hideBusyOverlay
+        }
+        catch {
+        }
     })
     [void]$form.ShowDialog()
 }

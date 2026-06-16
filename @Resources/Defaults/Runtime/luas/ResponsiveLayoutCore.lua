@@ -18,7 +18,38 @@ local M = {}  local BASE_SCREEN_WIDTH = 1920 local BASE_SCREEN_HEIGHT = 1080 loc
         offsetY = 62,
         scaleMode = 'uniform',
     },
-    Settings = {         id = 'Settings',         config = 'Settings',         file = 'Settings.ini',         anchor = 'InventoryLeftTop',         reference = 'Inventory',         offsetX = -350,         offsetY = 0,         scaleMode = 'uniform',         dependentIds = { 'Inventory' },     },     Editor = {         id = 'Editor',         config = 'Editor',         file = 'Editor.ini',         anchor = 'InventoryRightTop',         reference = 'Inventory',         offsetX = -4,         offsetY = 0,         scaleMode = 'uniform',         dependentIds = { 'Inventory', 'InventoryBG' },     }, }  local TAB_TARGETS = {     hotbar = { 'Hotbar' },     indicators = { 'IndicatorHeart', 'IndicatorArmor', 'IndicatorFood', 'IndicatorAir', 'IndicatorExp' },     inventory = { 'Inventory', 'InventoryBG' },     clock = { 'Clock', 'ClockSprite' },     ui = { 'Hotbar', 'IndicatorHeart', 'IndicatorArmor', 'IndicatorFood', 'IndicatorAir', 'IndicatorExp', 'Inventory', 'InventoryBG', 'Clock', 'ClockSprite', 'Settings', 'Editor' }, }  local function trim(value)     local text = tostring(value or '')     text = text:gsub('^%s+', '')     text = text:gsub('%s+$', '')     return text end  local function numberOr(value, fallback)     local parsed = tonumber(value)     if parsed ~= nil then         return parsed     end     return tonumber(fallback) or 0 end  local function round(value)     if value >= 0 then         return math.floor(value + 0.5)     end     return math.ceil(value - 0.5) end  local function normalizeScale(value)     return tonumber(value) or 1 end  local function scaleNumber(value, scale, fallback)     return numberOr(value, fallback) * normalizeScale(scale) end  local function clamp(value, minValue, maxValue)     if value < minValue then         return minValue     end     if value > maxValue then         return maxValue     end     return value end  local function parseStoredNumber(raw, fallback)     local parsed = tonumber(trim(raw))     if parsed ~= nil then         return parsed     end     return tonumber(tostring(fallback or '')) or 0 end  local function liveStateVarName(id, field)     return STATE_PREFIX .. id .. '_Live' .. field end  local function readLiveState(SKIN, id)     if not id or id == '' then         return nil     end     return {         Active = trim(SKIN:GetVariable(liveStateVarName(id, 'Active'), '0')) == '1',         WindowX = tonumber(trim(SKIN:GetVariable(liveStateVarName(id, 'WindowX'), ''))),         WindowY = tonumber(trim(SKIN:GetVariable(liveStateVarName(id, 'WindowY'), ''))),     } end  local function currentConfigWindowPosition(SKIN)     return {         x = round(tonumber(trim(SKIN:GetVariable('CURRENTCONFIGX', '0'))) or 0),         y = round(tonumber(trim(SKIN:GetVariable('CURRENTCONFIGY', '0'))) or 0),     } end  local function sameSkinCurrentWindowPosition(SKIN, id)     if M.CurrentSkinId(SKIN) ~= id then         return nil     end     return currentConfigWindowPosition(SKIN) end  local function getRootConfigFromCurrentConfig(SKIN)
+    Jukebox = {
+        id = 'Jukebox',
+        config = 'ExtraContent\\Jukebox',
+        file = 'Jukebox.ini',
+        anchor = 'ScreenCenter',
+        reference = 'PrimaryWorkArea',
+        offsetX = 0,
+        offsetY = 0,
+        scaleMode = 'uniform',
+        dependentIds = { 'JukeboxDiscSlot' },
+    },
+    JukeboxDiscSlot = {
+        id = 'JukeboxDiscSlot',
+        config = 'ExtraContent\\Jukebox\\DiscSlot',
+        file = 'JukeboxDiscSlot.ini',
+        anchor = 'JukeboxTopCenter',
+        reference = 'Jukebox',
+        offsetX = 0,
+        offsetY = 0,
+        scaleMode = 'uniform',
+    },
+    Herobrine = {
+        id = 'Herobrine',
+        config = 'ExtraContent\\Herobrine',
+        file = 'Herobrine.ini',
+        anchor = 'ScreenCenter',
+        reference = 'PrimaryWorkArea',
+        offsetX = 0,
+        offsetY = 0,
+        scaleMode = 'uniform',
+    },
+    Settings = {         id = 'Settings',         config = 'Settings',         file = 'Settings.ini',         anchor = 'InventoryLeftTop',         reference = 'Inventory',         offsetX = -350,         offsetY = 0,         scaleMode = 'uniform',         dependentIds = { 'Inventory' },     },     Editor = {         id = 'Editor',         config = 'Editor',         file = 'Editor.ini',         anchor = 'InventoryRightTop',         reference = 'Inventory',         offsetX = -4,         offsetY = 0,         scaleMode = 'uniform',         dependentIds = { 'Inventory', 'InventoryBG' },     }, }  local TAB_TARGETS = {     hotbar = { 'Hotbar' },     indicators = { 'IndicatorHeart', 'IndicatorArmor', 'IndicatorFood', 'IndicatorAir', 'IndicatorExp' },     inventory = { 'Inventory', 'InventoryBG' },     clock = { 'Clock', 'ClockSprite' },     herobrine = { 'Herobrine' },     ui = { 'Hotbar', 'IndicatorHeart', 'IndicatorArmor', 'IndicatorFood', 'IndicatorAir', 'IndicatorExp', 'Inventory', 'InventoryBG', 'Clock', 'ClockSprite', 'Jukebox', 'JukeboxDiscSlot', 'Herobrine', 'Settings', 'Editor' }, }  local function trim(value)     local text = tostring(value or '')     text = text:gsub('^%s+', '')     text = text:gsub('%s+$', '')     return text end  local function numberOr(value, fallback)     local parsed = tonumber(value)     if parsed ~= nil then         return parsed     end     return tonumber(fallback) or 0 end  local function round(value)     if value >= 0 then         return math.floor(value + 0.5)     end     return math.ceil(value - 0.5) end  local function normalizeScale(value)     return tonumber(value) or 1 end  local function scaleNumber(value, scale, fallback)     return numberOr(value, fallback) * normalizeScale(scale) end  local function clamp(value, minValue, maxValue)     if value < minValue then         return minValue     end     if value > maxValue then         return maxValue     end     return value end  local function parseStoredNumber(raw, fallback)     local parsed = tonumber(trim(raw))     if parsed ~= nil then         return parsed     end     return tonumber(tostring(fallback or '')) or 0 end  local function liveStateVarName(id, field)     return STATE_PREFIX .. id .. '_Live' .. field end  local function readLiveState(SKIN, id)     if not id or id == '' then         return nil     end     return {         Active = trim(SKIN:GetVariable(liveStateVarName(id, 'Active'), '0')) == '1',         WindowX = tonumber(trim(SKIN:GetVariable(liveStateVarName(id, 'WindowX'), ''))),         WindowY = tonumber(trim(SKIN:GetVariable(liveStateVarName(id, 'WindowY'), ''))),         Width = tonumber(trim(SKIN:GetVariable(liveStateVarName(id, 'Width'), ''))),         Height = tonumber(trim(SKIN:GetVariable(liveStateVarName(id, 'Height'), ''))),     } end  local function currentConfigWindowPosition(SKIN)     return {         x = round(tonumber(trim(SKIN:GetVariable('CURRENTCONFIGX', '0'))) or 0),         y = round(tonumber(trim(SKIN:GetVariable('CURRENTCONFIGY', '0'))) or 0),     } end  local function sameSkinCurrentWindowPosition(SKIN, id)     if M.CurrentSkinId(SKIN) ~= id then         return nil     end     return currentConfigWindowPosition(SKIN) end  local function getRootConfigFromCurrentConfig(SKIN)
     local currentConfig = trim(SKIN:GetVariable('CURRENTCONFIG', ''))
     if currentConfig == '' then
         return ''
@@ -65,7 +96,7 @@ local function rainmeterConfigName(SKIN, id)
 end
 
 local function syncRainmeterWindowPosition(SKIN, id, x, y, savePosition)
-    if id ~= 'Inventory' then
+    if id ~= 'Inventory' and id ~= 'Jukebox' and id ~= 'JukeboxDiscSlot' then
         return false
     end
     local settingsPath = rainmeterSettingsPath(SKIN)
@@ -95,6 +126,7 @@ local function toNumber(SKIN, name, fallback)     local raw = SKIN:GetVariable(n
         or normalizedAnchor == (id .. 'VisibleLeftTop')
         or normalizedAnchor == (id .. 'VisibleRightTop')
         or normalizedAnchor == (id .. 'VisibleCenterTop')
+        or normalizedAnchor == (id .. 'TopCenter')
         or normalizedAnchor == (id .. 'TextTopCenter')
 end
 
@@ -145,18 +177,51 @@ function M.PositionFollowDependentIds(id)
     return result
 end
 
+local ACTIVE_PREFIX = 'BlockHudConfigActive_'
+
+local function activeConfigVariableName(configName)
+    configName = trim(configName):gsub('/', '\\')
+    local id = configName:gsub('[^%w_]', function(char)
+        return '_' .. tostring(string.byte(char) or 0)
+    end)
+    if id == '' then
+        id = 'Root'
+    end
+    return ACTIVE_PREFIX .. id
+end
+
+local function isRainmeterConfigActive(SKIN, configName)
+    local targetConfig = trim(configName):gsub('/', '\\')
+    if targetConfig == '' then
+        return false
+    end
+
+    local currentConfig = trim(SKIN:GetVariable('CURRENTCONFIG', '')):gsub('/', '\\')
+    if currentConfig ~= '' and currentConfig:lower() == targetConfig:lower() then
+        return true
+    end
+
+    local raw = trim(SKIN:GetVariable(activeConfigVariableName(targetConfig), '0'))
+    local number = tonumber(raw)
+    if number ~= nil then
+        return number ~= 0
+    end
+    return raw ~= '' and raw:lower() ~= 'false'
+end
+
 local function activePeerTargetIds(SKIN, id)
     local targets = {}
     for _, targetId in ipairs(dependentTargetIds(id)) do
         local liveState = readLiveState(SKIN, targetId)
-        if liveState and liveState.Active then
+        local configName = rainmeterConfigName(SKIN, targetId)
+        if liveState and liveState.Active and configName and isRainmeterConfigActive(SKIN, configName) then
             targets[#targets + 1] = targetId
         end
     end
     return targets
 end
 
-local function broadcastLiveState(SKIN, id, active, x, y)
+local function broadcastLiveState(SKIN, id, active, x, y, width, height)
     local rootConfig = getRootConfig(SKIN)
     if rootConfig == '' then
         return
@@ -167,6 +232,12 @@ local function broadcastLiveState(SKIN, id, active, x, y)
         WindowX = tostring(round(tonumber(x) or 0)),
         WindowY = tostring(round(tonumber(y) or 0)),
     }
+    if tonumber(width) and tonumber(width) > 0 then
+        values.Width = tostring(round(tonumber(width)))
+    end
+    if tonumber(height) and tonumber(height) > 0 then
+        values.Height = tostring(round(tonumber(height)))
+    end
 
     for _, targetId in ipairs(activePeerTargetIds(SKIN, id)) do
         local definition = SKINS[targetId]
@@ -186,7 +257,7 @@ function M.IsSkinActive(SKIN, id)
     return liveState ~= nil and liveState.Active or false
 end
 
-function M.WriteLiveState(SKIN, id, active, x, y, broadcast)
+function M.WriteLiveState(SKIN, id, active, x, y, broadcast, width, height)
     if not id or not SKINS[id] then
         return false
     end
@@ -196,6 +267,12 @@ function M.WriteLiveState(SKIN, id, active, x, y, broadcast)
         WindowX = tostring(round(tonumber(x) or 0)),
         WindowY = tostring(round(tonumber(y) or 0)),
     }
+    if tonumber(width) and tonumber(width) > 0 then
+        values.Width = tostring(round(tonumber(width)))
+    end
+    if tonumber(height) and tonumber(height) > 0 then
+        values.Height = tostring(round(tonumber(height)))
+    end
 
     local path = M.StatePath(SKIN)
     for field, value in pairs(values) do
@@ -204,12 +281,10 @@ function M.WriteLiveState(SKIN, id, active, x, y, broadcast)
         setVariableForConfig(SKIN, variableName, value)
     end
 
-    if id == 'Inventory' then
-        syncRainmeterWindowPosition(SKIN, id, values.WindowX, values.WindowY, true)
-    end
+    syncRainmeterWindowPosition(SKIN, id, values.WindowX, values.WindowY, true)
 
     if broadcast ~= false then
-        broadcastLiveState(SKIN, id, active, x, y)
+        broadcastLiveState(SKIN, id, active, x, y, width, height)
     end
     return true
 end
@@ -291,7 +366,7 @@ end
 
 function M.ResetStateIds(SKIN, ids)
     for _, id in ipairs(ids or {}) do
-        local baseline = M.BaselineState(id)
+        local baseline = resolveBaselineState(SKIN, id)
         if baseline then
             M.WriteState(SKIN, id, baseline, true)
         end
@@ -360,6 +435,78 @@ local function effectivePrimaryWorkArea(SKIN)
     effective.bottomReserve = reserve
     effective.wasFullScreen = reserve > 0
     return effective
+end
+
+local function monitorWorkAreas(SKIN)
+    local result = {}
+    local seen = {}
+
+    for index = 1, 16 do
+        local x = toNumber(SKIN, 'WORKAREAX@' .. index, nil)
+        local y = toNumber(SKIN, 'WORKAREAY@' .. index, nil)
+        local width = toNumber(SKIN, 'WORKAREAWIDTH@' .. index, nil)
+        local height = toNumber(SKIN, 'WORKAREAHEIGHT@' .. index, nil)
+        if x and y and width and height and width > 0 and height > 0 then
+            local key = table.concat({ round(x), round(y), round(width), round(height) }, ':')
+            if not seen[key] then
+                seen[key] = true
+                result[#result + 1] = buildRect(x, y, width, height)
+            end
+        end
+    end
+
+    return result
+end
+
+local function virtualWorkArea(SKIN, fallback)
+    local areas = monitorWorkAreas(SKIN)
+    if #areas == 0 then
+        return fallback
+    end
+
+    local left = areas[1].x
+    local top = areas[1].y
+    local right = areas[1].right
+    local bottom = areas[1].bottom
+    for index = 2, #areas do
+        local area = areas[index]
+        left = math.min(left, area.x)
+        top = math.min(top, area.y)
+        right = math.max(right, area.right)
+        bottom = math.max(bottom, area.bottom)
+    end
+
+    return buildRect(left, top, math.max(1, right - left), math.max(1, bottom - top))
+end
+
+local function rectContainsPoint(rect, x, y)
+    return rect and x >= rect.x and x < rect.right and y >= rect.y and y < rect.bottom
+end
+
+local function distanceSquaredToRectCenter(rect, x, y)
+    local dx = (rect.centerX or 0) - x
+    local dy = (rect.centerY or 0) - y
+    return (dx * dx) + (dy * dy)
+end
+
+local function monitorWorkAreaForPoint(SKIN, x, y, fallback)
+    local areas = monitorWorkAreas(SKIN)
+    local best = nil
+    local bestDistance = nil
+
+    for _, area in ipairs(areas) do
+        if rectContainsPoint(area, x, y) then
+            return area
+        end
+
+        local distance = distanceSquaredToRectCenter(area, x, y)
+        if best == nil or distance < bestDistance then
+            best = area
+            bestDistance = distance
+        end
+    end
+
+    return best or fallback
 end
 
 local function currentWorkArea(SKIN)
@@ -435,9 +582,10 @@ local INVENTORY_PLAYER_OFFSET_X_BASE = 106
 local INVENTORY_PLAYER_OFFSET_Y_BASE = 50
 local INVENTORY_PLAYER_WIDTH_BASE = 176
 local INVENTORY_PLAYER_HEIGHT_BASE = 260
-local INVENTORY_PLAYER_CUSTOM_WIDTH_BASE = 111
-local INVENTORY_PLAYER_CUSTOM_HEIGHT_BASE = 221
+local INVENTORY_PLAYER_CUSTOM_WIDTH_BASE = 122
+local INVENTORY_PLAYER_CUSTOM_HEIGHT_BASE = 244
 local INVENTORY_PLAYER_CUSTOM_BIAS_X_RATIO = 0.03
+local INVENTORY_PLAYER_CUSTOM_RAISE_RATIO = 0.15
 local function isWorkProgressEnabled(SKIN)     return trim(SKIN:GetVariable('EnableWorkProgress', '1')) ~= '0' end  local function getInventoryMetrics(SKIN, scale)
     local width = round(baseNumber(SKIN, 'InventoryWidth', 708) * scale)
     local height = round(baseNumber(SKIN, 'InventoryHeight', 668) * scale)
@@ -449,6 +597,7 @@ local function isWorkProgressEnabled(SKIN)     return trim(SKIN:GetVariable('Ena
     local playerCustomHeight = round(INVENTORY_PLAYER_CUSTOM_HEIGHT_BASE * scale)
     local playerCustomOffsetX = playerOffsetX + round(((playerWidth - playerCustomWidth) / 2) + (playerWidth * INVENTORY_PLAYER_CUSTOM_BIAS_X_RATIO))
     local playerCustomOffsetY = playerOffsetY + round((playerHeight - playerCustomHeight) / 2)
+    playerCustomOffsetY = math.max(0, round(playerCustomOffsetY * (1 - INVENTORY_PLAYER_CUSTOM_RAISE_RATIO)))
     local workProgressEnabled = isWorkProgressEnabled(SKIN)
     local normalRefreshButtonX = (width - round(16 * scale) - round(44 * scale)) - round(55 * scale) - round(12 * scale)
     local workProgressButtonBaseX = normalRefreshButtonX - round(55 * scale) - round(10 * scale)
@@ -479,6 +628,10 @@ local function isWorkProgressEnabled(SKIN)     return trim(SKIN:GetVariable('Ena
         usageGuideY = round(262 * scale) - toNumber(SKIN, 'UsageGuideOffsetY', 0),
         usageGuideW = round(55 * scale),
         usageGuideH = round(55 * scale),
+        steveSkinEditButtonX = round(270 * scale) + toNumber(SKIN, 'UsageGuideOffsetX', 0),
+        steveSkinEditButtonY = round(42 * scale),
+        steveSkinEditButtonW = round(20 * scale),
+        steveSkinEditButtonH = round(20 * scale),
         skinFolderX = round(392 * scale) + toNumber(SKIN, 'SkinFolderOffsetX', 0),
         skinFolderY = round(262 * scale) - toNumber(SKIN, 'SkinFolderOffsetY', 0),
         skinFolderW = round(70 * scale),
@@ -572,6 +725,91 @@ local function getClockSpriteMetrics(SKIN, scale)
     }
 end
 
+local function getJukeboxMetrics(SKIN, scale)
+    local width = math.max(1, round(baseNumber(SKIN, 'JukeboxW', 100) * normalizeScale(scale)))
+    local height = math.max(1, round(baseNumber(SKIN, 'JukeboxH', 100) * normalizeScale(scale)))
+    return {
+        width = width,
+        height = height,
+    }
+end
+
+local function getJukeboxDiscSlotMetrics(SKIN, scale)
+    local visibleWidth = math.max(1, round(baseNumber(SKIN, 'JukeboxDiscSlotW', 310) * normalizeScale(scale)))
+    local visibleHeight = math.max(1, round(baseNumber(SKIN, 'JukeboxDiscSlotH', 310) * normalizeScale(scale)))
+    local outline = math.max(0, round(baseNumber(SKIN, 'JukeboxDiscSlotOutline', 5) * normalizeScale(scale)))
+    local tooltipLeftGutterMax = math.max(0, round(260 * normalizeScale(scale)))
+    local actionGutter = math.max(0, round(52 * normalizeScale(scale)))
+    local gap = math.max(0, round(20 * normalizeScale(scale)))
+    return {
+        width = visibleWidth,
+        height = visibleHeight,
+        visibleWidth = visibleWidth,
+        visibleHeight = visibleHeight,
+        tooltipLeftGutter = tooltipLeftGutterMax,
+        tooltipLeftGutterMax = tooltipLeftGutterMax,
+        actionGutter = actionGutter,
+        actionSide = 'right',
+        controlRightGutter = actionGutter,
+        windowWidth = visibleWidth + tooltipLeftGutterMax + actionGutter,
+        windowHeight = visibleHeight,
+        contentX = tooltipLeftGutterMax,
+        gap = gap,
+        outline = outline,
+        usableX = outline,
+        usableY = outline,
+        usableWidth = math.max(0, visibleWidth - (outline * 2)),
+        usableHeight = math.max(0, visibleHeight - (outline * 2)),
+    }
+end
+
+local function getHerobrineMetrics(SKIN, scale)
+    local layoutScale = normalizeScale(scale)
+    local width = math.max(1, round(baseNumber(SKIN, 'HerobrineApparitionBaseW', 39) * layoutScale))
+    local height = math.max(1, round(baseNumber(SKIN, 'HerobrineApparitionBaseH', 57) * layoutScale))
+    local margin = math.max(0, round(baseNumber(SKIN, 'HerobrineApparitionBaseMargin', 12) * layoutScale))
+    return {
+        width = width,
+        height = height,
+        margin = margin,
+    }
+end
+
+local function resolveJukeboxDiscSlotMetricsForVisibleLeft(metrics, visibleLeft, work)
+    local resolved = {}
+    for key, value in pairs(metrics or {}) do
+        resolved[key] = value
+    end
+
+    local maxGutter = math.max(0, tonumber(resolved.tooltipLeftGutterMax or resolved.tooltipLeftGutter) or 0)
+    local visibleWidth = math.max(1, tonumber(resolved.visibleWidth or resolved.width) or 1)
+    local actionGutter = math.max(0, tonumber(resolved.actionGutter or resolved.controlRightGutter) or 0)
+    local gutter = 0
+    local actionSide = 'right'
+    if work and maxGutter > 0 then
+        local visibleX = round(tonumber(visibleLeft) or 0)
+        local workLeft = tonumber(work.x) or 0
+        local workRight = tonumber(work.right) or (workLeft + (tonumber(work.width) or 0))
+        if actionGutter > 0 and (visibleX + visibleWidth + actionGutter) > workRight then
+            actionSide = 'left'
+        end
+        local defaultCursorOffset = 30
+        local tooltipWouldClipRight = (visibleX + visibleWidth + defaultCursorOffset + maxGutter) > workRight
+        if tooltipWouldClipRight then
+            gutter = math.min(maxGutter, math.max(0, visibleX - workLeft))
+        end
+    end
+
+    resolved.tooltipLeftGutter = round(gutter)
+    resolved.actionSide = actionSide
+    resolved.actionGutter = actionGutter
+    resolved.controlRightGutter = actionSide == 'right' and actionGutter or 0
+    resolved.contentX = round(gutter + (actionSide == 'left' and actionGutter or 0))
+    resolved.windowWidth = visibleWidth + round(gutter) + actionGutter
+    resolved.windowHeight = math.max(1, tonumber(resolved.visibleHeight or resolved.height) or 1)
+    return resolved
+end
+
 local function getPanelMetrics(id, scale)
     if id == 'Settings' then
         return {
@@ -588,6 +826,14 @@ end
 local function clampWindow(work, x, y, width, height)
     return round(clamp(x, work.x, math.max(work.x, work.right - width))),
         round(clamp(y, work.y, math.max(work.y, work.bottom - height)))
+end
+
+local function clampWindowX(work, x, width)
+    return round(clamp(x, work.x, math.max(work.x, work.right - width)))
+end
+
+local function fitsWindowY(work, y, height)
+    return y >= work.y and (y + height) <= work.bottom
 end
 
 local function resolveFixedWindow(SKIN, id, state, work, width, height)
@@ -706,6 +952,106 @@ function M.ResolveRects(SKIN)
             rawX, rawY = clampWindow(work, rawX, rawY, metrics.width, metrics.height)
         end
         rects.ClockSprite = {
+            x = rawX,
+            y = rawY,
+            width = metrics.width,
+            height = metrics.height,
+            scale = scale,
+            metrics = metrics,
+        }
+    end
+
+    do
+        local state = M.GetState(SKIN, 'Jukebox')
+        local metrics = getJukeboxMetrics(SKIN, scale)
+        local width = metrics.width
+        local height = metrics.height
+        local rawX
+        local rawY
+        if usesFixedPosition(state) then
+            rawX, rawY = resolveFixedWindow(SKIN, 'Jukebox', state, work, metrics.width, metrics.height)
+        else
+            rawX = work.centerX + scaleNumber(state.OffsetXBase, scale, 0) - round(metrics.width / 2)
+            rawY = work.centerY + scaleNumber(state.OffsetYBase, scale, 0) - round(metrics.height / 2)
+            rawX, rawY = clampWindow(work, rawX, rawY, metrics.width, metrics.height)
+        end
+        if M.CurrentSkinId(SKIN) ~= 'Jukebox' then
+            local liveState = readLiveState(SKIN, 'Jukebox')
+            if liveState and liveState.Active and liveState.WindowX ~= nil and liveState.WindowY ~= nil then
+                rawX = round(liveState.WindowX)
+                rawY = round(liveState.WindowY)
+            end
+        end
+        rects.Jukebox = {
+            x = rawX,
+            y = rawY,
+            width = width,
+            height = height,
+            scale = scale,
+            metrics = metrics,
+            topCenterX = rawX + (width / 2),
+            topY = rawY,
+        }
+    end
+    do
+        local state = M.GetState(SKIN, 'JukeboxDiscSlot')
+        local metrics = getJukeboxDiscSlotMetrics(SKIN, scale)
+        local jukebox = rects.Jukebox
+        local rawX
+        local rawY
+        if usesFixedPosition(state) then
+            local visibleX
+            visibleX, rawY = resolveFixedWindow(SKIN, 'JukeboxDiscSlot', state, work, metrics.visibleWidth, metrics.visibleHeight)
+            local gutterWork = monitorWorkAreaForPoint(SKIN, visibleX, rawY, work)
+            metrics = resolveJukeboxDiscSlotMetricsForVisibleLeft(metrics, visibleX, gutterWork)
+            rawX = visibleX - metrics.contentX
+        else
+            local clampWork = monitorWorkAreaForPoint(SKIN, jukebox.x, jukebox.y, work)
+            local horizontalClampWork = virtualWorkArea(SKIN, clampWork)
+            local offsetX = scaleNumber(state.OffsetXBase, scale, 0)
+            local offsetY = scaleNumber(state.OffsetYBase, scale, 0)
+            local topY = jukebox.y - metrics.height - metrics.gap + offsetY
+            local bottomY = jukebox.y + jukebox.height + metrics.gap + offsetY
+            local jukeboxAnchorX = jukebox.x + (jukebox.width / 2)
+            local rightColumnCenterX = metrics.usableX + ((metrics.usableWidth / 3) * 2.5)
+            local visibleSlotX = clampWindowX(horizontalClampWork, jukeboxAnchorX + offsetX - rightColumnCenterX, metrics.visibleWidth)
+            metrics = resolveJukeboxDiscSlotMetricsForVisibleLeft(metrics, visibleSlotX, clampWork)
+            rawX = visibleSlotX - metrics.contentX
+            if fitsWindowY(clampWork, topY, metrics.windowHeight) then
+                rawY = round(topY)
+            elseif fitsWindowY(clampWork, bottomY, metrics.windowHeight) then
+                rawY = round(bottomY)
+            else
+                rawY = select(2, clampWindow(clampWork, rawX, topY, metrics.windowWidth, metrics.windowHeight))
+            end
+        end
+        rects.JukeboxDiscSlot = {
+            x = rawX,
+            y = rawY,
+            width = metrics.windowWidth,
+            height = metrics.windowHeight,
+            scale = scale,
+            metrics = metrics,
+            visibleLeft = rawX + metrics.contentX,
+            visibleTop = rawY,
+            visibleRight = rawX + metrics.contentX + metrics.visibleWidth,
+            visibleBottom = rawY + metrics.visibleHeight,
+        }
+    end
+
+    do
+        local state = M.GetState(SKIN, 'Herobrine')
+        local metrics = getHerobrineMetrics(SKIN, scale)
+        local rawX
+        local rawY
+        if usesFixedPosition(state) then
+            rawX, rawY = resolveFixedWindow(SKIN, 'Herobrine', state, work, metrics.width, metrics.height)
+        else
+            rawX = work.centerX + scaleNumber(state.OffsetXBase, scale, 0) - round(metrics.width / 2)
+            rawY = work.centerY + scaleNumber(state.OffsetYBase, scale, 0) - round(metrics.height / 2)
+            rawX, rawY = clampWindow(work, rawX, rawY, metrics.width, metrics.height)
+        end
+        rects.Herobrine = {
             x = rawX,
             y = rawY,
             width = metrics.width,
@@ -878,6 +1224,10 @@ local function applyInventoryVars(SKIN, rect)
         UsageGuideY = m.usageGuideY,
         UsageGuideW = m.usageGuideW,
         UsageGuideH = m.usageGuideH,
+        SteveSkinEditButtonX = m.steveSkinEditButtonX,
+        SteveSkinEditButtonY = m.steveSkinEditButtonY,
+        SteveSkinEditButtonW = m.steveSkinEditButtonW,
+        SteveSkinEditButtonH = m.steveSkinEditButtonH,
         SkinFolderX = m.skinFolderX,
         SkinFolderY = m.skinFolderY,
         SkinFolderW = m.skinFolderW,
@@ -934,6 +1284,46 @@ local function applyClockSpriteVars(SKIN, rect)
     SKIN:Bang('!UpdateMeter', 'MeterClockSprite')
 end
 
+local function applyJukeboxVars(SKIN, rect)
+    local m = rect.metrics
+    setVariableForConfig(SKIN, 'JukeboxW', m.width)
+    setVariableForConfig(SKIN, 'JukeboxH', m.height)
+    setMeterOption(SKIN, 'MeterJukebox', 'W', m.width)
+    setMeterOption(SKIN, 'MeterJukebox', 'H', m.height)
+    setMeterOption(SKIN, 'MeterJukeboxAnimator', 'W', m.width)
+    setMeterOption(SKIN, 'MeterJukeboxAnimator', 'H', m.height)
+    SKIN:Bang('!UpdateMeter', 'MeterJukebox')
+    SKIN:Bang('!UpdateMeter', 'MeterJukeboxAnimator')
+end
+local function applyJukeboxDiscSlotVars(SKIN, rect)
+    local m = rect.metrics
+    setVariableForConfig(SKIN, 'JukeboxDiscSlotW', m.visibleWidth)
+    setVariableForConfig(SKIN, 'JukeboxDiscSlotH', m.visibleHeight)
+    setVariableForConfig(SKIN, 'JukeboxDiscSlotContentX', m.contentX)
+    setVariableForConfig(SKIN, 'JukeboxDiscSlotOutline', m.outline)
+    setVariableForConfig(SKIN, 'JukeboxDiscSlotUsableX', m.usableX)
+    setVariableForConfig(SKIN, 'JukeboxDiscSlotUsableY', m.usableY)
+    setVariableForConfig(SKIN, 'JukeboxDiscSlotUsableW', m.usableWidth)
+    setVariableForConfig(SKIN, 'JukeboxDiscSlotUsableH', m.usableHeight)
+    setVariableForConfig(SKIN, 'JukeboxDiscSlotGap', m.gap)
+    setVariableForConfig(SKIN, 'JukeboxDiscSlotActionSide', m.actionSide)
+    setVariableForConfig(SKIN, 'JukeboxDiscSlotActionGutter', m.actionGutter)
+    setMeterOption(SKIN, 'MeterJukeboxDiscSlot', 'W', m.visibleWidth)
+    setMeterOption(SKIN, 'MeterJukeboxDiscSlot', 'H', m.visibleHeight)
+    SKIN:Bang('!UpdateMeterGroup', 'JukeboxDiscSlot')
+end
+
+
+local function applyHerobrineVars(SKIN, rect)
+    local m = rect.metrics
+    setVariableForConfig(SKIN, 'HerobrineApparitionRenderW', m.width)
+    setVariableForConfig(SKIN, 'HerobrineApparitionRenderH', m.height)
+    setVariableForConfig(SKIN, 'HerobrineApparitionMargin', m.margin)
+    SKIN:Bang('!SetOption', 'MeterHerobrineApparition', 'W', tostring(m.width))
+    SKIN:Bang('!SetOption', 'MeterHerobrineApparition', 'H', tostring(m.height))
+    SKIN:Bang('!UpdateMeter', 'MeterHerobrineApparition')
+    SKIN:Bang('!CommandMeasure', 'MeasureHerobrine', 'ReflowApparition()')
+end
 
 local function applyIndicatorVars(SKIN, id, rect)
     local m = rect.metrics
@@ -987,6 +1377,10 @@ function M.ApplyCurrentSkin(SKIN)
         setMeterOption(SKIN, 'MeterOpenInfo', 'Y', rect.metrics.usageGuideY)
         setMeterOption(SKIN, 'MeterOpenInfo', 'W', rect.metrics.usageGuideW)
         setMeterOption(SKIN, 'MeterOpenInfo', 'H', rect.metrics.usageGuideH)
+        setMeterOption(SKIN, 'MeterSteveSkinEditButton', 'X', rect.metrics.steveSkinEditButtonX)
+        setMeterOption(SKIN, 'MeterSteveSkinEditButton', 'Y', rect.metrics.steveSkinEditButtonY)
+        setMeterOption(SKIN, 'MeterSteveSkinEditButton', 'W', rect.metrics.steveSkinEditButtonW)
+        setMeterOption(SKIN, 'MeterSteveSkinEditButton', 'H', rect.metrics.steveSkinEditButtonH)
         setMeterOption(SKIN, 'MeterOpenSkinFolder', 'X', rect.metrics.skinFolderX)
         setMeterOption(SKIN, 'MeterOpenSkinFolder', 'Y', rect.metrics.skinFolderY)
         setMeterOption(SKIN, 'MeterOpenSkinFolder', 'W', rect.metrics.skinFolderW)
@@ -1011,6 +1405,7 @@ function M.ApplyCurrentSkin(SKIN)
             'MeterSettingsUIButton',
             'MeterRefreshUIButton',
             'MeterOpenInfo',
+            'MeterSteveSkinEditButton',
             'MeterOpenSkinFolder',
             'MeterEdit',
             'MeterInventoryClose',
@@ -1026,6 +1421,12 @@ function M.ApplyCurrentSkin(SKIN)
         applyClockVars(SKIN, rect)
     elseif id == 'ClockSprite' then
         applyClockSpriteVars(SKIN, rect)
+    elseif id == 'Jukebox' then
+        applyJukeboxVars(SKIN, rect)
+    elseif id == 'JukeboxDiscSlot' then
+        applyJukeboxDiscSlotVars(SKIN, rect)
+    elseif id == 'Herobrine' then
+        applyHerobrineVars(SKIN, rect)
     elseif id:find('^Indicator') then
         applyIndicatorVars(SKIN, id, rect)
     elseif id == 'InventoryBG' then
@@ -1033,8 +1434,8 @@ function M.ApplyCurrentSkin(SKIN)
         setVariableForConfig(SKIN, 'InventoryBGHeight', rect.height)
     end
 
-    applyWindowMove(SKIN, id, rect)
-    if id == 'Inventory' then
+    if id ~= 'Herobrine' then
+        applyWindowMove(SKIN, id, rect)
         syncRainmeterWindowPosition(SKIN, id, rect.x, rect.y, true)
     end
 
@@ -1042,6 +1443,8 @@ function M.ApplyCurrentSkin(SKIN)
         id = id,
         x = round(rect.x),
         y = round(rect.y),
+        width = round(rect.width),
+        height = round(rect.height),
         rects = rects,
     }
 end
@@ -1092,6 +1495,20 @@ function M.ClearFixedPositionsForIds(SKIN, ids)
         end
     end
 end
+function M.SetFixedPosition(SKIN, id, x, y)
+    if not id or id == 'InventoryBG' or not SKINS[id] then
+        return false
+    end
+    local state = M.GetState(SKIN, id)
+    if not state then
+        return false
+    end
+    state.PositionMode = 'fixed'
+    state.FixedX = tostring(round(tonumber(x) or 0))
+    state.FixedY = tostring(round(tonumber(y) or 0))
+    M.WriteState(SKIN, id, state, true)
+    return true
+end
 
 function M.CaptureFixedPositionsForIds(SKIN, ids, positionsById)
     positionsById = positionsById or {}
@@ -1111,19 +1528,43 @@ function M.ResolveInventoryLiveWindowPosition(SKIN)     local rects = M.ResolveR
     if not SKINS[id] then
         return nil
     end
+    local function visiblePosition(position)
+        if id ~= 'JukeboxDiscSlot' or not position then
+            return position
+        end
+        local metrics = getJukeboxDiscSlotMetrics(SKIN, M.GetScale(SKIN))
+        local gutter = nil
+        if tonumber(position.width) then
+            gutter = math.max(0, round((tonumber(position.width) or 0) - metrics.visibleWidth))
+        end
+        if gutter == nil then
+            gutter = tonumber(trim(SKIN:GetVariable('JukeboxDiscSlotContentX', '')))
+        end
+        if gutter == nil then
+            gutter = metrics.tooltipLeftGutter
+        end
+        gutter = clamp(gutter, 0, metrics.tooltipLeftGutterMax or metrics.tooltipLeftGutter)
+        return {
+            x = round((tonumber(position.x) or 0) + gutter),
+            y = round(tonumber(position.y) or 0),
+        }
+    end
     local sameSkinPosition = sameSkinCurrentWindowPosition(SKIN, id)
     if sameSkinPosition then
-        return sameSkinPosition
+        return visiblePosition(sameSkinPosition)
     end
     local liveState = readLiveState(SKIN, id)
     if liveState and liveState.Active then
         if liveState.WindowX ~= nil and liveState.WindowY ~= nil then
-            return { x = liveState.WindowX, y = liveState.WindowY }
+            return visiblePosition({ x = liveState.WindowX, y = liveState.WindowY, width = liveState.Width })
         end
         return nil
     end
     local fallback = fallbackRects and fallbackRects[id]
     if fallback then
+        if id == 'JukeboxDiscSlot' and fallback.visibleLeft ~= nil then
+            return { x = fallback.visibleLeft, y = fallback.y }
+        end
         return { x = fallback.x, y = fallback.y }
     end
     return nil

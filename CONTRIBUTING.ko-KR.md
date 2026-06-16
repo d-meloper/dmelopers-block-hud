@@ -4,9 +4,9 @@
 
 프로젝트 방향에 맞고 안전하게 검토할 수 있는 변경이라면 기여를 환영합니다.
 
-이 공개 저장소는 스킨의 distribution surface이자 review surface입니다. 구현의 최종 원본 저장소가 아닙니다. 유지관리자가 준비한 릴리즈 브랜치는 실제 공개 릴리즈가 되기 전에 이곳에서 검토되며, 구현 변경은 먼저 유지관리자의 private development workspace에서 준비됩니다.
+이 공개 저장소는 스킨의 distribution surface이자 review surface입니다. 유지관리자가 준비한 릴리즈 브랜치는 실제 공개 릴리즈가 되기 전에 이곳에서 검토됩니다.
 
-커뮤니티 Pull Request는 proposal 및 검토 입력으로 환영합니다. 커뮤니티 PR이 public `main`에 직접 merge될 것을 기대하지 말아 주세요. proposal이 채택되면 maintainer가 private development workspace에 반영하고 그곳에서 검증한 뒤, maintainer release approval PR 또는 maintainer metadata-only PR을 통해 이 공개 저장소에 다시 게시합니다.
+커뮤니티 Pull Request는 proposal 및 검토 입력으로 환영합니다. 커뮤니티 PR이 public `main`에 직접 merge될 것을 기대하지 말아 주세요. proposal이 채택되면 maintainer가 검증한 뒤, maintainer release approval PR 또는 maintainer metadata-only PR을 통해 이 공개 저장소에 게시합니다.
 
 ## 시작 전에
 
@@ -30,7 +30,7 @@
 - 시각 변경이 있으면 스크린샷 또는 녹화
 - 패키징/업데이트 영향이 있으면 설명
 
-커뮤니티 Pull Request는 제안으로 검토됩니다. 변경 사항이 채택되면 유지관리자가 비공개 개발 작업 공간에 반영한 뒤, 변경 유형에 따라 릴리즈 승인 Pull Request 또는 metadata-only Pull Request를 통해 이 공개 저장소에 다시 게시합니다.
+커뮤니티 Pull Request는 제안으로 검토됩니다. 변경 사항이 채택되면 유지관리자가 변경 유형에 따라 릴리즈 승인 Pull Request 또는 metadata-only Pull Request를 통해 이 공개 저장소에 게시합니다.
 
 유지관리자가 공식 릴리즈 승인 PR을 준비하는 경우가 아니라면 `publish/v<version>` 브랜치를 만들지 마세요. 유지관리자가 승인된 public metadata-only PR을 준비하는 경우가 아니라면 `publish/metadata-<topic>` 브랜치도 만들지 마세요. 이 브랜치 패턴들과 `public-export-approval` 검사는 일반 커뮤니티 PR 요구 사항이 아니라 maintainer publication 전용 도구입니다.
 
