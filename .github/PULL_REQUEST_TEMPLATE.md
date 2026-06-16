@@ -4,9 +4,9 @@ Describe the change.
 
 변경 내용을 적어주세요.
 
-For community PRs, describe the proposal. Accepted changes are applied through the maintainer private development workspace and published back here through a release approval PR or metadata-only PR, depending on the change.
+For community PRs, describe the proposal. Accepted changes are validated by the maintainer and published here through a release approval PR or metadata-only PR, depending on the change.
 
-커뮤니티 PR이라면 proposal 내용을 적어주세요. 채택된 변경은 maintainer의 private development workspace에 반영된 뒤 변경 유형에 따라 release approval PR 또는 metadata-only PR을 통해 이곳에 다시 게시됩니다.
+커뮤니티 PR이라면 proposal 내용을 적어주세요. 채택된 변경은 maintainer 검증 후 변경 유형에 따라 release approval PR 또는 metadata-only PR을 통해 이곳에 게시됩니다.
 
 ## PR Type / PR 유형
 

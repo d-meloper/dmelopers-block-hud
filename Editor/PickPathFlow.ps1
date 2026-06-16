@@ -287,40 +287,49 @@ function Write-ProgramActionLabel([string]$Action, [string]$Label) {
     }
 
     $registryPath = Get-ProgramActionLabelRegistryPath
-    $registryDirectory = [System.IO.Path]::GetDirectoryName($registryPath)
-    if (-not [System.IO.Directory]::Exists($registryDirectory)) {
-        [System.IO.Directory]::CreateDirectory($registryDirectory) | Out-Null
+    try {
+        $registryDirectory = [System.IO.Path]::GetDirectoryName($registryPath)
+        if (-not [System.IO.Directory]::Exists($registryDirectory)) {
+            [System.IO.Directory]::CreateDirectory($registryDirectory) | Out-Null
+        }
+
+        $entries = [ordered]@{}
+        if ([System.IO.File]::Exists($registryPath)) {
+            foreach ($line in (Read-TextLinesSmart -Path $registryPath)) {
+                if ([string]::IsNullOrWhiteSpace($line)) {
+                    continue
+                }
+
+                $parts = [string]$line -split "`t", 2
+                if ($parts.Length -ne 2) {
+                    continue
+                }
+
+                $storedAction = [string]$parts[0]
+                $storedLabel = [string]$parts[1]
+                if ([string]::IsNullOrWhiteSpace($storedAction) -or [string]::IsNullOrWhiteSpace($storedLabel)) {
+                    continue
+                }
+
+                $entries[$storedAction] = $storedLabel
+            }
+        }
+
+        $entries[$normalizedAction] = $normalizedLabel.Replace("`r", ' ').Replace("`n", ' ').Replace("`t", ' ')
+        $lines = New-Object System.Collections.Generic.List[string]
+        foreach ($key in $entries.Keys) {
+            $lines.Add($key + "`t" + [string]$entries[$key])
+        }
+
+        [System.IO.File]::WriteAllLines($registryPath, $lines, $utf8NoBom)
     }
-
-    $entries = [ordered]@{}
-    if ([System.IO.File]::Exists($registryPath)) {
-        foreach ($line in (Read-TextLinesSmart -Path $registryPath)) {
-            if ([string]::IsNullOrWhiteSpace($line)) {
-                continue
-            }
-
-            $parts = [string]$line -split "`t", 2
-            if ($parts.Length -ne 2) {
-                continue
-            }
-
-            $storedAction = [string]$parts[0]
-            $storedLabel = [string]$parts[1]
-            if ([string]::IsNullOrWhiteSpace($storedAction) -or [string]::IsNullOrWhiteSpace($storedLabel)) {
-                continue
-            }
-
-            $entries[$storedAction] = $storedLabel
+    catch {
+        Write-EditorPickerDebugLogBestEffort -Context 'Picker.ProgramActionLabel.Write' -ErrorRecord $_ -State @{
+            Action = $normalizedAction
+            Label = $normalizedLabel
+            RegistryPath = $registryPath
         }
     }
-
-    $entries[$normalizedAction] = $normalizedLabel.Replace("`r", ' ').Replace("`n", ' ').Replace("`t", ' ')
-    $lines = New-Object System.Collections.Generic.List[string]
-    foreach ($key in $entries.Keys) {
-        $lines.Add($key + "`t" + [string]$entries[$key])
-    }
-
-    [System.IO.File]::WriteAllLines($registryPath, $lines, $utf8NoBom)
 }
 
 function New-FavoriteEntry(
@@ -554,6 +563,18 @@ function Write-EditorPickerDebugLog(
     [void]$builder.AppendLine()
     [void](Write-BlockHudCanonicalLogBlock -Path $logPath -Type 'EditorPicker' -Lines @($builder.ToString().TrimEnd()) -Encoding $utf8NoBom)
     return $logPath
+}
+
+function Write-EditorPickerDebugLogBestEffort(
+    [string]$Context,
+    [System.Management.Automation.ErrorRecord]$ErrorRecord,
+    [hashtable]$State
+) {
+    try {
+        [void](Write-EditorPickerDebugLog -Context $Context -ErrorRecord $ErrorRecord -State $State)
+    }
+    catch {
+    }
 }
 
 function Show-EditorPickerDebugError(
@@ -1328,24 +1349,32 @@ function Write-CachedStartAppEntries($Entries) {
     }
 
     $cachePath = Get-ProgramPickerCachePath
-    $cacheDirectory = [System.IO.Path]::GetDirectoryName($cachePath)
-    if (-not [System.IO.Directory]::Exists($cacheDirectory)) {
-        [System.IO.Directory]::CreateDirectory($cacheDirectory) | Out-Null
-    }
-
-    $lines = New-Object System.Collections.Generic.List[string]
-    foreach ($entry in $Entries) {
-        $appId = [string]$entry.AppID
-        $name = [string]$entry.Name
-        if ([string]::IsNullOrWhiteSpace($appId) -or [string]::IsNullOrWhiteSpace($name)) {
-            continue
+    try {
+        $cacheDirectory = [System.IO.Path]::GetDirectoryName($cachePath)
+        if (-not [System.IO.Directory]::Exists($cacheDirectory)) {
+            [System.IO.Directory]::CreateDirectory($cacheDirectory) | Out-Null
         }
 
-        $sanitizedName = $name.Replace("`r", ' ').Replace("`n", ' ').Replace("`t", ' ')
-        $lines.Add($appId + "`t" + $sanitizedName)
-    }
+        $lines = New-Object System.Collections.Generic.List[string]
+        foreach ($entry in $Entries) {
+            $appId = [string]$entry.AppID
+            $name = [string]$entry.Name
+            if ([string]::IsNullOrWhiteSpace($appId) -or [string]::IsNullOrWhiteSpace($name)) {
+                continue
+            }
 
-    [System.IO.File]::WriteAllLines($cachePath, $lines, $utf8NoBom)
+            $sanitizedName = $name.Replace("`r", ' ').Replace("`n", ' ').Replace("`t", ' ')
+            $lines.Add($appId + "`t" + $sanitizedName)
+        }
+
+        [System.IO.File]::WriteAllLines($cachePath, $lines, $utf8NoBom)
+    }
+    catch {
+        Write-EditorPickerDebugLogBestEffort -Context 'Picker.ProgramCache.Write' -ErrorRecord $_ -State @{
+            CachePath = $cachePath
+            EntryCount = $Entries.Count
+        }
+    }
 }
 
 function Show-AppDialog([System.Windows.Forms.IWin32Window]$Owner) {
@@ -1650,12 +1679,22 @@ function Show-AppDialog([System.Windows.Forms.IWin32Window]$Owner) {
         if ($form.ShowDialog($Owner) -eq [System.Windows.Forms.DialogResult]::OK -and $listView.SelectedItems.Count -gt 0) {
             $selectedApp = $listView.SelectedItems[0].Tag
             $selectedAction = 'explorer.exe shell:AppsFolder\' + [string]$selectedApp.AppID
-            if (-not $script:ImageImportHelpersLoaded) {
-                . $script:LoadImageImportHelpers
+            $importResult = $null
+            try {
+                if (-not $script:ImageImportHelpersLoaded) {
+                    . $script:LoadImageImportHelpers
+                }
+                $importResult = Import-ProgramPickerImage $selectedApp
+                if ($null -ne $importResult -and (-not [bool]$importResult.ManifestPersisted) -and -not [string]::IsNullOrWhiteSpace([string]$importResult.WarningMessage)) {
+                    [System.Windows.Forms.MessageBox]::Show($form, [string]$importResult.WarningMessage, $appTitle, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+                }
             }
-            $importResult = Import-ProgramPickerImage $selectedApp
-            if ($null -ne $importResult -and (-not [bool]$importResult.ManifestPersisted) -and -not [string]::IsNullOrWhiteSpace([string]$importResult.WarningMessage)) {
-                [System.Windows.Forms.MessageBox]::Show($form, [string]$importResult.WarningMessage, $appTitle, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+            catch {
+                Write-EditorPickerDebugLogBestEffort -Context 'Picker.ProgramImage.Import' -ErrorRecord $_ -State @{
+                    Action = $selectedAction
+                    AppID = [string]$selectedApp.AppID
+                    ProgramName = [string]$selectedApp.Name
+                }
             }
             Write-ProgramActionLabel -Action $selectedAction -Label ([string]$selectedApp.Name)
             return [PSCustomObject]@{

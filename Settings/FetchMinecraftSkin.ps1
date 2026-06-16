@@ -1,6 +1,8 @@
-﻿param(
+param(
     [string]$Username = '',
     [string]$OutputDirectory = '',
+    [ValidateSet('wide', 'slim')]
+    [string]$Model = 'wide',
     [int]$TimeoutSeconds = 12,
     [switch]$ShowErrorDialog
 )
@@ -13,19 +15,69 @@ $script:DebugLogPath = $null
 $script:DebugLogSectionStarted = $false
 . (Join-Path $PSScriptRoot '..\tools\Localization.Common.ps1')
 
+Add-Type -AssemblyName System.Drawing
+
 $skinRoot = Get-LocalizationSkinRoot -ScriptRoot $PSScriptRoot
 $languageCode = Read-LanguageCode -SkinRoot $skinRoot
 $locTable = Read-LocaleTable -SkinRoot $skinRoot -LanguageCode $languageCode
+
+$resultPairs = [ordered]@{
+    DMEL_STATUS = ''
+    DMEL_USERNAME = ''
+    DMEL_UUID = ''
+    DMEL_IMAGEPATH = ''
+    DMEL_TEXTUREPATH = ''
+    DMEL_MODEL = ''
+    DMEL_MESSAGE = ''
+    DMEL_LOGPATH = ''
+    DMEL_DEBUGLOG = ''
+}
 
 function L([string]$Key, [string]$Fallback = '') {
     return Get-LocalizedText -Table $locTable -Key $Key -Fallback $Fallback
 }
 
-function Write-OutputPair([string]$Key, [string]$Value) {
+function Set-ResultPairValue {
+    param(
+        [string]$Key,
+        [AllowNull()][string]$Value
+    )
+
+    if ($resultPairs.Contains($Key)) {
+        $resultPairs[$Key] = if ($null -eq $Value) { '' } else { [string]$Value }
+    }
+}
+
+function Convert-ResultPairValueToSingleLine {
+    param([AllowNull()][string]$Value)
+
+    if ($null -eq $Value) {
+        return ''
+    }
+
+    $singleLine = [string]$Value
+    $singleLine = $singleLine.Replace("`r", ' ').Replace("`n", ' ')
+    while ($singleLine.Contains('  ')) {
+        $singleLine = $singleLine.Replace('  ', ' ')
+    }
+
+    return $singleLine.Trim()
+}
+
+function Emit-ResultPairs {
+    if ([string]::IsNullOrWhiteSpace([string]$resultPairs['DMEL_LOGPATH'])) {
+        Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value (Get-DebugLogOutputValue)
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$resultPairs['DMEL_DEBUGLOG'])) {
+        Set-ResultPairValue -Key 'DMEL_DEBUGLOG' -Value (Get-DebugLogOutputValue)
+    }
+
     $writer = New-Object System.IO.StreamWriter([Console]::OpenStandardOutput(), $utf8NoBom)
     try {
         $writer.AutoFlush = $true
-        $writer.WriteLine($Key + '=' + [string]$Value)
+        foreach ($key in $resultPairs.Keys) {
+            $writer.WriteLine($key + '=' + (Convert-ResultPairValueToSingleLine -Value $resultPairs[$key]))
+        }
     }
     finally {
         $writer.Dispose()
@@ -34,6 +86,14 @@ function Write-OutputPair([string]$Key, [string]$Value) {
 
 function Trim-Text([string]$Value) {
     return ([string]$Value).Trim()
+}
+
+function Normalize-MinecraftSkinModel([string]$Value) {
+    if ((Trim-Text $Value).ToLowerInvariant() -eq 'slim') {
+        return 'slim'
+    }
+
+    return 'wide'
 }
 
 function Write-DebugLog([string]$Message) {
@@ -125,6 +185,22 @@ function Test-PngSignature([string]$Path) {
     return $true
 }
 
+function Get-PngDimensions([string]$Path) {
+    $image = $null
+    try {
+        $image = [System.Drawing.Image]::FromFile($Path)
+        return [PSCustomObject]@{
+            Width = [int]$image.Width
+            Height = [int]$image.Height
+        }
+    }
+    finally {
+        if ($null -ne $image) {
+            $image.Dispose()
+        }
+    }
+}
+
 function Copy-ResponseStreamBounded(
     [System.IO.Stream]$Source,
     [string]$DestinationPath,
@@ -152,19 +228,84 @@ function Copy-ResponseStreamBounded(
     return $total
 }
 
+function Copy-TextureRegion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Drawing.Bitmap]$Source,
+        [Parameter(Mandatory = $true)]
+        [System.Drawing.Bitmap]$Destination,
+        [int]$SourceX,
+        [int]$SourceY,
+        [int]$DestinationX,
+        [int]$DestinationY,
+        [int]$Width,
+        [int]$Height,
+        [switch]$FlipX
+    )
+
+    for ($y = 0; $y -lt $Height; $y++) {
+        for ($x = 0; $x -lt $Width; $x++) {
+            $sourcePixelX = if ($FlipX) { $SourceX + $Width - 1 - $x } else { $SourceX + $x }
+            $Destination.SetPixel(
+                ($DestinationX + $x),
+                ($DestinationY + $y),
+                $Source.GetPixel($sourcePixelX, ($SourceY + $y))
+            )
+        }
+    }
+}
+
+function New-Legacy64x64MinecraftSkinTexture {
+    param([Parameter(Mandatory = $true)][System.Drawing.Bitmap]$Source)
+
+    $expanded = New-Object System.Drawing.Bitmap(64, 64, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    try {
+        Copy-TextureRegion -Source $Source -Destination $expanded -SourceX 0 -SourceY 0 -DestinationX 0 -DestinationY 0 -Width 64 -Height 32
+
+        Copy-TextureRegion -Source $Source -Destination $expanded -SourceX 4 -SourceY 16 -DestinationX 20 -DestinationY 48 -Width 4 -Height 4 -FlipX
+        Copy-TextureRegion -Source $Source -Destination $expanded -SourceX 8 -SourceY 16 -DestinationX 24 -DestinationY 48 -Width 4 -Height 4 -FlipX
+        Copy-TextureRegion -Source $Source -Destination $expanded -SourceX 8 -SourceY 20 -DestinationX 16 -DestinationY 52 -Width 4 -Height 12
+        Copy-TextureRegion -Source $Source -Destination $expanded -SourceX 4 -SourceY 20 -DestinationX 20 -DestinationY 52 -Width 4 -Height 12 -FlipX
+        Copy-TextureRegion -Source $Source -Destination $expanded -SourceX 0 -SourceY 20 -DestinationX 24 -DestinationY 52 -Width 4 -Height 12
+        Copy-TextureRegion -Source $Source -Destination $expanded -SourceX 12 -SourceY 20 -DestinationX 28 -DestinationY 52 -Width 4 -Height 12 -FlipX
+
+        Copy-TextureRegion -Source $Source -Destination $expanded -SourceX 44 -SourceY 16 -DestinationX 36 -DestinationY 48 -Width 4 -Height 4 -FlipX
+        Copy-TextureRegion -Source $Source -Destination $expanded -SourceX 48 -SourceY 16 -DestinationX 40 -DestinationY 48 -Width 4 -Height 4 -FlipX
+        Copy-TextureRegion -Source $Source -Destination $expanded -SourceX 48 -SourceY 20 -DestinationX 32 -DestinationY 52 -Width 4 -Height 12
+        Copy-TextureRegion -Source $Source -Destination $expanded -SourceX 44 -SourceY 20 -DestinationX 36 -DestinationY 52 -Width 4 -Height 12 -FlipX
+        Copy-TextureRegion -Source $Source -Destination $expanded -SourceX 40 -SourceY 20 -DestinationX 40 -DestinationY 52 -Width 4 -Height 12
+        Copy-TextureRegion -Source $Source -Destination $expanded -SourceX 52 -SourceY 20 -DestinationX 44 -DestinationY 52 -Width 4 -Height 12 -FlipX
+
+        return $expanded
+    }
+    catch {
+        $expanded.Dispose()
+        throw
+    }
+}
+
 function Convert-ToCleanPng([string]$Path) {
     $cleanPath = $null
+    $sourceBitmap = $null
+    $bitmap = $null
     try {
-        Add-Type -AssemblyName System.Drawing
         $image = [System.Drawing.Image]::FromFile($Path)
         try {
-            if ($image.Width -lt 1 -or $image.Height -lt 1 -or $image.Width -gt 1024 -or $image.Height -gt 1024) {
-                throw 'Minecraft skin image dimensions are outside the allowed range.'
+            if ($image.Width -ne 64 -or ($image.Height -ne 64 -and $image.Height -ne 32)) {
+                throw 'Minecraft skin texture dimensions are outside the allowed range.'
             }
-            $bitmap = New-Object System.Drawing.Bitmap $image
+            $sourceBitmap = New-Object System.Drawing.Bitmap $image
         }
         finally {
             $image.Dispose()
+        }
+
+        if ($sourceBitmap.Width -eq 64 -and $sourceBitmap.Height -eq 32) {
+            Write-DebugLog 'Normalizing legacy 64x32 skin texture to 64x64.'
+            $bitmap = New-Legacy64x64MinecraftSkinTexture -Source $sourceBitmap
+        }
+        else {
+            $bitmap = New-Object System.Drawing.Bitmap $sourceBitmap
         }
 
         $cleanPath = $Path + '.clean.png'
@@ -172,7 +313,10 @@ function Convert-ToCleanPng([string]$Path) {
             $bitmap.Save($cleanPath, [System.Drawing.Imaging.ImageFormat]::Png)
         }
         finally {
-            $bitmap.Dispose()
+            if ($null -ne $bitmap) {
+                $bitmap.Dispose()
+                $bitmap = $null
+            }
         }
 
         Move-Item -LiteralPath $cleanPath -Destination $Path -Force
@@ -181,7 +325,43 @@ function Convert-ToCleanPng([string]$Path) {
         if ($cleanPath -and [System.IO.File]::Exists($cleanPath)) {
             Remove-Item -LiteralPath $cleanPath -Force -ErrorAction SilentlyContinue
         }
-        throw 'MineSkin returned an invalid PNG image.'
+        throw
+    }
+    finally {
+        if ($null -ne $bitmap) {
+            $bitmap.Dispose()
+        }
+        if ($null -ne $sourceBitmap) {
+            $sourceBitmap.Dispose()
+        }
+    }
+}
+
+function Assert-ValidMinecraftSkinTexture([string]$Path) {
+    if (-not (Test-PngSignature $Path)) {
+        Write-DebugLog ("PNG signature validation failed for path='" + $Path + "'")
+        throw 'Minecraft skin texture download returned an invalid PNG image.'
+    }
+
+    try {
+        $size = Get-PngDimensions $Path
+    }
+    catch {
+        Write-DebugLog ('PNG dimension read failed: ' + [string]$_.Exception.Message)
+        throw 'Minecraft skin texture download returned an invalid PNG image.'
+    }
+
+    if ($size.Width -ne 64 -or ($size.Height -ne 64 -and $size.Height -ne 32)) {
+        Write-DebugLog ("Invalid texture dimensions: $($size.Width)x$($size.Height)")
+        throw 'Minecraft skin texture dimensions are outside the allowed range.'
+    }
+
+    Convert-ToCleanPng -Path $Path
+
+    $normalizedSize = Get-PngDimensions $Path
+    if ($normalizedSize.Width -ne 64 -or $normalizedSize.Height -ne 64) {
+        Write-DebugLog ("Normalized texture dimensions are invalid: $($normalizedSize.Width)x$($normalizedSize.Height)")
+        throw 'Minecraft skin texture dimensions are outside the allowed range.'
     }
 }
 
@@ -210,7 +390,7 @@ function Resolve-MinecraftProfile([string]$Username, [int]$TimeoutMilliseconds) 
     try {
         $request = [System.Net.HttpWebRequest]::Create($url)
         $request.Method = 'GET'
-        $request.UserAgent = 'DMeloper-BlockHUD/1.1'
+        $request.UserAgent = 'DMeloper-BlockHUD/1.2'
         $request.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
         $request.Timeout = $TimeoutMilliseconds
         $request.ReadWriteTimeout = $TimeoutMilliseconds
@@ -261,18 +441,141 @@ function Resolve-MinecraftProfile([string]$Username, [int]$TimeoutMilliseconds) 
     }
 }
 
-$tempPath = $null
-$response = $null
+function Resolve-MinecraftSkinTexture(
+    [string]$Uuid,
+    [string]$FallbackModel,
+    [int]$TimeoutMilliseconds
+) {
+    $url = 'https://sessionserver.mojang.com/session/minecraft/profile/' + [System.Uri]::EscapeDataString($Uuid)
+    Write-DebugLog ("TEXTURE_LOOKUP url='" + $url + "'")
+    $response = $null
+    try {
+        $request = [System.Net.HttpWebRequest]::Create($url)
+        $request.Method = 'GET'
+        $request.UserAgent = 'DMeloper-BlockHUD/1.2'
+        $request.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+        $request.Timeout = $TimeoutMilliseconds
+        $request.ReadWriteTimeout = $TimeoutMilliseconds
+
+        $response = [System.Net.HttpWebResponse]$request.GetResponse()
+        $statusCode = [int]$response.StatusCode
+        Write-DebugLog ('TEXTURE_LOOKUP status=' + $statusCode)
+        if ($statusCode -ne 200) {
+            throw ('Minecraft texture lookup returned HTTP ' + $statusCode)
+        }
+
+        $content = Read-ResponseText $response
+        if ([string]::IsNullOrWhiteSpace($content)) {
+            throw 'NO_SKIN_TEXTURE'
+        }
+
+        $profile = $content | ConvertFrom-Json
+        $textureProperty = $null
+        foreach ($property in @($profile.properties)) {
+            if ([string]$property.name -eq 'textures' -and -not [string]::IsNullOrWhiteSpace([string]$property.value)) {
+                $textureProperty = $property
+                break
+            }
+        }
+        if ($null -eq $textureProperty) {
+            throw 'NO_SKIN_TEXTURE'
+        }
+
+        $decodedBytes = [Convert]::FromBase64String([string]$textureProperty.value)
+        $decodedJson = [System.Text.Encoding]::UTF8.GetString($decodedBytes)
+        Write-DebugLog ("TEXTURE_LOOKUP decoded='" + $decodedJson + "'")
+        $texturePayload = $decodedJson | ConvertFrom-Json
+        $skinTexture = $texturePayload.textures.SKIN
+        $textureUrl = Trim-Text ([string]$skinTexture.url)
+        if ([string]::IsNullOrWhiteSpace($textureUrl)) {
+            throw 'NO_SKIN_TEXTURE'
+        }
+
+        $resolvedModel = Normalize-MinecraftSkinModel $FallbackModel
+        $metadataModel = ''
+        if ($null -ne $skinTexture.metadata) {
+            $metadataModel = Trim-Text ([string]$skinTexture.metadata.model).ToLowerInvariant()
+        }
+
+        if ($metadataModel -eq 'slim') {
+            $resolvedModel = 'slim'
+        }
+        elseif ($metadataModel -eq 'wide' -or $metadataModel -eq 'default' -or $metadataModel -eq 'classic') {
+            $resolvedModel = 'wide'
+        }
+
+        return [PSCustomObject]@{
+            Url = $textureUrl
+            Model = $resolvedModel
+            MetadataModel = $metadataModel
+        }
+    }
+    finally {
+        if ($null -ne $response) {
+            $response.Dispose()
+        }
+    }
+}
+
+function Download-MinecraftSkinTexture(
+    [string]$Url,
+    [string]$DestinationPath,
+    [int]$TimeoutMilliseconds
+) {
+    $response = $null
+    try {
+        $request = [System.Net.HttpWebRequest]::Create($Url)
+        $request.Method = 'GET'
+        $request.UserAgent = 'DMeloper-BlockHUD/1.2'
+        $request.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+        $request.Timeout = $TimeoutMilliseconds
+        $request.ReadWriteTimeout = $TimeoutMilliseconds
+
+        $response = [System.Net.HttpWebResponse]$request.GetResponse()
+        Write-DebugLog ('TEXTURE_DOWNLOAD status=' + [int]$response.StatusCode)
+        if ([int]$response.StatusCode -ne 200) {
+            throw ('Minecraft texture download returned HTTP ' + [int]$response.StatusCode)
+        }
+        $contentType = [string]$response.ContentType
+        if (-not [string]::IsNullOrWhiteSpace($contentType) -and $contentType -notmatch '^\s*image/png\b') {
+            throw ('Minecraft texture download returned unexpected content type ' + $contentType)
+        }
+        $maxImageBytes = [long](2 * 1024 * 1024)
+        if ($response.ContentLength -gt $maxImageBytes) {
+            throw 'Minecraft skin image exceeded the maximum allowed size.'
+        }
+
+        $responseStream = $response.GetResponseStream()
+        try {
+            $bytesWritten = Copy-ResponseStreamBounded -Source $responseStream -DestinationPath $DestinationPath -MaxBytes $maxImageBytes
+        }
+        finally {
+            if ($null -ne $responseStream) {
+                $responseStream.Dispose()
+            }
+        }
+        Write-DebugLog ('TEXTURE_DOWNLOAD bytes=' + $bytesWritten)
+    }
+    finally {
+        if ($null -ne $response) {
+            $response.Dispose()
+        }
+    }
+}
+
+$tempTexturePath = $null
+$tempBodyPath = $null
 $requestStage = ''
 try {
     $resolvedUsername = Trim-Text $Username
     $resolvedOutputDirectory = Trim-Text $OutputDirectory
+    $requestedModel = Normalize-MinecraftSkinModel $Model
     $boundedTimeoutSeconds = [Math]::Max(1, [Math]::Min(60, $TimeoutSeconds))
     $timeoutMilliseconds = [int]($boundedTimeoutSeconds * 1000)
     if (-not [string]::IsNullOrWhiteSpace($resolvedOutputDirectory)) {
         $script:DebugLogPath = Get-BlockHudCanonicalLogPath -ScriptRoot $PSScriptRoot
     }
-    Write-DebugLog ("BEGIN username='" + $resolvedUsername + "' outputDirectory='" + $resolvedOutputDirectory + "' timeoutSeconds=" + $boundedTimeoutSeconds)
+    Write-DebugLog ("BEGIN username='" + $resolvedUsername + "' outputDirectory='" + $resolvedOutputDirectory + "' requestedModel='" + $requestedModel + "' timeoutSeconds=" + $boundedTimeoutSeconds)
 
     if ([string]::IsNullOrWhiteSpace($resolvedOutputDirectory)) {
         throw (L 'Helper_Minecraft_OutputDirMissing' 'The player skin cache directory is empty.')
@@ -280,7 +583,8 @@ try {
 
     if ([string]::IsNullOrWhiteSpace($resolvedUsername)) {
         Write-DebugLog 'RESET because username is blank.'
-        Write-OutputPair 'DMEL_STATUS' 'RESET'
+        Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'RESET'
+        Emit-ResultPairs
         exit 0
     }
 
@@ -305,65 +609,53 @@ try {
 
     [System.IO.Directory]::CreateDirectory($resolvedOutputDirectory) | Out-Null
 
-    $finalPath = Join-Path $resolvedOutputDirectory ('MinecraftSkinBody_' + $sanitizedUsername + '.png')
-    $tempPath = Join-Path $resolvedOutputDirectory ('MinecraftSkinBody_' + $sanitizedUsername + '.' + [System.Guid]::NewGuid().ToString('N') + '.tmp')
-    $url = 'https://mineskin.eu/armor/body/' + [System.Uri]::EscapeDataString($resolvedUuid) + '/130.png'
-    $requestStage = 'imageDownload'
-    Write-DebugLog ("Resolved sanitizedUsername='" + $sanitizedUsername + "' finalPath='" + $finalPath + "' uuidUrl='" + $url + "'")
+    $requestStage = 'textureLookup'
+    $texture = Resolve-MinecraftSkinTexture -Uuid $resolvedUuid -FallbackModel $requestedModel -TimeoutMilliseconds $timeoutMilliseconds
+    $renderModel = Normalize-MinecraftSkinModel ([string]$texture.Model)
+    Write-DebugLog ("TEXTURE_LOOKUP resolved model='" + $renderModel + "' metadataModel='" + [string]$texture.MetadataModel + "' textureUrl='" + [string]$texture.Url + "'")
 
-    $request = [System.Net.HttpWebRequest]::Create($url)
-    $request.Method = 'GET'
-    $request.UserAgent = 'DMeloper-BlockHUD/1.1'
-    $request.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
-    $request.Timeout = $timeoutMilliseconds
-    $request.ReadWriteTimeout = $timeoutMilliseconds
+    $finalTexturePath = Join-Path $resolvedOutputDirectory ('MinecraftSkinTexture_' + $sanitizedUsername + '.png')
+    $finalBodyPath = Join-Path $resolvedOutputDirectory ('MinecraftSkinBody_' + $sanitizedUsername + '.png')
+    $tempTexturePath = Join-Path $resolvedOutputDirectory ('MinecraftSkinTexture_' + $sanitizedUsername + '.' + [System.Guid]::NewGuid().ToString('N') + '.tmp')
+    $tempBodyPath = Join-Path $resolvedOutputDirectory ('MinecraftSkinBody_' + $sanitizedUsername + '.' + [System.Guid]::NewGuid().ToString('N') + '.tmp')
 
-    $response = [System.Net.HttpWebResponse]$request.GetResponse()
-    Write-DebugLog ('HTTP status=' + [int]$response.StatusCode)
-    if ([int]$response.StatusCode -ne 200) {
-        throw ('MineSkin returned HTTP ' + [int]$response.StatusCode)
-    }
-    $contentType = [string]$response.ContentType
-    if (-not [string]::IsNullOrWhiteSpace($contentType) -and $contentType -notmatch '^\s*image/png\b') {
-        throw ('MineSkin returned unexpected content type ' + $contentType)
-    }
-    $maxImageBytes = [long](2 * 1024 * 1024)
-    if ($response.ContentLength -gt $maxImageBytes) {
-        throw 'Minecraft skin image exceeded the maximum allowed size.'
+    $requestStage = 'textureDownload'
+    Download-MinecraftSkinTexture -Url ([string]$texture.Url) -DestinationPath $tempTexturePath -TimeoutMilliseconds $timeoutMilliseconds
+    Assert-ValidMinecraftSkinTexture -Path $tempTexturePath
+
+    $rendererPath = [System.IO.Path]::Combine($PSScriptRoot, 'RenderMinecraftSkinTexture.ps1')
+    if (-not [System.IO.File]::Exists($rendererPath)) {
+        throw 'Renderer script is missing.'
     }
 
-    $responseStream = $response.GetResponseStream()
-    try {
-        $bytesWritten = Copy-ResponseStreamBounded -Source $responseStream -DestinationPath $tempPath -MaxBytes $maxImageBytes
+    $requestStage = 'textureRender'
+    & $rendererPath -SourcePath $tempTexturePath -OutputPath $tempBodyPath -Model $renderModel
+    if (-not (Test-PngSignature $tempBodyPath)) {
+        throw 'Renderer returned an invalid PNG image.'
     }
-    finally {
-        if ($null -ne $responseStream) {
-            $responseStream.Dispose()
-        }
-    }
-    Write-DebugLog ('DOWNLOAD bytes=' + $bytesWritten)
 
-    if (-not (Test-PngSignature $tempPath)) {
-        Write-DebugLog ("PNG signature validation failed for tempPath='" + $tempPath + "'")
-        throw 'MineSkin returned an invalid PNG image.'
-    }
-    Convert-ToCleanPng -Path $tempPath
+    Move-Item -LiteralPath $tempTexturePath -Destination $finalTexturePath -Force
+    $tempTexturePath = $null
+    Move-Item -LiteralPath $tempBodyPath -Destination $finalBodyPath -Force
+    $tempBodyPath = $null
+    Write-DebugLog ("SUCCESS texturePath='" + [System.IO.Path]::GetFullPath($finalTexturePath) + "' bodyPath='" + [System.IO.Path]::GetFullPath($finalBodyPath) + "' model='" + $renderModel + "'")
 
-    Move-Item -LiteralPath $tempPath -Destination $finalPath -Force
-    $tempPath = $null
-    Write-DebugLog ("SUCCESS finalPath='" + [System.IO.Path]::GetFullPath($finalPath) + "' length=" + ([System.IO.FileInfo]$finalPath).Length)
-
-    Write-OutputPair 'DMEL_STATUS' 'OK'
-    Write-OutputPair 'DMEL_USERNAME' $canonicalUsername
-    Write-OutputPair 'DMEL_UUID' $resolvedUuid
-    Write-OutputPair 'DMEL_IMAGEPATH' ([System.IO.Path]::GetFullPath($finalPath))
-    Write-OutputPair 'DMEL_DEBUGLOG' (Get-DebugLogOutputValue)
+    Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'OK'
+    Set-ResultPairValue -Key 'DMEL_USERNAME' -Value $canonicalUsername
+    Set-ResultPairValue -Key 'DMEL_UUID' -Value $resolvedUuid
+    Set-ResultPairValue -Key 'DMEL_IMAGEPATH' -Value ([System.IO.Path]::GetFullPath($finalBodyPath))
+    Set-ResultPairValue -Key 'DMEL_TEXTUREPATH' -Value ([System.IO.Path]::GetFullPath($finalTexturePath))
+    Set-ResultPairValue -Key 'DMEL_MODEL' -Value $renderModel
+    Emit-ResultPairs
 }
 catch [System.Net.WebException] {
     $message = L 'Helper_Minecraft_DownloadFailed' 'Minecraft skin download failed. Please try again shortly.'
     if ($_.Exception.Status -eq [System.Net.WebExceptionStatus]::Timeout) {
         if ($requestStage -eq 'profileLookup') {
             $message = L 'Helper_Minecraft_ProfileTimeout' 'Minecraft profile lookup timed out. Please try again shortly.'
+        }
+        elseif ($requestStage -eq 'textureLookup') {
+            $message = L 'Helper_Minecraft_ProfileFailed' 'Minecraft profile lookup failed. Please try again shortly.'
         }
         else {
             $message = L 'Helper_Minecraft_DownloadTimeout' 'Minecraft skin download timed out. Please try again shortly.'
@@ -374,23 +666,18 @@ catch [System.Net.WebException] {
         if ($requestStage -eq 'profileLookup' -and ($statusCode -eq 204 -or $statusCode -eq 404)) {
             $message = L 'Helper_Minecraft_ProfileNotFound' 'No Java Edition Minecraft profile was found for that username.'
         }
-        elseif ($requestStage -eq 'imageDownload' -and $statusCode -eq 404) {
+        elseif (($requestStage -eq 'textureLookup' -or $requestStage -eq 'textureDownload') -and $statusCode -eq 404) {
             $message = L 'Helper_Minecraft_SkinNotFound' 'No Minecraft skin was found for that username.'
         }
-        else {
-            if ($requestStage -eq 'profileLookup') {
-                $message = L 'Helper_Minecraft_ProfileFailed' 'Minecraft profile lookup failed. Please try again shortly.'
-            }
-            else {
-                $message = L 'Helper_Minecraft_DownloadFailed' 'Minecraft skin download failed. Please try again shortly.'
-            }
+        elseif ($requestStage -eq 'profileLookup' -or $requestStage -eq 'textureLookup') {
+            $message = L 'Helper_Minecraft_ProfileFailed' 'Minecraft profile lookup failed. Please try again shortly.'
         }
     }
-    Write-DebugLog ('WEB_EXCEPTION message=' + $message + ' raw=' + [string]$_.Exception.Message)
+    Write-DebugLog ('WEB_EXCEPTION stage=' + $requestStage + ' message=' + $message + ' raw=' + [string]$_.Exception.Message)
     Show-ErrorDialog $message
-    Write-OutputPair 'DMEL_STATUS' 'ERROR'
-    Write-OutputPair 'DMEL_MESSAGE' $message
-    Write-OutputPair 'DMEL_DEBUGLOG' (Get-DebugLogOutputValue)
+    Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'ERROR'
+    Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value $message
+    Emit-ResultPairs
 }
 catch {
     $rawMessage = [string]$_.Exception.Message
@@ -400,30 +687,32 @@ catch {
     if ($rawMessage -eq 'NO_JAVA_PROFILE') {
         $message = L 'Helper_Minecraft_ProfileNotFound' 'No Java Edition Minecraft profile was found for that username.'
     }
+    elseif ($rawMessage -eq 'NO_SKIN_TEXTURE') {
+        $message = L 'Helper_Minecraft_SkinNotFound' 'No Minecraft skin was found for that username.'
+    }
     elseif ($rawMessage -eq $outputDirMissingMessage -or $rawMessage -eq $invalidUsernameMessage) {
         $message = $rawMessage
     }
-    elseif ($rawMessage -like 'Minecraft profile lookup returned *') {
+    elseif ($rawMessage -like 'Minecraft profile lookup returned *' -or $rawMessage -like 'Minecraft texture lookup returned *') {
         $message = L 'Helper_Minecraft_ProfileFailed' 'Minecraft profile lookup failed. Please try again shortly.'
     }
-    elseif ($rawMessage -like 'MineSkin returned *') {
+    elseif ($rawMessage -like 'Minecraft texture download returned *' -or $rawMessage -like 'Minecraft skin texture *' -or $rawMessage -like 'Minecraft skin image exceeded *') {
         $message = L 'Helper_Minecraft_DownloadFailed' 'Minecraft skin download failed. Please try again shortly.'
     }
     else {
         $message = L 'Helper_Minecraft_UnexpectedError' 'An unexpected error occurred while processing the Minecraft skin.'
     }
-    Write-DebugLog ('EXCEPTION message=' + $message + ' raw=' + $rawMessage)
+    Write-DebugLog ('EXCEPTION stage=' + $requestStage + ' message=' + $message + ' raw=' + $rawMessage)
     Show-ErrorDialog $message
-    Write-OutputPair 'DMEL_STATUS' 'ERROR'
-    Write-OutputPair 'DMEL_MESSAGE' $message
-    Write-OutputPair 'DMEL_DEBUGLOG' (Get-DebugLogOutputValue)
+    Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'ERROR'
+    Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value $message
+    Emit-ResultPairs
 }
 finally {
-    if ($null -ne $response) {
-        $response.Dispose()
-    }
-    if ($tempPath -and [System.IO.File]::Exists($tempPath)) {
-        Write-DebugLog ("Cleaning tempPath='" + $tempPath + "'")
-        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    foreach ($tempPath in @($tempTexturePath, $tempBodyPath)) {
+        if ($tempPath -and [System.IO.File]::Exists($tempPath)) {
+            Write-DebugLog ("Cleaning tempPath='" + $tempPath + "'")
+            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        }
     }
 }

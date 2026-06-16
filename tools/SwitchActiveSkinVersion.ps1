@@ -29,7 +29,7 @@ $script:ResultPairs = [ordered]@{
 }
 $script:ResolvedCurrentRoot = ''
 $script:ResolvedSelectedRoot = ''
-$script:SelectedPersistentActivationStarted = $false
+$script:SelectedBootstrapActivationStarted = $false
 
 function Set-ResultPairValue {
     param(
@@ -247,87 +247,6 @@ function Get-ConfigName {
     return ($RootConfigName + '\' + $RelativeConfigPath.Trim('\'))
 }
 
-function Get-RainmeterConfigPath {
-    foreach ($candidate in @(
-        (Join-Path $env:APPDATA 'Rainmeter\Rainmeter.ini'),
-        (Join-Path $env:LOCALAPPDATA 'Rainmeter\Rainmeter.ini')
-    )) {
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-            return (Resolve-FullPath -Path $candidate)
-        }
-    }
-
-    return ''
-}
-
-function Ensure-RainmeterIniNativeMethods {
-    if ('BlockHudRainmeterIniNative' -as [type]) {
-        return
-    }
-
-    Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
-
-public static class BlockHudRainmeterIniNative
-{
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    public static extern uint GetPrivateProfileString(string section, string key, string defaultValue, StringBuilder returnValue, uint size, string filePath);
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    public static extern bool WritePrivateProfileString(string section, string key, string value, string filePath);
-}
-'@
-}
-
-function Get-RainmeterIniValue {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$Section,
-        [Parameter(Mandatory = $true)][string]$Key
-    )
-
-    Ensure-RainmeterIniNativeMethods
-    $buffer = New-Object System.Text.StringBuilder 256
-    [void][BlockHudRainmeterIniNative]::GetPrivateProfileString($Section, $Key, '', $buffer, [uint32]$buffer.Capacity, $Path)
-    return $buffer.ToString()
-}
-
-function Set-RainmeterIniValue {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$Section,
-        [Parameter(Mandatory = $true)][string]$Key,
-        [Parameter(Mandatory = $true)][string]$Value
-    )
-
-    Ensure-RainmeterIniNativeMethods
-    if (-not [BlockHudRainmeterIniNative]::WritePrivateProfileString($Section, $Key, $Value, $Path)) {
-        throw "Failed to write Rainmeter.ini value: [$Section] $Key"
-    }
-}
-
-function Ensure-HotbarLoadOrder {
-    param([Parameter(Mandatory = $true)][string]$Root)
-
-    $configPath = Get-RainmeterConfigPath
-    if ([string]::IsNullOrWhiteSpace($configPath)) {
-        Write-Log 'Rainmeter.ini was not found; Hotbar LoadOrder pre-sync was skipped.' 'WARN'
-        return
-    }
-
-    $section = (Get-RootConfigName -Root $Root) + '\Hotbar'
-    $current = Get-RainmeterIniValue -Path $configPath -Section $section -Key 'LoadOrder'
-    if ([string]::Equals($current, '100', [System.StringComparison]::Ordinal)) {
-        Write-Log ("Hotbar LoadOrder already 100 for [{0}]." -f $section)
-        return
-    }
-
-    Set-RainmeterIniValue -Path $configPath -Section $section -Key 'LoadOrder' -Value '100'
-    Write-Log ("Set Hotbar LoadOrder=100 for [{0}] before persistent activation." -f $section)
-}
-
 function Test-ConfigFileExists {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
@@ -363,20 +282,20 @@ function Get-CurrentRootDeactivateSpecs {
         [PSCustomObject]@{ RelativePath = 'Editor'; FileName = 'Editor.ini' }
         [PSCustomObject]@{ RelativePath = 'Inventory'; FileName = 'Inventory.ini' }
         [PSCustomObject]@{ RelativePath = 'InventoryBG'; FileName = 'InventoryBG.ini' }
+        [PSCustomObject]@{ RelativePath = 'Modal'; FileName = 'Modal.ini' }
+        [PSCustomObject]@{ RelativePath = 'Diagnostics'; FileName = 'Diagnostics.ini' }
+        [PSCustomObject]@{ RelativePath = 'ExtraContent\Jukebox'; FileName = 'Jukebox.ini' }
+        [PSCustomObject]@{ RelativePath = 'ExtraContent\Jukebox\DiscSlot'; FileName = 'JukeboxDiscSlot.ini' }
+        [PSCustomObject]@{ RelativePath = 'ExtraContent\Jukebox\WebNowPlayingBridge'; FileName = 'WebNowPlayingBridge.ini' }
+        [PSCustomObject]@{ RelativePath = 'Contents\Jukebox'; FileName = 'Jukebox.ini' }
+        [PSCustomObject]@{ RelativePath = 'Contents\Jukebox\DiscSlot'; FileName = 'JukeboxDiscSlot.ini' }
+        [PSCustomObject]@{ RelativePath = 'Jukebox'; FileName = 'Jukebox.ini' }
+        [PSCustomObject]@{ RelativePath = 'JukeboxDiscSlot'; FileName = 'JukeboxDiscSlot.ini' }
     )
 }
 
-function Get-PersistentConfigSpecs {
-    @(
-        [PSCustomObject]@{ RelativePath = 'Hotbar'; FileName = 'Hotbar.ini' }
-        [PSCustomObject]@{ RelativePath = 'Clock'; FileName = 'Clock.ini' }
-        [PSCustomObject]@{ RelativePath = 'ClockSprite'; FileName = 'ClockSprite.ini' }
-        [PSCustomObject]@{ RelativePath = 'Indicators\Heart'; FileName = 'Heart.ini' }
-        [PSCustomObject]@{ RelativePath = 'Indicators\Armor'; FileName = 'Armor.ini' }
-        [PSCustomObject]@{ RelativePath = 'Indicators\Food'; FileName = 'Food.ini' }
-        [PSCustomObject]@{ RelativePath = 'Indicators\Air'; FileName = 'Air.ini' }
-        [PSCustomObject]@{ RelativePath = 'Indicators\Exp'; FileName = 'Exp.ini' }
-    )
+function Get-ZPosBootstrapSpec {
+    [PSCustomObject]@{ RelativePath = 'Bootstrap'; FileName = 'ZPosBootstrap.ini' }
 }
 
 function Assert-SiblingInstalledRoots {
@@ -412,57 +331,43 @@ function Invoke-DeactivateConfigList {
     }
 }
 
-function Invoke-ActivatePersistentConfigList {
+function Invoke-ActivateZPosBootstrap {
     param(
-        [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)][object[]]$Specs
+        [Parameter(Mandatory = $true)][string]$Root
     )
 
+    $spec = Get-ZPosBootstrapSpec
     $rootConfigName = Get-RootConfigName -Root $Root
-    foreach ($spec in $Specs) {
-        if (-not (Test-ConfigFileExists -Root $Root -RelativeConfigPath ([string]$spec.RelativePath) -FileName ([string]$spec.FileName))) {
-            Write-Log ("Skipping missing persistent config [{0}]" -f (Get-ConfigName -RootConfigName $rootConfigName -RelativeConfigPath ([string]$spec.RelativePath))) 'WARN'
-            continue
-        }
-
-        $script:SelectedPersistentActivationStarted = $true
-        $configName = Get-ConfigName -RootConfigName $rootConfigName -RelativeConfigPath ([string]$spec.RelativePath)
-        Write-Log ("Activating [{0}] ({1})" -f $configName, [string]$spec.FileName)
-        Invoke-RainmeterBang -Bang '!ActivateConfig' -Arguments @($configName, [string]$spec.FileName)
-    }
+    $configName = Get-ConfigName -RootConfigName $rootConfigName -RelativeConfigPath ([string]$spec.RelativePath)
+    $script:SelectedBootstrapActivationStarted = $true
+    Write-Log ("Activating z-position bootstrap [{0}] ({1})" -f $configName, [string]$spec.FileName)
+    Invoke-RainmeterBang -Bang '!ActivateConfig' -Arguments @($configName, [string]$spec.FileName)
 }
 
-function Assert-PersistentActivationCandidates {
+function Assert-ZPosBootstrapCandidate {
     param(
-        [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)][object[]]$Specs
+        [Parameter(Mandatory = $true)][string]$Root
     )
 
-    $candidateCount = 0
-    foreach ($spec in $Specs) {
-        if (Test-ConfigFileExists -Root $Root -RelativeConfigPath ([string]$spec.RelativePath) -FileName ([string]$spec.FileName)) {
-            $candidateCount++
-        }
+    $spec = Get-ZPosBootstrapSpec
+    if (-not (Test-ConfigFileExists -Root $Root -RelativeConfigPath ([string]$spec.RelativePath) -FileName ([string]$spec.FileName))) {
+        throw ("SelectedTargetRoot is missing the z-position bootstrap skin: {0}\{1}" -f $Root, [string]$spec.RelativePath)
     }
 
-    if ($candidateCount -le 0) {
-        throw ("SelectedTargetRoot has no persistent activation candidates: {0}" -f $Root)
-    }
-
-    Write-Log ("Selected persistent activation candidates: {0}" -f $candidateCount)
+    Write-Log 'Selected z-position bootstrap candidate found.'
 }
 
 function Invoke-BestEffortRollback {
     param(
         [Parameter(Mandatory = $true)][string]$CurrentRoot,
-        [Parameter(Mandatory = $true)][string]$SelectedRoot,
-        [Parameter(Mandatory = $true)][object[]]$PersistentSpecs
+        [Parameter(Mandatory = $true)][string]$SelectedRoot
     )
 
-    Write-Log 'Starting best-effort rollback for persistent skins only.' 'WARN'
+    Write-Log 'Starting best-effort rollback through current-root z-position bootstrap.' 'WARN'
+    $spec = Get-ZPosBootstrapSpec
     $selectedRootConfig = Get-RootConfigName -Root $SelectedRoot
-    foreach ($spec in $PersistentSpecs) {
-        $configName = Get-ConfigName -RootConfigName $selectedRootConfig -RelativeConfigPath ([string]$spec.RelativePath)
+    foreach ($relativePath in @('Bootstrap', 'Bootstrap\ZPosBootstrap')) {
+        $configName = Get-ConfigName -RootConfigName $selectedRootConfig -RelativeConfigPath $relativePath
         try {
             Write-Log ("Rollback deactivating [{0}]" -f $configName) 'WARN'
             Invoke-RainmeterBang -Bang '!DeactivateConfig' -Arguments @($configName)
@@ -472,19 +377,15 @@ function Invoke-BestEffortRollback {
         }
     }
 
-    $currentRootConfig = Get-RootConfigName -Root $CurrentRoot
-    foreach ($spec in $PersistentSpecs) {
-        if (-not (Test-ConfigFileExists -Root $CurrentRoot -RelativeConfigPath ([string]$spec.RelativePath) -FileName ([string]$spec.FileName))) {
-            continue
-        }
-
+    if (Test-ConfigFileExists -Root $CurrentRoot -RelativeConfigPath ([string]$spec.RelativePath) -FileName ([string]$spec.FileName)) {
+        $currentRootConfig = Get-RootConfigName -Root $CurrentRoot
         $configName = Get-ConfigName -RootConfigName $currentRootConfig -RelativeConfigPath ([string]$spec.RelativePath)
         try {
-            Write-Log ("Rollback reactivating [{0}] ({1})" -f $configName, [string]$spec.FileName) 'WARN'
+            Write-Log ("Rollback activating z-position bootstrap [{0}] ({1})" -f $configName, [string]$spec.FileName) 'WARN'
             Invoke-RainmeterBang -Bang '!ActivateConfig' -Arguments @($configName, [string]$spec.FileName)
         }
         catch {
-            Write-Log ("Rollback reactivate failed for [{0}]: {1}" -f $configName, $_.Exception.Message) 'WARN'
+            Write-Log ("Rollback bootstrap activation failed for [{0}]: {1}" -f $configName, $_.Exception.Message) 'WARN'
         }
     }
 }
@@ -515,16 +416,14 @@ function Invoke-VersionSwitch {
     Write-Log ("Selected root: {0}" -f $resolvedSelectedRoot)
     Write-Log ("Current root config: {0}" -f (Get-RootConfigName -Root $resolvedCurrentRoot))
     Write-Log ("Selected root config: {0}" -f (Get-RootConfigName -Root $resolvedSelectedRoot))
-    Write-Log 'Switch policy: fixed config bang sequence with no observed-state waits; z-pos is runtime-owned.'
+    Write-Log 'Switch policy: fixed config bang sequence with no observed-state waits; z-pos is bootstrap-owned.'
 
     $currentDeactivateSpecs = @(Get-CurrentRootDeactivateSpecs)
-    $persistentSpecs = @(Get-PersistentConfigSpecs)
-    Assert-PersistentActivationCandidates -Root $resolvedSelectedRoot -Specs $persistentSpecs
+    Assert-ZPosBootstrapCandidate -Root $resolvedSelectedRoot
 
     try {
         Invoke-DeactivateConfigList -Root $resolvedCurrentRoot -Specs $currentDeactivateSpecs
-        Ensure-HotbarLoadOrder -Root $resolvedSelectedRoot
-        Invoke-ActivatePersistentConfigList -Root $resolvedSelectedRoot -Specs $persistentSpecs
+        Invoke-ActivateZPosBootstrap -Root $resolvedSelectedRoot
 
         Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'OK'
         Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $resolvedSelectedRoot
@@ -533,8 +432,8 @@ function Invoke-VersionSwitch {
     }
     catch {
         Write-Log ("Switch failed: {0}" -f $_.Exception.Message) 'ERROR'
-        if ($script:SelectedPersistentActivationStarted) {
-            Invoke-BestEffortRollback -CurrentRoot $resolvedCurrentRoot -SelectedRoot $resolvedSelectedRoot -PersistentSpecs $persistentSpecs
+        if ($script:SelectedBootstrapActivationStarted) {
+            Invoke-BestEffortRollback -CurrentRoot $resolvedCurrentRoot -SelectedRoot $resolvedSelectedRoot
         }
         throw
     }

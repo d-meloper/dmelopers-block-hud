@@ -1,8 +1,10 @@
-return function(tabCount)
+return function(tabCount, contentTabCount)
 
 
 
     local resolvedTabCount = tonumber(tabCount) or 7
+    local resolvedContentTabCount = tonumber(contentTabCount) or 2
+    local pageSlotCount = math.max(resolvedTabCount, resolvedContentTabCount)
 
 
 
@@ -10,11 +12,12 @@ return function(tabCount)
 
 
 
-    for index = 1, resolvedTabCount do
+    for index = 1, pageSlotCount do
 
 
 
-        currentPageByTab[index] = 1
+        currentPageByTab['normal:' .. tostring(index)] = 1
+        currentPageByTab['content:' .. tostring(index)] = 1
 
 
 
@@ -35,6 +38,9 @@ return function(tabCount)
 
 
         currentTabIndex = 1,
+        normalTabIndex = 1,
+        contentTabIndex = 1,
+        contentMode = false,
 
 
 
@@ -43,6 +49,7 @@ return function(tabCount)
 
 
         currentInputFieldKey = nil,
+        sharedInputActive = false,
 
 
 
@@ -140,6 +147,10 @@ return function(tabCount)
 
         pendingLoadValue = nil,
 
+        pendingLoadTexturePath = nil,
+
+        pendingLoadUsername = nil,
+
 
 
         pendingLoadBeforeSnapshot = nil,
@@ -203,30 +214,6 @@ return function(tabCount)
 
 
 
-        noticeHistory = {},
-
-
-
-        noticeLatestId = 0,
-
-
-
-        noticeNextId = 1,
-
-
-
-        noticeDismissedId = 0,
-
-
-
-        noticeHistoryExpanded = false,
-
-
-
-        noticeHistoryPageIndex = 1,
-
-
-
         versionManagerLaunchPending = false,
 
 
@@ -240,6 +227,7 @@ return function(tabCount)
 
 
         tabCount = resolvedTabCount,
+        contentTabCount = resolvedContentTabCount,
 
 
 

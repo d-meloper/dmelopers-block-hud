@@ -20,6 +20,7 @@ catch {
 
 . (Join-Path $PSScriptRoot 'Localization.Common.ps1')
 . (Join-Path $PSScriptRoot 'VersionManager.UpdateCache.ps1')
+. (Join-Path $PSScriptRoot 'VersionManager.ReleaseCatalog.ps1')
 
 $script:LogMessages = New-Object System.Collections.Generic.List[string]
 $script:LogPath = Get-BlockHudCanonicalLogPath -ScriptRoot $PSScriptRoot
@@ -272,10 +273,21 @@ function Get-SupportSettingsPath {
 function Get-FixedUpdateZipAssetName {
     param([AllowNull()][string]$LanguageCode)
 
-    if ([string]::Equals(([string]$LanguageCode).Trim(), 'ko-KR', [System.StringComparison]::OrdinalIgnoreCase)) {
-        return 'DMelopers-Block-HUD_Korea.zip'
-    }
-    return 'DMelopers-Block-HUD_Global.zip'
+    return (Get-BlockHudFixedUpdateZipAssetName -LanguageCode $LanguageCode)
+}
+
+function Get-RootReleaseVariant {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $general = Read-VariablesFile -Path (Get-GeneralSettingsPath -Root $Root)
+    $support = Read-VariablesFile -Path (Get-SupportSettingsPath -Root $Root)
+    $languageCode = if ([string]::IsNullOrWhiteSpace([string]$general['LanguageCode'])) { 'en-US' } else { [string]$general['LanguageCode'] }
+    $assetPattern = if ([string]::IsNullOrWhiteSpace([string]$support['UpdateReleaseAssetPattern'])) { '' } else { [string]$support['UpdateReleaseAssetPattern'] }
+
+    return (Normalize-BlockHudReleaseVariant `
+        -ConfiguredReleaseVariant ([string]$support['UpdateReleaseVariant']) `
+        -LanguageCode $languageCode `
+        -AssetPattern $assetPattern)
 }
 
 function Get-UpdateConfiguration {
@@ -284,13 +296,19 @@ function Get-UpdateConfiguration {
     $general = Read-VariablesFile -Path (Get-GeneralSettingsPath -Root $Root)
     $support = Read-VariablesFile -Path (Get-SupportSettingsPath -Root $Root)
     $languageCode = if ([string]::IsNullOrWhiteSpace([string]$general['LanguageCode'])) { 'en-US' } else { [string]$general['LanguageCode'] }
-    $assetName = Get-FixedUpdateZipAssetName -LanguageCode $languageCode
+    $legacyAssetPattern = if ([string]::IsNullOrWhiteSpace([string]$support['UpdateReleaseAssetPattern'])) { '' } else { [string]$support['UpdateReleaseAssetPattern'] }
+    $releaseVariant = Normalize-BlockHudReleaseVariant `
+        -ConfiguredReleaseVariant ([string]$support['UpdateReleaseVariant']) `
+        -LanguageCode $languageCode `
+        -AssetPattern $legacyAssetPattern
+    $assetName = Get-BlockHudFixedUpdateZipAssetName -ReleaseVariant $releaseVariant -LanguageCode $languageCode
 
     [PSCustomObject]@{
         Provider = if ([string]::IsNullOrWhiteSpace([string]$support['UpdateProvider'])) { 'github' } else { [string]$support['UpdateProvider'] }
         Owner = if ([string]::IsNullOrWhiteSpace([string]$support['UpdateGithubOwner'])) { 'd-meloper' } else { [string]$support['UpdateGithubOwner'] }
         Repo = if ([string]::IsNullOrWhiteSpace([string]$support['UpdateGithubRepo'])) { 'dmelopers-block-hud' } else { [string]$support['UpdateGithubRepo'] }
         LanguageCode = $languageCode
+        ReleaseVariant = $releaseVariant
         AssetName = $assetName
     }
 }
@@ -382,6 +400,7 @@ function Get-InstalledBlockHudVersions {
             Path = $resolvedCandidate
             VersionText = $versionText
             Version = $semanticVersion
+            ReleaseVariant = Get-RootReleaseVariant -Root $resolvedCandidate
             IsCurrent = [string]::Equals($resolvedCandidate, $CurrentRoot, [System.StringComparison]::OrdinalIgnoreCase)
         })
     }
@@ -402,10 +421,15 @@ function Get-InstalledBlockHudVersions {
 function Get-MatchingInstall {
     param(
         [Parameter(Mandatory = $true)][object[]]$Installations,
-        [Parameter(Mandatory = $true)][version]$Version
+        [Parameter(Mandatory = $true)][version]$Version,
+        [Parameter(Mandatory = $true)][string]$ReleaseVariant
     )
 
-    $matches = @($Installations | Where-Object { $null -ne $_.Version -and $_.Version.CompareTo($Version) -eq 0 } | Sort-Object @{ Expression = { if ($_.IsCurrent) { 0 } else { 1 } } }, Path)
+    $matches = @($Installations | Where-Object {
+        $null -ne $_.Version -and
+        $_.Version.CompareTo($Version) -eq 0 -and
+        [string]::Equals([string]$_.ReleaseVariant, $ReleaseVariant, [System.StringComparison]::OrdinalIgnoreCase)
+    } | Sort-Object @{ Expression = { if ($_.IsCurrent) { 0 } else { 1 } } }, Path)
     if ($matches.Count -gt 0) {
         return $matches[0]
     }
@@ -458,6 +482,9 @@ function Get-CatalogUpdateErrorCode {
         }
         if ([string]$current.Message -match '(?i)(internet connection|offline|name resolution|timed out|connect)') {
             return 'update-network-offline'
+        }
+        if ([string]$current.Message -match '(?i)(expected update ZIP|release asset|asset.*not found)') {
+            return 'update-asset-match-failed'
         }
         $current = $current.InnerException
     }
@@ -520,7 +547,7 @@ function Save-CatalogUpdateCache {
         Error = ''
         ErrorCode = ''
         FailureHint = ''
-        ReleaseVariant = ''
+        ReleaseVariant = [string]$Catalog.release_variant
         ActiveAssetPattern = [string]$Catalog.asset_name
     }
 
@@ -558,184 +585,17 @@ function Save-CatalogUpdateFailureCache {
     return $cache
 }
 
-function Test-GitHubApiRateLimitException {
-    param([AllowNull()]$Exception)
-
-    $current = $Exception
-    while ($null -ne $current) {
-        $response = $null
-        try {
-            $response = $current.Response
-        }
-        catch {
-            $response = $null
-        }
-
-        if ($null -ne $response) {
-            $statusCode = $null
-            try {
-                $statusCode = [int]$response.StatusCode
-            }
-            catch {
-                $statusCode = $null
-            }
-            $statusDescription = ''
-            try {
-                $statusDescription = [string]$response.StatusDescription
-            }
-            catch {
-                $statusDescription = ''
-            }
-
-            if ($statusCode -eq 429) {
-                return $true
-            }
-            if ($statusCode -eq 403 -and $statusDescription -match '(?i)rate limit') {
-                return $true
-            }
-        }
-
-        $message = [string]$current.Message
-        if ($message -match '(?i)rate limit') {
-            return $true
-        }
-        $current = $current.InnerException
-    }
-
-    return $false
-}
-
-function Invoke-GitHubWebRequestText {
-    param([Parameter(Mandatory = $true)][string]$Uri)
-
-    $headers = @{
-        'User-Agent' = 'DMeloper-Block-HUD-VersionCatalog'
-    }
-    $response = Invoke-WebRequest -Uri $Uri -Headers $headers -UseBasicParsing
-    return [string]$response.Content
-}
-
-function Get-GitHubReleaseAssetsFromHtml {
-    param(
-        [Parameter(Mandatory = $true)][string]$Owner,
-        [Parameter(Mandatory = $true)][string]$Repo,
-        [Parameter(Mandatory = $true)][string]$Tag
-    )
-
-    $assetsUri = 'https://github.com/{0}/{1}/releases/expanded_assets/{2}' -f $Owner, $Repo, [System.Uri]::EscapeDataString($Tag)
-    $html = Invoke-GitHubWebRequestText -Uri $assetsUri
-    $assets = New-Object System.Collections.Generic.List[object]
-    $pattern = 'href="(?<href>/{0}/{1}/releases/download/{2}/(?<name>[^"#?]+))"' -f [regex]::Escape($Owner), [regex]::Escape($Repo), [regex]::Escape($Tag)
-    foreach ($match in [regex]::Matches($html, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
-        $name = [System.Uri]::UnescapeDataString([string]$match.Groups['name'].Value)
-        if ([string]::IsNullOrWhiteSpace($name)) {
-            continue
-        }
-        [void]$assets.Add([PSCustomObject]@{
-            name = $name
-            browser_download_url = 'https://github.com' + [string]$match.Groups['href'].Value
-            size = 0
-        })
-    }
-
-    return $assets.ToArray()
-}
-
-function Invoke-GitHubReleaseCatalogHtmlFallback {
-    param(
-        [Parameter(Mandatory = $true)][string]$Owner,
-        [Parameter(Mandatory = $true)][string]$Repo
-    )
-
-    Write-Log 'GitHub API release catalog is rate-limited; falling back to public release feed.'
-    $atomUri = 'https://github.com/{0}/{1}/releases.atom' -f $Owner, $Repo
-    $atom = Invoke-GitHubWebRequestText -Uri $atomUri
-    $entryPattern = '<entry>(?<entry>.*?)</entry>'
-    $results = New-Object System.Collections.Generic.List[object]
-    foreach ($entryMatch in [regex]::Matches($atom, $entryPattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)) {
-        $entry = [string]$entryMatch.Groups['entry'].Value
-        $tag = ''
-        if ($entry -match 'href="https://github\.com/[^/]+/[^/]+/releases/tag/(?<tag>[^"]+)"') {
-            $tag = [System.Net.WebUtility]::HtmlDecode([string]$matches['tag'])
-        }
-        if ([string]::IsNullOrWhiteSpace($tag)) {
-            continue
-        }
-
-        $title = $tag
-        if ($entry -match '<title>(?<title>.*?)</title>') {
-            $title = [System.Net.WebUtility]::HtmlDecode([string]$matches['title'])
-        }
-
-        $body = ''
-        $bodyMatch = [regex]::Match($entry, '<content[^>]*>(?<body>.*?)</content>', [System.Text.RegularExpressions.RegexOptions]::Singleline)
-        if ($bodyMatch.Success) {
-            $body = [System.Net.WebUtility]::HtmlDecode([string]$bodyMatch.Groups['body'].Value)
-        }
-
-        $updated = ''
-        if ($entry -match '<updated>(?<updated>.*?)</updated>') {
-            $updated = [string]$matches['updated']
-        }
-
-        $assets = @(Get-GitHubReleaseAssetsFromHtml -Owner $Owner -Repo $Repo -Tag $tag)
-        [void]$results.Add([PSCustomObject]@{
-            draft = $false
-            prerelease = $false
-            tag_name = $tag
-            name = $title
-            html_url = ('https://github.com/{0}/{1}/releases/tag/{2}' -f $Owner, $Repo, [System.Uri]::EscapeDataString($tag))
-            body = $body
-            published_at = $updated
-            assets = $assets
-        })
-    }
-
-    return $results.ToArray()
-}
-
 function Invoke-GitHubReleaseCatalogRequest {
     param(
         [Parameter(Mandatory = $true)][string]$Owner,
         [Parameter(Mandatory = $true)][string]$Repo
     )
 
-    $headers = @{
-        Accept = 'application/vnd.github+json'
-        'User-Agent' = 'DMeloper-Block-HUD-VersionCatalog'
-    }
-    $perPage = 100
-    $page = 1
-    $results = New-Object System.Collections.Generic.List[object]
-
-    try {
-        while ($true) {
-            $uri = 'https://api.github.com/repos/{0}/{1}/releases?per_page={2}&page={3}' -f $Owner, $Repo, $perPage, $page
-            Write-Log ("Fetching releases page {0}: {1}" -f $page, $uri)
-            $batch = @(Invoke-RestMethod -Uri $uri -Headers $headers -Method Get)
-            Write-Log ("Fetched releases page {0}: count={1}" -f $page, $batch.Count)
-            if ($batch.Count -eq 0) {
-                break
-            }
-
-            foreach ($release in $batch) {
-                [void]$results.Add($release)
-            }
-
-            if ($batch.Count -lt $perPage) {
-                break
-            }
-            $page++
-        }
-    }
-    catch {
-        if (Test-GitHubApiRateLimitException -Exception $_.Exception) {
-            return (Invoke-GitHubReleaseCatalogHtmlFallback -Owner $Owner -Repo $Repo)
-        }
-        throw
-    }
-
-    return $results.ToArray()
+    return (Invoke-BlockHudGitHubReleaseCatalogRequest `
+        -Owner $Owner `
+        -Repo $Repo `
+        -UserAgent 'DMeloper-Block-HUD-VersionCatalog' `
+        -Log { param($Message, $Level) Write-Log -Message $Message -Level $Level })
 }
 
 function Write-JsonStdout {
@@ -772,41 +632,19 @@ function Get-VersionReleaseCatalog {
         throw "Unsupported update provider: $($config.Provider)"
     }
 
-    $releases = Invoke-GitHubReleaseCatalogRequest -Owner ([string]$config.Owner) -Repo ([string]$config.Repo)
-    $stableReleases = New-Object System.Collections.Generic.List[object]
-    foreach ($release in $releases) {
-        if ([bool]$release.draft -or [bool]$release.prerelease) {
-            continue
-        }
-        $tag = [string]$release.tag_name
-        $semanticVersion = Convert-ToSemanticVersion -VersionText $tag
-        if ($null -eq $semanticVersion) {
-            Write-Log ("Skipping non-semantic release tag: {0}" -f $tag) 'WARN'
-            continue
-        }
+    $releases = @(Invoke-GitHubReleaseCatalogRequest -Owner ([string]$config.Owner) -Repo ([string]$config.Repo))
+    $stableReleaseItems = @(Get-BlockHudStableReleaseEntries `
+        -Releases $releases `
+        -Log { param($Message, $Level) Write-Log -Message $Message -Level $Level })
 
-        [void]$stableReleases.Add([PSCustomObject]@{
-            Release = $release
-            Version = $semanticVersion
-            Tag = $tag
-        })
-    }
-
-    if ($stableReleases.Count -eq 0) {
+    if ($stableReleaseItems.Count -eq 0) {
         throw (T 'Helper_VersionManager_Update_NoStableRelease' 'The latest release is not a stable published release.')
     }
 
-    $stableReleaseItems = @($stableReleases | Sort-Object Version -Descending)
-    $latestStable = $null
-    foreach ($entry in $stableReleaseItems) {
-        $asset = Find-ReleaseAsset -Release $entry.Release -AssetName ([string]$config.AssetName)
-        if ($null -ne $asset) {
-            $latestStable = $entry
-            break
-        }
-    }
-    if ($null -eq $latestStable) {
-        throw ("The expected update ZIP `"{0}`" was not found in any stable release." -f [string]$config.AssetName)
+    $latestStable = $stableReleaseItems[0]
+    $latestStableAsset = Find-ReleaseAsset -Release $latestStable.Release -AssetName ([string]$config.AssetName)
+    if ($null -eq $latestStableAsset) {
+        Write-Log ("Latest stable release {0} is missing expected update ZIP: {1}" -f [string]$latestStable.Tag, [string]$config.AssetName) 'ERROR'
     }
     $installations = @(Get-InstalledBlockHudVersions -CurrentRoot $resolvedRoot)
     $items = New-Object System.Collections.Generic.List[object]
@@ -814,16 +652,17 @@ function Get-VersionReleaseCatalog {
     foreach ($entry in $stableReleaseItems) {
         $release = $entry.Release
         $asset = Find-ReleaseAsset -Release $release -AssetName ([string]$config.AssetName)
-        $install = Get-MatchingInstall -Installations $installations -Version $entry.Version
+        $install = Get-MatchingInstall -Installations $installations -Version $entry.Version -ReleaseVariant ([string]$config.ReleaseVariant)
         $hasAsset = ($null -ne $asset)
         $isInstalled = ($null -ne $install)
         $isLatestStable = ($entry.Version.CompareTo($latestStable.Version) -eq 0 -and [string]::Equals([string]$entry.Tag, [string]$latestStable.Tag, [System.StringComparison]::OrdinalIgnoreCase))
-        $status = if ($isLatestStable) { 'latest_stable' } elseif (-not $hasAsset) { 'asset_missing' } elseif ($isInstalled) { 'installed' } else { 'available' }
+        $status = if ($isLatestStable -and -not $hasAsset) { 'asset_missing' } elseif ($isLatestStable) { 'latest_stable' } elseif (-not $hasAsset) { 'asset_missing' } elseif ($isInstalled) { 'installed' } else { 'available' }
 
         [void]$items.Add([PSCustomObject]@{
             version = $entry.Version.ToString()
             tag = [string]$entry.Tag
             is_latest_stable = $isLatestStable
+            release_variant = [string]$config.ReleaseVariant
             release_name = [string]$release.name
             published_at = [string]$release.published_at
             asset_name = if ($hasAsset) { [string]$asset.name } else { [string]$config.AssetName }
@@ -843,6 +682,7 @@ function Get-VersionReleaseCatalog {
         owner = [string]$config.Owner
         repo = [string]$config.Repo
         language_code = [string]$config.LanguageCode
+        release_variant = [string]$config.ReleaseVariant
         asset_name = [string]$config.AssetName
         latest_stable_version = $latestStable.Version.ToString()
         latest_stable_tag = [string]$latestStable.Tag

@@ -44,6 +44,26 @@ return function(app)
         ['#8E44AD'] = 'Purple',
     }
 
+    local jukeboxPlaybackSourceFallbackByValue = {
+        ['local'] = 'Local files',
+        external = 'External player',
+    }
+
+    local jukeboxPlaybackSourceKeyByValue = {
+        ['local'] = 'Settings_Dropdown_JukeboxPlaybackSourceLocalFiles',
+        external = 'Settings_Dropdown_JukeboxPlaybackSourceExternalPlayer',
+    }
+
+    local minecraftSkinModelFallbackByValue = {
+        wide = 'Wide',
+        slim = 'Slim',
+    }
+
+    local minecraftSkinModelKeyByValue = {
+        wide = 'Settings_Segmented_MinecraftSkinModelWide',
+        slim = 'Settings_Segmented_MinecraftSkinModelSlim',
+    }
+
     local indicatorSourceDisplayByValue = { disabled = 'Off' }
     local indicatorSourceCanonicalByInput = { disabled = 'disabled', off = 'disabled' }
     local indicatorSourceFallbackByValue = {
@@ -100,6 +120,72 @@ return function(app)
         local key = clockColorKeyByValue[canonical]
         local fallback = clockColorFallbackByValue[canonical] or canonical
         return key and trim(methods.localize(key, fallback)) or fallback
+    end
+
+    local function jukeboxPlaybackSourceModeValue(value)
+        local canonical = string.lower(trim(value))
+        if canonical == 'external' then
+            return 'external'
+        end
+        return 'local'
+    end
+
+    local function jukeboxPlaybackSourceDisplayLabel(value)
+        local canonical = jukeboxPlaybackSourceModeValue(value)
+        local key = jukeboxPlaybackSourceKeyByValue[canonical]
+        local fallback = jukeboxPlaybackSourceFallbackByValue[canonical] or canonical
+        return key and trim(methods.localize(key, fallback)) or fallback
+    end
+
+    function methods.normalizeJukeboxPlaybackSourceModeInput(raw)
+        local resolved = trim(raw)
+        local lowered = string.lower(resolved)
+        if lowered == 'local' or lowered == 'external' then
+            return lowered
+        end
+
+        for canonical, _ in pairs(jukeboxPlaybackSourceFallbackByValue) do
+            local display = jukeboxPlaybackSourceDisplayLabel(canonical)
+            if resolved == display or lowered == string.lower(display) then
+                return canonical
+            end
+        end
+
+        return 'local'
+    end
+
+    local function minecraftSkinModelValue(value)
+        local canonical = string.lower(trim(value))
+        if canonical == 'slim' or canonical == 'alex' then
+            return 'slim'
+        end
+        return 'wide'
+    end
+
+    local function minecraftSkinModelDisplayLabel(value)
+        local canonical = minecraftSkinModelValue(value)
+        local key = minecraftSkinModelKeyByValue[canonical]
+        local fallback = minecraftSkinModelFallbackByValue[canonical] or canonical
+        return key and trim(methods.localize(key, fallback)) or fallback
+    end
+
+    function methods.normalizeMinecraftSkinModelInput(raw)
+        local resolved = trim(raw)
+        local lowered = string.lower(resolved)
+        if lowered == 'wide' or lowered == 'classic' or lowered == 'steve' then
+            return 'wide'
+        end
+        if lowered == 'slim' or lowered == 'alex' then
+            return 'slim'
+        end
+
+        for canonical, _ in pairs(minecraftSkinModelFallbackByValue) do
+            if resolved == minecraftSkinModelDisplayLabel(canonical) then
+                return canonical
+            end
+        end
+
+        return 'wide'
     end
 
     local function resolveIndicatorSourceCanonical(resolved)
@@ -305,6 +391,12 @@ return function(app)
         if field.key == 'clockTextColor' or field.key == 'hotbarTextColor' then
             return methods.displayClockColorValue(resolved)
         end
+        if field.key == 'jukeboxPlaybackSourceMode' then
+            return jukeboxPlaybackSourceDisplayLabel(resolved)
+        end
+        if field.key == 'minecraftSkinModel' then
+            return minecraftSkinModelDisplayLabel(resolved)
+        end
         if methods.isIndicatorLikeField(field) and resolved ~= '' then
             if resolved == 'disabled' then
                 return indicatorOffDisplayLabel()
@@ -344,6 +436,12 @@ return function(app)
             end
             return methods.normalizeClockDisplayModeValue(resolved)
         end
+        if field and field.key == 'jukeboxPlaybackSourceMode' then
+            return methods.normalizeJukeboxPlaybackSourceModeInput(resolved)
+        end
+        if field and field.key == 'minecraftSkinModel' then
+            return methods.normalizeMinecraftSkinModelInput(resolved)
+        end
         if methods.isIndicatorLikeField(field) then
             return methods.resolveIndicatorLikeInput(field, resolved).value
         end
@@ -380,6 +478,13 @@ return function(app)
                 }
             end
             return options
+        end
+
+        if field.dropdownId == 'jukeboxPlaybackSourceMode' then
+            return {
+                { displayLabel = jukeboxPlaybackSourceDisplayLabel('local'), appliedValue = 'local' },
+                { displayLabel = jukeboxPlaybackSourceDisplayLabel('external'), appliedValue = 'external' },
+            }
         end
 
         if field.dropdownId == 'fontFamily' then
@@ -463,7 +568,7 @@ return function(app)
             return 'ready'
         end
 
-        if field.dropdownId == 'language' or field.dropdownId == 'clockType' or field.dropdownId == 'clockColor' or field.dropdownId == 'minecraftSkinHistory' then
+        if field.dropdownId == 'language' or field.dropdownId == 'clockType' or field.dropdownId == 'clockColor' or field.dropdownId == 'jukeboxPlaybackSourceMode' or field.dropdownId == 'minecraftSkinHistory' then
             return 'ready'
         end
 
