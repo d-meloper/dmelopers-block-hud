@@ -2348,7 +2348,7 @@ function Get-SettingsBackfill {
 function Test-LegacyUpdaterZPosBootstrapSource {
     param([Parameter(Mandatory = $true)][version]$SourceVersion)
 
-    return ($SourceVersion -ge [version]'1.2.0' -and $SourceVersion -lt [version]'1.3.0')
+    return ($SourceVersion -ge [version]'1.2.0' -and $SourceVersion -lt [version]'1.3.1')
 }
 
 function Set-LegacyUpdaterZPosBootstrapPending {
@@ -2373,7 +2373,7 @@ function Set-LegacyUpdaterZPosBootstrapPending {
     $stateVariables = New-VariablesMap
     Set-MapValue -Map $stateVariables -Key 'BlockHudLegacyUpdaterZPosBootstrapPending' -Value '1'
     Write-Utf16Text -Path $statePath -Content (ConvertTo-VariablesContent -Variables $stateVariables)
-    Write-Log 'Legacy updater z-position bootstrap marker armed for v1.2.x source update.'
+    Write-Log 'Legacy updater z-position bootstrap marker armed for pre-v1.3.1 source update.'
 }
 
 function Replace-DirectorySnapshot {
