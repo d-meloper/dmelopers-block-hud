@@ -13,6 +13,14 @@
 
 Mouse.dll은 서드파티 Rainmeter 플러그인으로 크레딧됩니다. DMeloper가 작성한 구성 요소가 아니며, 이 프로젝트의 MIT License로 재라이선스되지 않습니다.
 
+## WebNowPlaying
+
+- 프로젝트: WebNowPlaying-Rainmeter
+- 작성자: tjhrulz, keifufu
+- 출처: https://github.com/keifufu/WebNowPlaying-Rainmeter
+
+WebNowPlaying은 외부 음악 앱 연동에 사용되는 서드파티 Rainmeter 플러그인으로 크레딧됩니다. DMeloper가 작성한 구성 요소가 아니며, 이 프로젝트의 MIT License로 재라이선스되지 않습니다.
+
 ## Galmuri
 
 - 프로젝트: Galmuri

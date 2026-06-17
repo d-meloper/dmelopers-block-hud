@@ -13,6 +13,14 @@ This project includes or credits third-party components and references.
 
 Mouse.dll is credited as a third-party Rainmeter plugin. It is not authored by DMeloper and is not relicensed by this project's MIT License.
 
+## WebNowPlaying
+
+- Project: WebNowPlaying-Rainmeter
+- Authors: tjhrulz, keifufu
+- Source: https://github.com/keifufu/WebNowPlaying-Rainmeter
+
+WebNowPlaying is credited as a third-party Rainmeter plugin used for external music app integration. It is not authored by DMeloper and is not relicensed by this project's MIT License.
+
 ## Galmuri
 
 - Project: Galmuri
