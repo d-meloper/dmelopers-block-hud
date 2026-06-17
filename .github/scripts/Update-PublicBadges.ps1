@@ -311,7 +311,13 @@ function Get-ExistingBadgePayload {
     }
 
     try {
-        return (Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json)
+        $json = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+        $payload = $json | ConvertFrom-Json
+        $timestampMatch = [Regex]::Match($json, '"GeneratedAtUtc"\s*:\s*"(?<value>[^"]+)"')
+        if ($timestampMatch.Success) {
+            $payload | Add-Member -NotePropertyName 'GeneratedAtUtcRaw' -NotePropertyValue $timestampMatch.Groups['value'].Value -Force
+        }
+        return $payload
     }
     catch {
         Write-Warning "Existing badge-data.json could not be parsed; regenerating it. $($_.Exception.Message)"
@@ -346,9 +352,22 @@ function Resolve-BadgePayloadTimestamp {
 
     if (
         (Test-BadgePayloadValuesEqual -ExistingPayload $ExistingPayload -NewPayload $NewPayload) -and
-        -not [string]::IsNullOrWhiteSpace([string]$ExistingPayload.GeneratedAtUtc)
+        -not [string]::IsNullOrWhiteSpace([string]$ExistingPayload.GeneratedAtUtcRaw)
     ) {
-        $NewPayload | Add-Member -NotePropertyName 'GeneratedAtUtc' -NotePropertyValue ([string]$ExistingPayload.GeneratedAtUtc) -Force
+        $existingTimestamp = [string]$ExistingPayload.GeneratedAtUtcRaw
+        if ($existingTimestamp -notmatch '^\d{4}-\d{2}-\d{2}T') {
+            try {
+                $existingTimestamp = [DateTime]::Parse(
+                    $existingTimestamp,
+                    [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::AssumeUniversal
+                ).ToUniversalTime().ToString('o')
+            }
+            catch {
+                Write-Warning "Existing GeneratedAtUtc is not ISO UTC; keeping raw value. $($_.Exception.Message)"
+            }
+        }
+        $NewPayload.GeneratedAtUtc = $existingTimestamp
     }
 
     return $NewPayload
