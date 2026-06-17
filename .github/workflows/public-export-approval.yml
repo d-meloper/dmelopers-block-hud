@@ -96,7 +96,9 @@ jobs:
             '.github/ISSUE_TEMPLATE/config.yml',
             '.github/FUNDING.yml',
             '.github/PULL_REQUEST_TEMPLATE.md',
-            '.github/workflows/public-export-approval.yml'
+            '.github/scripts/Update-PublicBadges.ps1',
+            '.github/workflows/public-export-approval.yml',
+            '.github/workflows/update-public-badges.yml'
           )
 
           if ($isMetadataOnly) {
