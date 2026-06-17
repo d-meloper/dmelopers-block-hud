@@ -1,0 +1,43 @@
+name: update-public-badges
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+  release:
+    types:
+      - published
+      - edited
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-badges
+  cancel-in-progress: false
+
+jobs:
+  update-public-badges:
+    name: update-public-badges
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out public main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Update badge branch
+        shell: pwsh
+        env:
+          DMEL_BADGE_APP_ID: ${{ secrets.DMEL_BADGE_APP_ID }}
+          DMEL_BADGE_APP_PRIVATE_KEY: ${{ secrets.DMEL_BADGE_APP_PRIVATE_KEY }}
+          DMEL_BADGE_APP_INSTALLATION_ID: ${{ secrets.DMEL_BADGE_APP_INSTALLATION_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./.github/scripts/Update-PublicBadges.ps1 `
+            -RepoSlug 'd-meloper/dmelopers-block-hud' `
+            -BadgeBranch 'badges' `
+            -AppId $env:DMEL_BADGE_APP_ID `
+            -AppPrivateKey $env:DMEL_BADGE_APP_PRIVATE_KEY `
+            -AppInstallationId $env:DMEL_BADGE_APP_INSTALLATION_ID
