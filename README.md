@@ -5,9 +5,9 @@
 English | [한국어](README.ko-KR.md)
 
 <p align="center">
-  <a href="https://github.com/d-meloper/dmelopers-block-hud/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/d-meloper/dmelopers-block-hud?style=for-the-badge&label=release&labelColor=2F334D&color=9FE870"></a>
-  <a href="https://github.com/d-meloper/dmelopers-block-hud/releases"><img alt="Total downloads" src="https://img.shields.io/github/downloads/d-meloper/dmelopers-block-hud/total?style=for-the-badge&label=downloads&labelColor=4A4F63&color=FFB07C"></a>
-  <a href="https://github.com/d-meloper/dmelopers-block-hud/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/d-meloper/dmelopers-block-hud?style=for-the-badge&label=stars&labelColor=2F334D&color=C6C4FF"></a>
+  <a href="https://github.com/d-meloper/dmelopers-block-hud/releases/latest"><img alt="Latest release" src="https://raw.githubusercontent.com/d-meloper/dmelopers-block-hud/badges/release.svg"></a>
+  <a href="https://github.com/d-meloper/dmelopers-block-hud/releases"><img alt="Total downloads" src="https://raw.githubusercontent.com/d-meloper/dmelopers-block-hud/badges/downloads.svg"></a>
+  <a href="https://github.com/d-meloper/dmelopers-block-hud/stargazers"><img alt="GitHub stars" src="https://raw.githubusercontent.com/d-meloper/dmelopers-block-hud/badges/stars.svg"></a>
   <a href="https://github.com/d-meloper/dmelopers-block-hud/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-AED8FF?style=for-the-badge&labelColor=4A4F63"></a>
 </p>
 
@@ -18,6 +18,21 @@ It is designed for users who want a block-based HUD desktop setup. The skin incl
 If you are new to Rainmeter or skin installation, the Skin Notion page provides more detailed setup and usage instructions.
 
 [Skin Notion page](https://www.notion.so/aismash/DMeloper-s-Block-HUD-Global-35c2dc0bb4ae801abf7dd76acee80689?source=copy_link)
+
+## Main Features
+
+- Minecraft-style hotbar and inventory layout
+- Clickable item slots for programs, folders, files, and web links
+- Built-in skin editor for item names, launch targets, images, counts, and image alignment
+- Jukebox with local music playback and external music app integration
+- Skin attachment support for applying skin images
+- Herobrine content
+- Indicators for CPU, RAM, GPU, VRAM, and other system values
+- Clock skin with configurable text size, color, and 12/24-hour display
+- Settings window with undo, redo, refresh, reset, positioning, theme, font, and startup options
+- Manual drag and snap placement options for HUD elements
+- Import support for older skin data
+- Korea and Global public package variants
 
 ## Download
 
@@ -31,20 +46,9 @@ Use an `.rmskin` file when installing directly from GitHub. The `.zip` files are
 
 Korean users should download `DMelopers-Block-HUD_Korea.rmskin`. English and global users should use `DMelopers-Block-HUD_Global.rmskin`.
 
-| Package | Recommended for | File |
-| --- | --- | --- |
-| Korea RMSKIN | Korean users, direct installation | `DMelopers-Block-HUD_Korea.rmskin` |
-| Global RMSKIN | English/global users, direct installation | `DMelopers-Block-HUD_Global.rmskin` |
-| Korea ZIP | Korea version manager/updater only | `DMelopers-Block-HUD_Korea.zip` |
-| Global ZIP | Global version manager/updater only | `DMelopers-Block-HUD_Global.zip` |
+Both variants install to the same Rainmeter skin folder, `DMeloper's Block HUD`, so they are not designed to coexist side by side. Installing one variant over the other can overwrite the existing skin folder.
 
-Both Korea and Global install to the same Rainmeter skin folder.
-
-```text
-DMeloper's Block HUD
-```
-
-The two variants are not designed to coexist side by side. Installing one variant over the other can overwrite the existing skin folder.
+For updates, use the in-skin `Skin manager` whenever possible. It checks the latest version by GitHub Release tag and applies the ZIP package that matches the installed variant; use an `.rmskin` file when reinstalling manually from GitHub.
 
 ## Requirements
 
@@ -55,51 +59,11 @@ The two variants are not designed to coexist side by side. Installing one varian
 
 This skin does not support macOS, Linux, or Windows versions earlier than Windows 7.
 
-## Installation
-
-1. Install Rainmeter.
-2. Download `DMelopers-Block-HUD_Korea.rmskin` or `DMelopers-Block-HUD_Global.rmskin` from GitHub Releases.
-3. Run the downloaded `.rmskin` file.
-4. Keep the skin and layout installation options enabled, then select `Install`.
-5. The default HUD layout should load automatically after installation.
-
-The ZIP packages are not intended as the normal manual installation path from GitHub. Use an `.rmskin` file when installing or reinstalling the skin manually.
-
-## Update
-
-Use the included `Skin manager` whenever possible.
-
-To update from within the skin, open the inventory from the hotbar, select the gear button to open the settings window, then use `Skin manager` at the bottom of the settings window.
-
-The updater checks the latest version by using the GitHub Release tag and applies the ZIP package that matches the installed variant.
-
-If you are reinstalling or updating manually from GitHub, use an `.rmskin` file. The `.zip` files are reserved for the built-in update path.
-
-If the updater or release page says your variant is temporarily unavailable, wait for that variant to be restored or choose the other variant only if you are comfortable overwriting the same `DMeloper's Block HUD` skin folder.
-
-## Main Features
-
-- Minecraft-style hotbar and inventory layout
-- Clickable item slots for programs, folders, files, and web links
-- Built-in skin editor for item names, launch targets, images, counts, and image alignment
-- Indicators for CPU, RAM, GPU, VRAM, and other system values
-- Clock skin with configurable text size, color, and 12/24-hour display
-- Settings window with undo, redo, refresh, reset, positioning, theme, font, and startup options
-- Manual drag and snap placement options for HUD elements
-- Import support for older skin data
-- Korea and Global public package variants
-
 ## Basic Usage
 
 For setup, customization, and daily usage instructions, see the Skin Notion page.
 
 [Skin Notion page](https://www.notion.so/aismash/DMeloper-s-Block-HUD-Global-35c2dc0bb4ae801abf7dd76acee80689?source=copy_link)
-
-## Custom Images
-
-The included item images are modified for this skin and are not distributed as original Minecraft assets.
-
-If you want item images closer to the original Minecraft look, obtain images from a source you are allowed to use, then apply them through the built-in editor with `Load image`.
 
 ## Troubleshooting
 
@@ -161,6 +125,7 @@ When reporting a bug, include as much of the following information as possible.
 - Skin creator: [DMeloper](https://litt.ly/dmeloper)
 - Rainmeter: https://github.com/rainmeter/rainmeter, https://www.rainmeter.net/
 - Mouse plugin: [Mouse.dll](https://github.com/NighthawkSLO/Mouse.dll), [@NighthawkSLO](https://github.com/NighthawkSLO), [@TheAzack9](https://github.com/TheAzack9)
+- WebNowPlaying: [WebNowPlaying-Rainmeter](https://github.com/keifufu/WebNowPlaying-Rainmeter) - [@tjhrulz](https://github.com/tjhrulz), [@keifufu](https://github.com/keifufu)
 - Galmuri font: https://quiple.dev/galmuri, Lee Minseo
 
 ## License And Rights Notice
