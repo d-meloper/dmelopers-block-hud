@@ -302,6 +302,58 @@ function Get-BadgePayload {
     }
 }
 
+function Get-ExistingBadgePayload {
+    param([Parameter(Mandatory = $true)][string]$RepositoryPath)
+
+    $path = Join-Path $RepositoryPath 'badge-data.json'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        return (Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json)
+    }
+    catch {
+        Write-Warning "Existing badge-data.json could not be parsed; regenerating it. $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Test-BadgePayloadValuesEqual {
+    param(
+        [object]$ExistingPayload,
+        [Parameter(Mandatory = $true)][object]$NewPayload
+    )
+
+    if ($null -eq $ExistingPayload) {
+        return $false
+    }
+
+    return (
+        ([string]$ExistingPayload.RepoSlug -eq [string]$NewPayload.RepoSlug) -and
+        ([string]$ExistingPayload.LatestRelease -eq [string]$NewPayload.LatestRelease) -and
+        ([string]$ExistingPayload.LatestReleaseName -eq [string]$NewPayload.LatestReleaseName) -and
+        ([int]$ExistingPayload.TotalDownloads -eq [int]$NewPayload.TotalDownloads) -and
+        ([int]$ExistingPayload.Stars -eq [int]$NewPayload.Stars)
+    )
+}
+
+function Resolve-BadgePayloadTimestamp {
+    param(
+        [object]$ExistingPayload,
+        [Parameter(Mandatory = $true)][object]$NewPayload
+    )
+
+    if (
+        (Test-BadgePayloadValuesEqual -ExistingPayload $ExistingPayload -NewPayload $NewPayload) -and
+        -not [string]::IsNullOrWhiteSpace([string]$ExistingPayload.GeneratedAtUtc)
+    ) {
+        $NewPayload | Add-Member -NotePropertyName 'GeneratedAtUtc' -NotePropertyValue ([string]$ExistingPayload.GeneratedAtUtc) -Force
+    }
+
+    return $NewPayload
+}
+
 function Write-BadgeFiles {
     param(
         [Parameter(Mandatory = $true)][string]$Directory,
@@ -405,6 +457,7 @@ function Update-BadgeBranch {
         if (($branchProbe -join "`n").Trim().Length -gt 0) {
             Invoke-Git -WorkingDirectory $repoPath -Arguments @('checkout', '-B', $BadgeBranch, "origin/$BadgeBranch") -FailureMessage 'Could not check out existing badge branch' | Out-Null
             Assert-OnlyAllowedBadgeTree -RepositoryPath $repoPath
+            $Payload = Resolve-BadgePayloadTimestamp -ExistingPayload (Get-ExistingBadgePayload -RepositoryPath $repoPath) -NewPayload $Payload
         }
         else {
             Invoke-Git -WorkingDirectory $repoPath -Arguments @('checkout', '--orphan', $BadgeBranch) -FailureMessage 'Could not create orphan badge branch' | Out-Null
