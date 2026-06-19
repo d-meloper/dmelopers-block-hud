@@ -122,7 +122,7 @@ When reporting a bug, include as much of the following information as possible.
 
 ## Credits
 
-- Skin creator: [DMeloper](https://litt.ly/dmeloper)
+- Skin creator: [DMeloper](https://linktr.ee/dmeloper.dev)
 - Rainmeter: https://github.com/rainmeter/rainmeter, https://www.rainmeter.net/
 - Mouse plugin: [Mouse.dll](https://github.com/NighthawkSLO/Mouse.dll), [@NighthawkSLO](https://github.com/NighthawkSLO), [@TheAzack9](https://github.com/TheAzack9)
 - WebNowPlaying: [WebNowPlaying-Rainmeter](https://github.com/keifufu/WebNowPlaying-Rainmeter) - [@tjhrulz](https://github.com/tjhrulz), [@keifufu](https://github.com/keifufu)
