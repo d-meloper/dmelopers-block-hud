@@ -718,6 +718,67 @@ function Get-ZPosBootstrapSpec {
     [PSCustomObject]@{ RelativePath = 'Bootstrap'; FileName = 'ZPosBootstrap.ini' }
 }
 
+function Get-RetiredCurrentRootConfigSpecs {
+    @(
+        [PSCustomObject]@{ RelativePath = 'ExtraContent\Jukebox\Jukebox_minimized' }
+        [PSCustomObject]@{ RelativePath = 'Activities\Jukebox\Jukebox_minimized' }
+        [PSCustomObject]@{ RelativePath = 'Contents\Jukebox\Jukebox_minimized' }
+        [PSCustomObject]@{ RelativePath = 'Jukebox_minimized' }
+        [PSCustomObject]@{ RelativePath = 'JukeboxMinimized' }
+    )
+}
+
+function Get-RainmeterActiveConfigSet {
+    $activeConfigs = @{}
+    $configPath = Get-RainmeterConfigPath
+    if ([string]::IsNullOrWhiteSpace($configPath) -or -not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+        Write-Log 'Rainmeter.ini was not available for retired active-config cleanup; skipping active-only cleanup.' 'WARN'
+        return $activeConfigs
+    }
+
+    $currentSection = ''
+    foreach ($rawLine in ((Read-TextSmart -Path $configPath) -split "`r?`n")) {
+        $line = [string]$rawLine
+        $trimmed = $line.Trim()
+        if ($trimmed -match '^\[(.+)\]$') {
+            $currentSection = $matches[1]
+            continue
+        }
+
+        if ($currentSection -eq '' -or $trimmed.StartsWith(';')) {
+            continue
+        }
+
+        if ($trimmed -match '^Active\s*=\s*1\s*$') {
+            $activeConfigs[$currentSection] = $true
+        }
+    }
+
+    return $activeConfigs
+}
+
+function Invoke-RetiredCurrentRootConfigCleanup {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $rootConfigName = Get-RootConfigName -Root $Root
+    $activeConfigs = Get-RainmeterActiveConfigSet
+    foreach ($spec in @(Get-RetiredCurrentRootConfigSpecs)) {
+        $configName = Get-ConfigName -RootConfigName $rootConfigName -RelativeConfigPath ([string]$spec.RelativePath)
+        if (-not $activeConfigs.ContainsKey($configName)) {
+            Write-Log ("Retired config cleanup skipped inactive [{0}]" -f $configName)
+            continue
+        }
+
+        try {
+            Write-Log ("Deactivating retired config [{0}]" -f $configName)
+            Invoke-RainmeterBang -Bang '!DeactivateConfig' -Arguments @($configName)
+        }
+        catch {
+            Write-Log ("Retired config cleanup failed for [{0}]: {1}" -f $configName, $_.Exception.Message) 'WARN'
+        }
+    }
+}
+
 function Invoke-ActivateZPosBootstrap {
     param(
         [Parameter(Mandatory = $true)][string]$Root
@@ -1338,6 +1399,7 @@ function Invoke-UpdateToLatest {
 
         Invoke-RealImport -ImportScript $stageImportScript -TargetRoot $stageRoot -SourceRoot $resolvedCurrentRoot
 
+        Invoke-RetiredCurrentRootConfigCleanup -Root $resolvedCurrentRoot
         $rollbackRoot = Invoke-FixedRootReplacement -CurrentRoot $resolvedCurrentRoot -StagedRoot $stageRoot -SkinsRoot $skinsRoot
         Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $resolvedCurrentRoot
         Set-ResultPairValue -Key 'DMEL_BACKUPPATH' -Value ''

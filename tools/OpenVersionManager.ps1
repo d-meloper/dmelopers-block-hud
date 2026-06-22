@@ -9,6 +9,8 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
+$script:VersionManagerWindowClosing = $false
+
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $script:Utf16LeBom = New-Object System.Text.UnicodeEncoding($false, $true)
 $script:LogStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
@@ -840,10 +842,11 @@ function Get-VersionManagerLogView {
         }
     }
 
-    return [PSCustomObject]@{
+    $result = [PSCustomObject]@{
         HasContent = $hasContent
         Text = if ($blocks.Count -gt 0) { [string]::Join("`r`n`r`n", $blocks) } else { [string](T 'Helper_VersionManager_Log_Empty' 'The skin log file is empty.') }
     }
+    return $result
 }
 
 function Clear-VersionManagerLogs {
@@ -1090,26 +1093,6 @@ function Get-UpdateConfigurationErrorCode {
     return 'update-unexpected'
 }
 
-function New-UpdateConfigurationException {
-    param(
-        [Parameter(Mandatory = $true)][string]$Code,
-        [Parameter(Mandatory = $true)][string]$Message
-    )
-
-    $exception = New-Object System.InvalidOperationException($Message)
-    [void]$exception.Data.Add('DMEL_ERROR_CODE', $Code)
-    return $exception
-}
-
-function Test-NetworkAvailable {
-    try {
-        return [System.Net.NetworkInformation.NetworkInterface]::GetIsNetworkAvailable()
-    }
-    catch {
-        return $true
-    }
-}
-
 function Get-UpdateFriendlyMessage {
     param(
         [AllowNull()][string]$ErrorCode,
@@ -1190,16 +1173,6 @@ function Get-UpdateFriendlyMessage {
             }
             return (T 'Helper_VersionManager_Update_Error_Unexpected' 'An unexpected error occurred while processing the update. Check the log and try again.')
         }
-    }
-}
-
-function Get-UpdateFailureHint {
-    param([AllowNull()][string]$ErrorCode)
-
-    $normalizedCode = if ([string]::IsNullOrWhiteSpace($ErrorCode)) { '' } else { $ErrorCode.Trim().ToLowerInvariant() }
-    switch ($normalizedCode) {
-        'update-network-offline' { return 'offline' }
-        default { return '' }
     }
 }
 
@@ -1367,7 +1340,8 @@ function Get-Installations {
 
     $skinsRoot = Get-RainmeterSkinsRoot
     if (-not [string]::IsNullOrWhiteSpace($skinsRoot) -and (Test-Path -LiteralPath $skinsRoot -PathType Container)) {
-        foreach ($directory in Get-ChildItem -LiteralPath $skinsRoot -Directory -Force -ErrorAction SilentlyContinue) {
+        $skinDirectories = @(Get-ChildItem -LiteralPath $skinsRoot -Directory -Force -ErrorAction SilentlyContinue)
+        foreach ($directory in $skinDirectories) {
             & $addItem -Path $directory.FullName -Label $directory.Name -Source 'auto'
         }
     }
@@ -1378,7 +1352,8 @@ function Get-Installations {
         & $addItem -Path $path -Label $label -Source 'manual'
     }
 
-    return @($items | Sort-Object @{ Expression = { if ($_.IsCurrent) { 0 } elseif ($_.Source -eq 'auto') { 1 } else { 2 } } }, @{ Expression = { $_.Version }; Descending = $true }, Label)
+    $sortedItems = @($items | Sort-Object @{ Expression = { if ($_.IsCurrent) { 0 } elseif ($_.Source -eq 'auto') { 1 } else { 2 } } }, @{ Expression = { $_.Version }; Descending = $true }, Label)
+    return $sortedItems
 }
 
 function Open-FolderPath {
@@ -1680,117 +1655,6 @@ function Update-UpdateCache {
     }
 }
 
-function Test-UpdateCacheStagedDownloadPresent {
-    param([AllowNull()]$Cache)
-
-    $downloadedZipPath = [string](Get-ObjectPropertyValue -Object $Cache -Name 'DownloadedZipPath' -DefaultValue '')
-    if ([string]::IsNullOrWhiteSpace($downloadedZipPath)) {
-        return $false
-    }
-
-    return (Test-Path -LiteralPath $downloadedZipPath -PathType Leaf)
-}
-
-function Test-UpdateCacheReleasePayloadMatch {
-    param(
-        [AllowNull()]$LeftCache,
-        [AllowNull()]$RightCache
-    )
-
-    foreach ($propertyName in @(
-        'LatestVersion',
-        'AssetName',
-        'AssetUrl',
-        'AssetSize',
-        'ReleaseVariant',
-        'ActiveAssetPattern'
-    )) {
-        $leftValue = [string](Get-ObjectPropertyValue -Object $LeftCache -Name $propertyName -DefaultValue '')
-        $rightValue = [string](Get-ObjectPropertyValue -Object $RightCache -Name $propertyName -DefaultValue '')
-        if (-not [string]::Equals($leftValue, $rightValue, [System.StringComparison]::OrdinalIgnoreCase)) {
-            return $false
-        }
-    }
-
-    return $true
-}
-
-function Test-UpdateCacheStagedDownloadMatchesPayload {
-    param(
-        [AllowNull()]$Cache,
-        [AllowNull()]$ReferenceCache
-    )
-
-    if (-not (Test-UpdateCacheStagedDownloadPresent -Cache $Cache)) {
-        return $false
-    }
-
-    if ($null -eq $ReferenceCache) {
-        return $true
-    }
-
-    return (Test-UpdateCacheReleasePayloadMatch -LeftCache $Cache -RightCache $ReferenceCache)
-}
-
-function Copy-UpdateCacheStagedDownloadFields {
-    param(
-        [Parameter(Mandatory = $true)]$TargetCache,
-        [AllowNull()]$SourceCache
-    )
-
-    Set-ObjectPropertyValue -Object $TargetCache -Name 'DownloadedZipPath' -Value ([string](Get-ObjectPropertyValue -Object $SourceCache -Name 'DownloadedZipPath' -DefaultValue ''))
-    Set-ObjectPropertyValue -Object $TargetCache -Name 'DownloadedAtUtc' -Value ([string](Get-ObjectPropertyValue -Object $SourceCache -Name 'DownloadedAtUtc' -DefaultValue ''))
-}
-
-function Merge-LatestCheckSuccessCache {
-    param(
-        [AllowNull()]$ExistingCache,
-        [Parameter(Mandatory = $true)]$LatestCache
-    )
-
-    if (Test-UpdateCacheStagedDownloadMatchesPayload -Cache $ExistingCache -ReferenceCache $LatestCache) {
-        Copy-UpdateCacheStagedDownloadFields -TargetCache $LatestCache -SourceCache $ExistingCache
-    }
-    else {
-        Copy-UpdateCacheStagedDownloadFields -TargetCache $LatestCache -SourceCache $null
-    }
-
-    return $LatestCache
-}
-
-function New-LatestCheckFailureCachePatch {
-    param(
-        [AllowNull()]$ExistingCache,
-        [Parameter(Mandatory = $true)][string]$ErrorMessage,
-        [Parameter(Mandatory = $true)][string]$ErrorCode,
-        [AllowNull()]$UpdateConfig
-    )
-
-    $patch = [PSCustomObject]@{
-        LastCheckedAtUtc = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
-        LatestVersion = ''
-        ReleaseName = ''
-        ReleaseUrl = ''
-        AssetName = ''
-        AssetUrl = ''
-        AssetSize = 0
-        DownloadedZipPath = ''
-        DownloadedAtUtc = ''
-        Status = 'error'
-        Error = $ErrorMessage
-        ErrorCode = $ErrorCode
-        FailureHint = Get-UpdateFailureHint -ErrorCode $ErrorCode
-        ReleaseVariant = [string](Get-ObjectPropertyValue -Object $UpdateConfig -Name 'ReleaseVariant' -DefaultValue '')
-        ActiveAssetPattern = [string](Get-ObjectPropertyValue -Object $UpdateConfig -Name 'ActiveAssetPattern' -DefaultValue '')
-    }
-
-    if (Test-UpdateCacheStagedDownloadMatchesPayload -Cache $ExistingCache -ReferenceCache $ExistingCache) {
-        Copy-UpdateCacheStagedDownloadFields -TargetCache $patch -SourceCache $ExistingCache
-    }
-
-    return $patch
-}
-
 function Test-UpdateConfigured {
     param($Config)
 
@@ -1810,103 +1674,6 @@ function Test-UpdateConfigured {
     )
 }
 
-function Test-AssetPatternMatch {
-    param(
-        [Parameter(Mandatory = $true)][string]$Pattern,
-        [Parameter(Mandatory = $true)][string]$Name
-    )
-
-    return (Test-BlockHudReleaseAssetNameMatch -ExpectedName $Pattern -ActualName $Name)
-}
-
-function Invoke-CheckLatestReleaseApi {
-    param(
-        [Parameter(Mandatory = $true)]$Config,
-        [Parameter(Mandatory = $true)][string]$AssetPattern
-    )
-
-    $selection = Get-BlockHudLatestStableReleaseSelection `
-        -Owner ([string]$Config.Owner) `
-        -Repo ([string]$Config.Repo) `
-        -AssetName $AssetPattern `
-        -UserAgent 'DMeloper-Block-HUD-VersionManager' `
-        -Log { param($Message, $Level) Write-Log -Message $Message -Level $Level }
-    if ($null -eq $selection.LatestStable) {
-        throw (New-UpdateConfigurationException -Code 'update-no-stable-release' -Message (T 'Helper_VersionManager_Update_NoStableRelease' 'The latest release is not a stable published release.'))
-    }
-    if (-not [bool]$selection.HasExpectedAsset) {
-        throw (New-UpdateConfigurationException -Code 'update-asset-match-failed' -Message (TF 'Helper_VersionManager_Update_AssetMismatch' @($AssetPattern) 'The expected update ZIP "%1" was not found in the latest release.'))
-    }
-
-    return $selection.LatestStable.Release
-}
-
-function Invoke-CheckLatestRelease {
-    param(
-        [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)]$Config
-    )
-
-    $activePattern = Resolve-ActiveUpdateAssetPattern -Config $Config
-    if (-not [string]::Equals([string]$Config.Provider, 'github', [System.StringComparison]::OrdinalIgnoreCase) -or
-        [string]::IsNullOrWhiteSpace([string]$Config.Owner) -or
-        [string]::IsNullOrWhiteSpace([string]$Config.Repo) -or
-        [string]::IsNullOrWhiteSpace([string]$activePattern.AssetPattern)) {
-        $assetName = if ([string]::IsNullOrWhiteSpace([string]$activePattern.AssetPattern)) { Get-FixedUpdateZipAssetName -LanguageCode $script:LanguageCode } else { [string]$activePattern.AssetPattern }
-        throw (New-UpdateConfigurationException -Code 'update-source-unconfigured' -Message (TF 'Helper_VersionManager_Update_SourceUnconfiguredDetailed' @($assetName) 'The update source is not configured yet. Set UpdateGithubOwner and UpdateGithubRepo. The updater then uses %1.'))
-    }
-
-    if (-not (Test-NetworkAvailable)) {
-        throw (New-UpdateConfigurationException -Code 'update-network-offline' -Message (T 'Helper_VersionManager_Update_Error_Offline' 'The internet connection is unavailable. Check the connection and try again.'))
-    }
-
-    $response = Invoke-CheckLatestReleaseApi -Config $Config -AssetPattern ([string]$activePattern.AssetPattern)
-    if ($response.prerelease -or $response.draft) {
-        throw (New-UpdateConfigurationException -Code 'update-no-stable-release' -Message (T 'Helper_VersionManager_Update_NoStableRelease' 'The latest release is not a stable published release.'))
-    }
-
-    $matchedAssets = New-Object System.Collections.Generic.List[object]
-    foreach ($asset in @($response.assets)) {
-        if (Test-AssetPatternMatch -Pattern ([string]$activePattern.AssetPattern) -Name ([string]$asset.name)) {
-            [void]$matchedAssets.Add($asset)
-        }
-    }
-    if ($matchedAssets.Count -eq 0) {
-        throw (New-UpdateConfigurationException -Code 'update-asset-match-failed' -Message (TF 'Helper_VersionManager_Update_AssetMismatch' @([string]$activePattern.AssetPattern) 'The expected update ZIP "%1" was not found in the latest release.'))
-    }
-    if ($matchedAssets.Count -gt 1) {
-        $matchedNames = @($matchedAssets | ForEach-Object { [string]$_.name }) -join ', '
-        throw (New-UpdateConfigurationException -Code 'update-asset-match-failed' -Message (TF 'Helper_VersionManager_Update_AssetMultipleMatches' @([string]$activePattern.AssetPattern, $matchedNames) 'The expected update ZIP "%1" matched multiple assets in the latest release: %2'))
-    }
-    $matchedAsset = $matchedAssets[0]
-
-    $body = [string]$response.body
-    if ($body.Length -gt 600) {
-        $body = $body.Substring(0, 600).Trim() + '...'
-    }
-
-    $cache = [PSCustomObject]@{
-        LastCheckedAtUtc = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
-        LatestVersion = [string]$response.tag_name
-        ReleaseName = [string]$response.name
-        ReleaseUrl = [string]$response.html_url
-        AssetName = [string]$matchedAsset.name
-        AssetUrl = [string]$matchedAsset.browser_download_url
-        AssetSize = [long]$matchedAsset.size
-        PublishedAtUtc = [string]$response.published_at
-        ChangelogSummary = $body
-        DownloadedZipPath = ''
-        DownloadedAtUtc = ''
-        Status = 'ready'
-        Error = ''
-        ErrorCode = ''
-        FailureHint = ''
-        ReleaseVariant = [string]$activePattern.ReleaseVariant
-        ActiveAssetPattern = [string]$activePattern.AssetPattern
-    }
-    return $cache
-}
-
 function Convert-VersionManagerOutputToResultPairs {
     param([object[]]$Output)
 
@@ -1922,18 +1689,84 @@ function Convert-VersionManagerOutputToResultPairs {
 }
 
 function Invoke-VersionReleaseCatalog {
-    param([Parameter(Mandatory = $true)][string]$Root)
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [switch]$ForceRefresh,
+        [ValidateRange(5, 120)][int]$ProcessTimeoutSeconds = 25
+    )
 
     $catalogScript = Get-VersionCatalogHelperPath -Root $Root
     if (-not (Test-Path -LiteralPath $catalogScript -PathType Leaf)) {
         throw (T 'Helper_VersionManager_Update_VersionCatalogBackendRequired' (U '\uBC84\uC804 \uBAA9\uB85D \uC870\uD68C/\uC124\uCE58 \uBC31\uC5D4\uB4DC\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.'))
     }
 
-    $output = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $catalogScript -CurrentTargetRoot $Root -OutputJson 2>&1)
-    $exitCode = $LASTEXITCODE
-    $jsonText = ($output | Out-String).Trim()
+    $outputPath = Join-Path ([System.IO.Path]::GetTempPath()) ('DMeloperVersionCatalog_{0}_{1}.json' -f $PID, [System.Guid]::NewGuid().ToString('N'))
+    $errorPath = $outputPath + '.error'
+    $command = '$ProgressPreference = ''SilentlyContinue''; & ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $catalogScript) +
+        ' -CurrentTargetRoot ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $Root) +
+        ' -OutputJson -SyncUpdateCache' +
+        $(if ($ForceRefresh) { '' } else { ' -PreferFreshCache' })
+    $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encodedCommand)
+
+    $process = $null
+    $exitCode = $null
+    $jsonText = ''
+    $errorText = ''
+    try {
+        $process = Start-Process `
+            -FilePath (Get-PowerShellExecutablePath) `
+            -ArgumentList $arguments `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $outputPath `
+            -RedirectStandardError $errorPath `
+            -PassThru
+        $deadline = [DateTime]::UtcNow.AddSeconds($ProcessTimeoutSeconds)
+        while (-not $process.WaitForExit(50)) {
+            [System.Windows.Forms.Application]::DoEvents()
+            if ($script:VersionManagerWindowClosing) {
+                try {
+                    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                }
+                catch {
+                }
+                throw 'Version catalog request was canceled because the Skin manager is closing.'
+            }
+            if ([DateTime]::UtcNow -ge $deadline) {
+                try {
+                    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                }
+                catch {
+                }
+                throw ("Version catalog request exceeded the {0}-second operation deadline." -f $ProcessTimeoutSeconds)
+            }
+        }
+        $process.Refresh()
+        $candidateExitCode = $process.ExitCode
+        if ($null -ne $candidateExitCode) {
+            $exitCode = [int]$candidateExitCode
+        }
+        $jsonText = if (Test-Path -LiteralPath $outputPath -PathType Leaf) {
+            [System.IO.File]::ReadAllText($outputPath, $script:Utf8NoBom).Trim()
+        }
+        else {
+            ''
+        }
+        $errorText = if (Test-Path -LiteralPath $errorPath -PathType Leaf) {
+            [System.IO.File]::ReadAllText($errorPath, $script:Utf8NoBom).Trim()
+        }
+        else {
+            ''
+        }
+    }
+    finally {
+        if ($null -ne $process) {
+            $process.Dispose()
+        }
+        Remove-Item -LiteralPath $outputPath, $errorPath -Force -ErrorAction SilentlyContinue
+    }
     if ([string]::IsNullOrWhiteSpace($jsonText)) {
-        throw 'Version catalog helper did not emit JSON.'
+        throw ("Version catalog helper did not emit JSON. {0}" -f $errorText)
     }
 
     $catalog = $null
@@ -1941,12 +1774,12 @@ function Invoke-VersionReleaseCatalog {
         $catalog = $jsonText | ConvertFrom-Json
     }
     catch {
-        throw ("Version catalog helper emitted invalid JSON. exitCode={0}; output={1}" -f $exitCode, $jsonText)
+        throw ("Version catalog helper emitted invalid JSON. exitCode={0}; output={1}; error={2}" -f $exitCode, $jsonText, $errorText)
     }
 
     $status = [string](Get-ObjectPropertyValue -Object $catalog -Name 'status' -DefaultValue '')
     $message = [string](Get-ObjectPropertyValue -Object $catalog -Name 'message' -DefaultValue '')
-    if ($exitCode -ne 0 -or [string]::Equals($status, 'ERROR', [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ((($null -ne $exitCode) -and $exitCode -ne 0) -or [string]::Equals($status, 'ERROR', [System.StringComparison]::OrdinalIgnoreCase)) {
         if ([string]::IsNullOrWhiteSpace($message)) {
             $message = "Version catalog helper failed with exit code $exitCode."
         }
@@ -1971,31 +1804,65 @@ function Invoke-VersionReleaseInstall {
         throw (T 'Helper_VersionManager_Update_VersionCatalogBackendRequired' (U '\uBC84\uC804 \uBAA9\uB85D \uC870\uD68C/\uC124\uCE58 \uBC31\uC5D4\uB4DC\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.'))
     }
 
-    $arguments = @(
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        $installScript,
-        '-CurrentTargetRoot',
-        $Root,
-        '-EmitResultPairs'
-    )
+    $command = '$ProgressPreference = ''SilentlyContinue''; & ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $installScript) +
+        ' -CurrentTargetRoot ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $Root) +
+        ' -EmitResultPairs'
     if (-not [string]::IsNullOrWhiteSpace($SelectedTargetRoot)) {
-        $arguments += @('-SelectedTargetRoot', $SelectedTargetRoot)
+        $command += ' -SelectedTargetRoot ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $SelectedTargetRoot)
     }
     else {
-        $arguments += @('-PackageUrl', $PackageUrl, '-ExpectedVersion', $ExpectedVersion)
+        $command += ' -PackageUrl ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $PackageUrl) +
+            ' -ExpectedVersion ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $ExpectedVersion)
         if ($AllowCompatibilityWarning) {
-            $arguments += '-AllowCompatibilityWarning'
+            $command += ' -AllowCompatibilityWarning'
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedReleaseVariant)) {
-        $arguments += @('-ExpectedReleaseVariant', $ExpectedReleaseVariant)
+        $command += ' -ExpectedReleaseVariant ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $ExpectedReleaseVariant)
     }
-
-    $output = @(& powershell @arguments 2>&1)
-    $exitCode = $LASTEXITCODE
+    $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encodedCommand)
+    $outputPath = Join-Path ([System.IO.Path]::GetTempPath()) ('DMeloperVersionInstall_{0}_{1}.out' -f $PID, [System.Guid]::NewGuid().ToString('N'))
+    $errorPath = $outputPath + '.error'
+    $process = $null
+    $exitCode = $null
+    $output = @()
+    try {
+        $process = Start-Process `
+            -FilePath (Get-PowerShellExecutablePath) `
+            -ArgumentList $arguments `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $outputPath `
+            -RedirectStandardError $errorPath `
+            -PassThru
+        while (-not $process.WaitForExit(100)) {
+            [System.Windows.Forms.Application]::DoEvents()
+        }
+        $process.Refresh()
+        $candidateExitCode = $process.ExitCode
+        if ($null -ne $candidateExitCode) {
+            $exitCode = [int]$candidateExitCode
+        }
+        $outputLines = if (Test-Path -LiteralPath $outputPath -PathType Leaf) {
+            @([System.IO.File]::ReadAllLines($outputPath, $script:Utf8NoBom))
+        }
+        else {
+            @()
+        }
+        $errorLines = if (Test-Path -LiteralPath $errorPath -PathType Leaf) {
+            @([System.IO.File]::ReadAllLines($errorPath, $script:Utf8NoBom))
+        }
+        else {
+            @()
+        }
+        $output = @($outputLines + $errorLines)
+    }
+    finally {
+        if ($null -ne $process) {
+            $process.Dispose()
+        }
+        Remove-Item -LiteralPath $outputPath, $errorPath -Force -ErrorAction SilentlyContinue
+    }
     $pairs = Convert-VersionManagerOutputToResultPairs -Output $output
     $status = [string]($pairs['DMEL_STATUS'])
     $message = [string]($pairs['DMEL_MESSAGE'])
@@ -2065,7 +1932,7 @@ function Get-VersionManagerSessionProcesses {
     $scriptPattern = [regex]::Escape($scriptPath)
     $windowFlagPattern = '(?i)(^|[\s"''])-WindowSession($|[\s"''])'
 
-    return @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue | Where-Object {
+    $sessions = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue | Where-Object {
         $commandLine = [string](Get-ObjectPropertyValue -Object $_ -Name 'CommandLine' -DefaultValue '')
         if ([string]::IsNullOrWhiteSpace($commandLine)) {
             return $false
@@ -2076,6 +1943,7 @@ function Get-VersionManagerSessionProcesses {
             ($commandLine -match $windowFlagPattern)
         )
     })
+    return $sessions
 }
 
 function Stop-VersionManagerSessions {
@@ -2102,7 +1970,9 @@ function Stop-VersionManagerSessions {
 }
 
 function Start-VersionManagerLauncherForRoot {
-    param([Parameter(Mandatory = $true)][string]$ResolvedTargetRoot)
+    param(
+        [Parameter(Mandatory = $true)][string]$ResolvedTargetRoot
+    )
 
     if (-not (Test-SkinRoot -Root $resolvedTargetRoot)) {
         throw 'TargetRoot is not a valid Block HUD skin root.'
@@ -2128,7 +1998,7 @@ function Start-VersionManagerLauncherForRoot {
         '-EncodedCommand'
         $encodedCommand
     )
-    Start-Process -FilePath $powershellExe -ArgumentList $argumentList -WindowStyle Hidden | Out-Null
+    $startedProcess = Start-Process -FilePath $powershellExe -ArgumentList $argumentList -WindowStyle Hidden -PassThru
 }
 
 function Start-VersionManagerLauncherForSupportedRoot {
@@ -2150,7 +2020,8 @@ function Start-VersionManagerLauncherForSupportedRoot {
 function Start-VersionManagerLauncher {
     $root = Get-TargetRoot
     Start-VersionManagerLauncherForRoot -ResolvedTargetRoot $root
-    return (Wait-VersionManagerLaunchShown -Root $root -ExpectedLaunchToken $LaunchToken)
+    $launchResult = Wait-VersionManagerLaunchShown -Root $root -ExpectedLaunchToken $LaunchToken
+    return $launchResult
 }
 
 function Start-VersionManager {
@@ -2221,7 +2092,6 @@ function Start-VersionManager {
     $ui.InitialHydrationStageIndex = 0
     $ui.DeferredHydrationStageIndex = 0
     $ui.InitialHydrationCompleted = $false
-    $ui.LatestCheckRequestState = New-VersionManagerRequestOwnershipState -Name 'latest-check'
     $ui.TabStates = New-VersionManagerTabStateTable -TabNames @('summary', 'installations', 'settingsLog')
 
     $form = New-Object System.Windows.Forms.Form
@@ -2757,6 +2627,8 @@ function Start-VersionManager {
     }
 
     $refreshVersionCatalog = {
+        param([bool]$ForceRefresh = $false)
+
         if ($ui.VersionCatalogOperationInProgress) {
             return
         }
@@ -2767,6 +2639,8 @@ function Start-VersionManager {
         $ui.SelectedVersionCatalogEntry = $null
         $versionCatalogInstallButton.Enabled = $false
         $versionCatalogList.Enabled = $false
+        $footerRefresh.Enabled = $false
+        $footerCheckLatest.Enabled = $false
         $versionCatalogList.BeginUpdate()
         try {
             $versionCatalogList.Items.Clear()
@@ -2781,8 +2655,10 @@ function Start-VersionManager {
             $ui.TargetVersionText = Get-SkinMetadataVersion -Root $ui.Root
             $ui.TargetVersion = Convert-ToVersion -VersionText $ui.TargetVersionText
             $ui.UpdateConfig = Get-UpdateConfiguration -Root $ui.Root
-            $ui.VersionCatalog = Invoke-VersionReleaseCatalog -Root $ui.Root
+            $ui.VersionCatalog = Invoke-VersionReleaseCatalog -Root $ui.Root -ForceRefresh:$ForceRefresh
             $ui.VersionCatalogEntries = @($ui.VersionCatalog.releases)
+            $ui.UpdateCache = Get-UpdateCache -Root $ui.Root
+            $ui.HasSessionUpdateStatus = $true
 
             $versionCatalogList.BeginUpdate()
             $versionCatalogList.Items.Clear()
@@ -2820,7 +2696,17 @@ function Start-VersionManager {
         finally {
             $versionCatalogList.EndUpdate()
             $ui.VersionCatalogOperationInProgress = $false
+            $ui.HasSessionUpdateStatus = $true
             $versionCatalogList.Enabled = $true
+            $footerRefresh.Enabled = $true
+            $footerCheckLatest.Enabled = $true
+            try {
+                $ui.UpdateCache = Get-UpdateCache -Root $ui.Root
+                & $refreshSummary
+            }
+            catch {
+                Write-Log ("Could not refresh summary after version catalog completion: {0}" -f $_.Exception.Message) 'WARN'
+            }
             if ($versionCatalogList.Items.Count -gt 0 -and $null -ne $versionCatalogList.Items[0].Tag) {
                 $versionCatalogList.Items[0].Selected = $true
                 $versionCatalogList.Items[0].Focused = $true
@@ -3009,57 +2895,30 @@ function Start-VersionManager {
     $runLatestCheck = {
         param([bool]$Silent)
 
-        if ($ui.UpdateCheckInProgress) {
+        if ($ui.UpdateCheckInProgress -or $ui.VersionCatalogOperationInProgress) {
             return
         }
 
-        $requestTicket = Start-VersionManagerOwnedRequest -State $ui.LatestCheckRequestState
-        $requestCompleted = $false
         try {
             $ui.UpdateCheckInProgress = $true
             & $refreshSummary
             [System.Windows.Forms.Application]::DoEvents()
-            $existingCache = Get-UpdateCache -Root $ui.Root
-            $latestCache = Invoke-CheckLatestRelease -Root $ui.Root -Config (Get-UpdateConfiguration -Root $ui.Root)
-            if (-not (Test-VersionManagerOwnedRequestCurrent -State $ui.LatestCheckRequestState -Ticket $requestTicket)) {
-                return
-            }
-            $latestCache = Merge-LatestCheckSuccessCache -ExistingCache $existingCache -LatestCache $latestCache
-            $latestCache = Save-UpdateCache -Root $ui.Root -Cache $latestCache
-            [void](Complete-VersionManagerOwnedRequest -State $ui.LatestCheckRequestState -Ticket $requestTicket)
-            $requestCompleted = $true
-            $ui.UpdateCache = $latestCache
+            & $refreshVersionCatalog $true
+            $ui.UpdateCache = Get-UpdateCache -Root $ui.Root
             $ui.HasSessionUpdateStatus = $true
-            $ui.UpdateCheckInProgress = $false
             & $setVersionManagerTabsDirtyForLatestStateMutation
             & $refreshSummary
             & $refreshSettingsTab
         }
         catch {
-            if (-not (Test-VersionManagerOwnedRequestCurrent -State $ui.LatestCheckRequestState -Ticket $requestTicket)) {
-                return
-            }
-            $errorCode = Get-UpdateConfigurationErrorCode -Exception $_.Exception
-            Write-Log ("Latest version check failed ({0}): {1}" -f $errorCode, $_.Exception.ToString()) 'ERROR'
-            $existingCache = Get-UpdateCache -Root $ui.Root
-            $failedCache = Update-UpdateCache -Root $ui.Root -Patch (New-LatestCheckFailureCachePatch -ExistingCache $existingCache -ErrorMessage $_.Exception.Message -ErrorCode $errorCode -UpdateConfig $ui.UpdateConfig)
-            [void](Complete-VersionManagerOwnedRequest -State $ui.LatestCheckRequestState -Ticket $requestTicket)
-            $requestCompleted = $true
-            $ui.UpdateCache = $failedCache
-            $ui.HasSessionUpdateStatus = $true
-            $ui.UpdateCheckInProgress = $false
-            & $setVersionManagerTabsDirtyForLatestStateMutation
-            & $refreshSummary
-            & $refreshSettingsTab
-            if (-not $Silent) {
-                $dialogMessage = Get-UpdateFriendlyMessage -ErrorCode $errorCode -DefaultMessage ([string]$_.Exception.Message) -Surface 'dialog'
+            Write-Log ("Latest version refresh failed: {0}" -f $_.Exception.ToString()) 'ERROR'
+            if (-not $Silent -and -not $script:VersionManagerWindowClosing) {
+                $dialogMessage = Get-UpdateFriendlyMessage -ErrorCode (Get-UpdateConfigurationErrorCode -Exception $_.Exception) -DefaultMessage ([string]$_.Exception.Message) -Surface 'dialog'
                 Show-VersionManagerMessageBox -Owner $form -Message $dialogMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
             }
         }
         finally {
-            if (-not $requestCompleted) {
-                [void](Clear-VersionManagerOwnedRequest -State $ui.LatestCheckRequestState -Ticket $requestTicket)
-            }
+            $ui.UpdateCheckInProgress = $false
         }
     }
 
@@ -3484,6 +3343,12 @@ function Start-VersionManager {
         & $runLatestCheck $true
     })
 
+    $startAutoCheck = {
+        if (-not $ui.HasSessionUpdateStatus -and -not $ui.UpdateCheckInProgress) {
+            $autoCheckTimer.Start()
+        }
+    }
+
     $initialHydrationStages = @(
         [PSCustomObject]@{
             Name = 'summary'
@@ -3500,8 +3365,8 @@ function Start-VersionManager {
                 if ($deferredHydrationStages.Count -gt 0) {
                     $deferredHydrationTimer.Start()
                 }
-                elseif (-not $ui.HasSessionUpdateStatus -and -not $ui.UpdateCheckInProgress) {
-                    $autoCheckTimer.Start()
+                else {
+                    & $startAutoCheck
                 }
             }
         }
@@ -3574,8 +3439,8 @@ function Start-VersionManager {
             if ($ui.DeferredHydrationStageIndex -lt $deferredHydrationStages.Count) {
                 $deferredHydrationTimer.Start()
             }
-            elseif (-not $ui.HasSessionUpdateStatus -and -not $ui.UpdateCheckInProgress) {
-                $autoCheckTimer.Start()
+            else {
+                & $startAutoCheck
             }
         }
     })
@@ -3584,7 +3449,22 @@ function Start-VersionManager {
         Save-VersionManagerLaunchState -Root $ui.Root -Status 'shown' -LaunchTokenValue $LaunchToken
         $initialHydrationTimer.Start()
     })
+    $ui.FirstPaintRecorded = $false
+    $form.Add_Paint({
+        if (-not $ui.FirstPaintRecorded) {
+            $ui.FirstPaintRecorded = $true
+        }
+    })
     $form.Add_FormClosing({
+        param($sender, [System.Windows.Forms.FormClosingEventArgs]$eventArgs)
+
+        if ($ui.InstallationOperationInProgress -and -not $ui.CloseAfterSwitch) {
+            $eventArgs.Cancel = $true
+            $script:VersionManagerWindowClosing = $false
+            return
+        }
+
+        $script:VersionManagerWindowClosing = $true
         foreach ($timer in @($initialHydrationTimer, $deferredHydrationTimer, $autoCheckTimer)) {
             try {
                 if ($null -ne $timer) {

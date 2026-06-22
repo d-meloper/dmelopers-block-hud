@@ -260,6 +260,12 @@ function Get-VersionManagerUpdateCachePath {
     return (Join-Path $Root '@Resources\Customs\Data\VersionManagerUpdateCache.json')
 }
 
+function Get-VersionManagerReleaseCatalogCachePath {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    return (Join-Path $Root '@Resources\Customs\Data\VersionManagerReleaseCatalogCache.json')
+}
+
 function Get-VersionManagerUpdateCacheMutexName {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -396,5 +402,27 @@ function Update-VersionManagerUpdateCache {
         Write-VersionManagerAtomicJsonFile -Path $path -Value $merged
         Sync-VersionManagerUpdateCacheVariables -Root $Root -Cache $merged
         return $merged
+    })
+}
+
+function Read-VersionManagerReleaseCatalogCache {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $path = Get-VersionManagerReleaseCatalogCachePath -Root $Root
+    return (Invoke-VersionManagerSynchronized -Path $path -ScriptBlock {
+        Read-VersionManagerJsonFile -Path $path
+    })
+}
+
+function Save-VersionManagerReleaseCatalogCache {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)]$Catalog
+    )
+
+    $path = Get-VersionManagerReleaseCatalogCachePath -Root $Root
+    return (Invoke-VersionManagerSynchronized -Path $path -ScriptBlock {
+        Write-VersionManagerAtomicJsonFile -Path $path -Value $Catalog
+        return $Catalog
     })
 }

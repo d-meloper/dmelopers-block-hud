@@ -8,7 +8,34 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$script:HadWarning = $false
+try {
+    [Console]::OutputEncoding = $script:Utf8NoBom
+}
+catch {
+}
+
+function Write-ResultPair {
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [AllowNull()][object]$Value
+    )
+
+    $text = ([string]$Value) -replace '[\r\n\t]+', ' '
+    [Console]::WriteLine(('{0}={1}' -f $Key, $text))
+}
+
+function Write-SectionFailure {
+    param(
+        [Parameter(Mandatory = $true)][string]$Section,
+        [Parameter(Mandatory = $true)][System.Exception]$Exception
+    )
+
+    $script:HadWarning = $true
+    Write-ResultPair -Key ("DMEL_{0}_STATUS" -f $Section) -Value 'ERROR'
+    Write-ResultPair -Key ("DMEL_{0}_MESSAGE" -f $Section) -Value $Exception.Message
+}
 
 function Get-UniqueFontFamilies {
     param(
@@ -50,15 +77,12 @@ function Get-UniqueFontFamilies {
 }
 
 function Get-DriveTargets {
-    $values = @()
-    foreach ($drive in Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue) {
-        $root = [string]$drive.Root
-        if (-not [string]::IsNullOrWhiteSpace($root)) {
-            $values += $root.TrimEnd('\', '/').ToUpperInvariant()
-        }
-    }
-
-    return @($values | Where-Object { $_ } | Sort-Object -Unique)
+    return @(
+        [Environment]::GetLogicalDrives() |
+            ForEach-Object { ([string]$_).TrimEnd('\', '/').ToUpperInvariant() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique
+    )
 }
 
 function Get-StartupFolderPath {
@@ -141,21 +165,43 @@ function Get-StartupEnabledLiteral {
 }
 
 if ($IncludeFonts) {
-    Write-Output ('DMEL_FONTFAMILIES=' + (@(Get-UniqueFontFamilies -Path $FontsPath) -join '|'))
+    try {
+        Write-ResultPair -Key 'DMEL_FONTFAMILIES' -Value (@(Get-UniqueFontFamilies -Path $FontsPath) -join '|')
+        Write-ResultPair -Key 'DMEL_FONTS_STATUS' -Value 'OK'
+    }
+    catch {
+        Write-ResultPair -Key 'DMEL_FONTFAMILIES' -Value ''
+        Write-SectionFailure -Section 'FONTS' -Exception $_.Exception
+    }
 }
 
 if ($IncludeDrives) {
-    Write-Output ('DMEL_DRIVETARGETS=' + (@(Get-DriveTargets) -join '|'))
+    try {
+        Write-ResultPair -Key 'DMEL_DRIVETARGETS' -Value (@(Get-DriveTargets) -join '|')
+        Write-ResultPair -Key 'DMEL_DRIVES_STATUS' -Value 'OK'
+    }
+    catch {
+        Write-ResultPair -Key 'DMEL_DRIVETARGETS' -Value ''
+        Write-SectionFailure -Section 'DRIVES' -Exception $_.Exception
+    }
 }
 
 if ($IncludeStartupAutoRun) {
-    $startupFolder = Get-StartupFolderPath
-    $shell = New-WscriptShell
+    $shell = $null
     try {
-        Write-Output ('DMEL_STARTUPAUTORUN=' + (Get-StartupEnabledLiteral -StartupFolder $startupFolder -Shell $shell))
-    } finally {
+        $startupFolder = Get-StartupFolderPath
+        $shell = New-WscriptShell
+        Write-ResultPair -Key 'DMEL_STARTUPAUTORUN' -Value (Get-StartupEnabledLiteral -StartupFolder $startupFolder -Shell $shell)
+        Write-ResultPair -Key 'DMEL_STARTUPAUTORUN_STATUS' -Value 'OK'
+    }
+    catch {
+        Write-SectionFailure -Section 'STARTUPAUTORUN' -Exception $_.Exception
+    }
+    finally {
         if ($null -ne $shell) {
             [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
         }
     }
 }
+
+Write-ResultPair -Key 'DMEL_STATUS' -Value $(if ($script:HadWarning) { 'WARN' } else { 'OK' })

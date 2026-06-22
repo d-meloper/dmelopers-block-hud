@@ -6,6 +6,8 @@ param(
     [string]$ExpectedVersion,
     [string]$ExpectedReleaseVariant,
     [string]$SelectedTargetRoot,
+    [ValidateRange(5, 3600)][int]$PackageDownloadTimeoutSeconds = 1800,
+    [ValidateRange(0, 5)][int]$PackageDownloadRetryCount = 2,
     [switch]$AllowCompatibilityWarning,
     [switch]$NonInteractive,
     [switch]$EmitResultPairs
@@ -624,6 +626,49 @@ function Get-UrlFileName {
     return (Convert-ToSafeFolderName -Name $fileName)
 }
 
+function Invoke-ReleasePackageDownload {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$DestinationPath
+    )
+
+    $maxAttempts = [Math]::Max(1, $PackageDownloadRetryCount + 1)
+    $lastMessage = ''
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        if ($attempt -gt 1) {
+            if (Test-Path -LiteralPath $DestinationPath -PathType Leaf) {
+                Remove-Item -LiteralPath $DestinationPath -Force -ErrorAction SilentlyContinue
+            }
+            Write-Log ("Retrying release package download: attempt {0}/{1}" -f $attempt, $maxAttempts) 'WARN'
+        }
+
+        try {
+            Invoke-BlockHudGitHubReleaseAssetDownload -Uri $Url -OutFile $DestinationPath -TimeoutSeconds $PackageDownloadTimeoutSeconds
+            if (-not (Test-Path -LiteralPath $DestinationPath -PathType Leaf)) {
+                throw 'The download completed without creating the ZIP file.'
+            }
+            $downloadedFile = Get-Item -LiteralPath $DestinationPath -Force
+            if ($downloadedFile.Length -le 0) {
+                throw 'The downloaded ZIP file is empty.'
+            }
+            return
+        }
+        catch {
+            $lastMessage = [string]$_.Exception.Message
+            if (Test-Path -LiteralPath $DestinationPath -PathType Leaf) {
+                Remove-Item -LiteralPath $DestinationPath -Force -ErrorAction SilentlyContinue
+            }
+            if ($attempt -lt $maxAttempts) {
+                Write-Log ("Release package download attempt {0}/{1} failed: {2}" -f $attempt, $maxAttempts, $lastMessage) 'WARN'
+                Start-Sleep -Seconds ([Math]::Min(15, 3 * $attempt))
+                continue
+            }
+        }
+    }
+
+    throw ("Release package download failed after {0} attempt(s). Each attempt allows up to {1} seconds. Last error: {2}" -f $maxAttempts, $PackageDownloadTimeoutSeconds, $lastMessage)
+}
+
 function Resolve-ReleasePackagePath {
     param([Parameter(Mandatory = $true)][string]$CurrentRoot)
 
@@ -656,8 +701,8 @@ function Resolve-ReleasePackagePath {
         $downloadPath = Join-Path $downloadRoot ("{0}_{1}.zip" -f $baseName, $script:LogStamp)
     }
 
-    Write-Log ("Downloading PackageUrl to: {0}" -f $downloadPath)
-    Invoke-WebRequest -Uri $PackageUrl -OutFile $downloadPath -UseBasicParsing
+    Write-Log ("Downloading PackageUrl to: {0} (timeout={1}s retries={2})" -f $downloadPath, $PackageDownloadTimeoutSeconds, $PackageDownloadRetryCount)
+    Invoke-ReleasePackageDownload -Url $PackageUrl -DestinationPath $downloadPath
     if (-not [string]::Equals([System.IO.Path]::GetExtension($downloadPath), '.zip', [System.StringComparison]::OrdinalIgnoreCase)) {
         throw 'Downloaded package path must be a ZIP release package.'
     }

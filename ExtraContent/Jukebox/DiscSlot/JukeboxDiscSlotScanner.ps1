@@ -108,9 +108,26 @@ function Write-Assignments {
         Assignments = $entries
     }
     $json = ($payload | ConvertTo-Json -Depth 5)
-    $tmp = $Path + '.tmp'
-    [System.IO.File]::WriteAllText($tmp, $json + [Environment]::NewLine, $script:Utf8NoBom)
-    Move-Item -LiteralPath $tmp -Destination $Path -Force
+    $processId = [System.Diagnostics.Process]::GetCurrentProcess().Id
+    $tmp = $Path + ('.{0}.tmp' -f $processId)
+    $backup = $Path + ('.{0}.bak.tmp' -f $processId)
+    try {
+        [System.IO.File]::WriteAllText($tmp, $json + [Environment]::NewLine, $script:Utf8NoBom)
+        if ([System.IO.File]::Exists($Path)) {
+            [System.IO.File]::Replace($tmp, $Path, $backup, $true)
+        }
+        else {
+            [System.IO.File]::Move($tmp, $Path)
+        }
+    }
+    finally {
+        if ([System.IO.File]::Exists($tmp)) {
+            [System.IO.File]::Delete($tmp)
+        }
+        if ([System.IO.File]::Exists($backup)) {
+            [System.IO.File]::Delete($backup)
+        }
+    }
 }
 
 function Get-AudioFiles {
@@ -119,7 +136,10 @@ function Get-AudioFiles {
     if ([string]::IsNullOrWhiteSpace($Path) -or -not [System.IO.Directory]::Exists($Path)) {
         return @()
     }
-    return @(Get-ChildItem -LiteralPath $Path -File -ErrorAction SilentlyContinue)
+    return @(
+        [System.IO.Directory]::EnumerateFiles($Path, '*', [System.IO.SearchOption]::TopDirectoryOnly) |
+            ForEach-Object { [System.IO.FileInfo]::new($_) }
+    )
 }
 
 try {

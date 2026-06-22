@@ -7,7 +7,11 @@ param(
     [string]$RainmeterIniPath = '',
     [string]$RainmeterLogPath = '',
     [string]$ConfigName = '',
-    [long]$Offset = 0
+    [long]$Offset = 0,
+    [ValidateRange(4096, 1048576)]
+    [int]$MaxTailBytes = 262144,
+    [ValidateRange(1, 1000)]
+    [int]$MaxEntries = 200
 )
 
 Set-StrictMode -Version Latest
@@ -53,6 +57,33 @@ function Get-TextEncodingKind {
     }
 
     return 'Default'
+}
+
+function Get-FileTextEncodingKind {
+    param([Parameter(Mandatory = $true)][System.IO.FileStream]$Stream)
+
+    $sampleLength = [int][Math]::Min($Stream.Length, 512)
+    if ($sampleLength -le 0) {
+        return 'Default'
+    }
+
+    $sample = [byte[]]::new($sampleLength)
+    $originalPosition = $Stream.Position
+    try {
+        $Stream.Position = 0
+        $read = $Stream.Read($sample, 0, $sample.Length)
+        if ($read -lt $sample.Length) {
+            $trimmed = [byte[]]::new($read)
+            if ($read -gt 0) {
+                [Array]::Copy($sample, 0, $trimmed, 0, $read)
+            }
+            $sample = $trimmed
+        }
+        return Get-TextEncodingKind -Bytes $sample
+    }
+    finally {
+        $Stream.Position = $originalPosition
+    }
 }
 
 function Convert-BytesToText {
@@ -231,39 +262,82 @@ function Invoke-TailLog {
         return
     }
 
-    $bytes = [System.IO.File]::ReadAllBytes($logPath)
-    $size = [long]$bytes.Length
-    $start = [Math]::Max(0, [Math]::Min([long]$Offset, $size))
-    if ($start -eq $size) {
-        Write-DmelPair 'DMEL_STATUS' 'OK'
-        Write-DmelPair 'DMEL_OFFSET' $size
-        Write-DmelPair 'DMEL_ENTRY_COUNT' '0'
-        return
-    }
+    $stream = [System.IO.File]::Open(
+        $logPath,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+    try {
+        $size = [long]$stream.Length
+        $requestedStart = if ($Offset -gt $size) { 0L } else { [Math]::Max(0L, [long]$Offset) }
+        if ($requestedStart -eq $size) {
+            Write-DmelPair 'DMEL_STATUS' 'OK'
+            Write-DmelPair 'DMEL_OFFSET' $size
+            Write-DmelPair 'DMEL_ENTRY_COUNT' '0'
+            return
+        }
 
-    $kind = Get-TextEncodingKind -Bytes $bytes
-    if (($kind -eq 'UTF16LE' -or $kind -eq 'UTF16BE') -and (($start % 2) -ne 0)) {
-        $start--
+        $kind = Get-FileTextEncodingKind -Stream $stream
+        $available = $size - $requestedStart
+        $start = $requestedStart
+        $truncated = $false
+        if ($available -gt $MaxTailBytes) {
+            $start = $size - $MaxTailBytes
+            $truncated = $true
+        }
+        if (($kind -eq 'UTF16LE' -or $kind -eq 'UTF16BE') -and (($start % 2) -ne 0)) {
+            $start--
+        }
+
+        $length = [int]($size - $start)
+        $chunk = [byte[]]::new($length)
+        $stream.Position = $start
+        $totalRead = 0
+        while ($totalRead -lt $chunk.Length) {
+            $read = $stream.Read($chunk, $totalRead, $chunk.Length - $totalRead)
+            if ($read -le 0) {
+                break
+            }
+            $totalRead += $read
+        }
+        if ($totalRead -lt $chunk.Length) {
+            $trimmed = [byte[]]::new($totalRead)
+            if ($totalRead -gt 0) {
+                [Array]::Copy($chunk, 0, $trimmed, 0, $totalRead)
+            }
+            $chunk = $trimmed
+            $size = $start + $totalRead
+        }
+        $text = (Convert-BytesToText -Bytes $chunk -Kind $kind).TrimStart([char]0xFEFF)
+        if ($truncated) {
+            $firstNewLine = $text.IndexOf("`n", [System.StringComparison]::Ordinal)
+            if ($firstNewLine -ge 0) {
+                $text = $text.Substring($firstNewLine + 1)
+            }
+        }
     }
-    $length = [int]($size - $start)
-    $chunk = [byte[]]::new($length)
-    [Array]::Copy($bytes, [int]$start, $chunk, 0, $length)
-    $text = (Convert-BytesToText -Bytes $chunk -Kind $kind).TrimStart([char]0xFEFF)
+    finally {
+        $stream.Dispose()
+    }
 
     $entries = New-Object System.Collections.Generic.List[object]
     foreach ($line in ($text -split '\r?\n')) {
-        if ($line -match '^([A-Z]+)\s+\((.*?)\)\s*(.*?):\s*(.*)$') {
+        if ($line -match '^([A-Z]+)\s+\((.*?)\)\s*(.*?):\s*(.*)$' -and $matches[1] -eq 'ERRO') {
             $entries.Add([PSCustomObject]@{
                 Level = $matches[1]
                 Time = $matches[2]
                 Source = $matches[3]
                 Message = $matches[4]
             })
+            if ($entries.Count -gt $MaxEntries) {
+                $entries.RemoveAt(0)
+            }
         }
     }
 
     Write-DmelPair 'DMEL_STATUS' 'OK'
     Write-DmelPair 'DMEL_OFFSET' $size
+    Write-DmelPair 'DMEL_TAIL_TRUNCATED' $(if ($truncated) { '1' } else { '0' })
     Write-DmelPair 'DMEL_ENTRY_COUNT' $entries.Count
     for ($index = 0; $index -lt $entries.Count; $index++) {
         $number = $index + 1

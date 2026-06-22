@@ -164,6 +164,22 @@ function Ensure-Directory {
     }
 }
 
+function Start-DetachedExplorer {
+    param([Parameter(Mandatory = $true)][string]$Target)
+
+    $windowsRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
+    if ([string]::IsNullOrWhiteSpace($windowsRoot)) {
+        $windowsRoot = [Environment]::ExpandEnvironmentVariables('%SystemRoot%')
+    }
+    $explorerPath = [System.IO.Path]::Combine($windowsRoot, 'explorer.exe')
+    if (-not [System.IO.File]::Exists($explorerPath)) {
+        throw 'File Explorer is unavailable.'
+    }
+
+    $quotedTarget = '"' + $Target.Replace('"', '') + '"'
+    Start-Process -FilePath $explorerPath -ArgumentList $quotedTarget -WindowStyle Normal | Out-Null
+}
+
 function Invoke-OpenLogFolder {
     $targetLogDirectory = Resolve-PreferredLogDirectory -RequestedTargetRoot $TargetRoot
     try {
@@ -183,7 +199,7 @@ function Invoke-OpenLogFolder {
     }
     Write-Log "LogFolder: $targetLogDirectory"
 
-    Invoke-Item -LiteralPath $targetLogDirectory
+    Start-DetachedExplorer -Target $targetLogDirectory
     Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'OK'
     Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value 'Opened settings helper log folder.'
 }

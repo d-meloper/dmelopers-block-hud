@@ -235,7 +235,7 @@ return function(app)
 
         setVariable('SettingsPendingRefreshBatchTotal', '0')
 
-        SKIN:Bang('!CommandMeasure', 'MeasureSettingsDeferredRefresh', 'Stop 1')
+        methods.SetUpdateJob('deferredRefresh', false)
 
     end
 
@@ -267,7 +267,7 @@ return function(app)
         setVariable('SettingsPendingLoadKind', '')
         setVariable('SettingsPendingLoadFieldKey', '')
         setVariable('SettingsPendingLoadRowIndex', '0')
-        SKIN:Bang('!CommandMeasure', 'MeasureSettingsDeferredLoad', 'Stop 1')
+        methods.SetUpdateJob('deferredLoad', false)
     end
     function methods.clearPendingLoadHelperState()
         state.pendingLoadHelperRunning = false
@@ -277,7 +277,7 @@ return function(app)
         state.pendingLoadHelperStartedAt = 0
         state.pendingLoadHelperDeadlineAt = 0
         state.pendingLoadHelperTimeoutSeconds = 0
-        SKIN:Bang('!CommandMeasure', 'MeasureSettingsHelperWatchdog', 'Stop 1')
+        methods.SetUpdateJob('helperWatchdog', false)
     end
     function methods.getIgnoredPendingLoadHelperCompletion(helperKind)
         local resolvedKind = trim(helperKind or '')
@@ -334,6 +334,7 @@ return function(app)
         local loadKind = trim(state.pendingLoadHelperLoadKind or state.pendingLoadKind or '')
         local timeoutSeconds = tonumber(state.pendingLoadHelperTimeoutSeconds) or 0
         local helperKind = trim(state.pendingLoadHelperKind or '')
+        local helperMeasureName = trim(state.pendingLoadHelperMeasureName or '')
         local helperReason = 'watchdog-timeout'
         if timeoutSeconds > 0 then
             helperReason = helperReason .. ':' .. tostring(timeoutSeconds)
@@ -342,6 +343,9 @@ return function(app)
             abandonActiveHelperReason = helperReason,
             clearIgnoredHelper = false,
         })
+        if helperMeasureName ~= '' and SKIN:GetMeasure(helperMeasureName) then
+            SKIN:Bang('!CommandMeasure', helperMeasureName, 'Kill')
+        end
         methods.clearPendingRefreshState()
         if methods.CancelPendingLanguageSwitchInternal then
             methods.CancelPendingLanguageSwitchInternal()
@@ -461,15 +465,14 @@ return function(app)
         if type(startedAt) == 'number' and startedAt > 0 and timeoutSeconds > 0 then
             state.pendingLoadHelperStartedAt = startedAt
             state.pendingLoadHelperDeadlineAt = startedAt + timeoutSeconds
-            SKIN:Bang('!CommandMeasure', 'MeasureSettingsHelperWatchdog', 'Stop 1')
-            SKIN:Bang('!CommandMeasure', 'MeasureSettingsHelperWatchdog', 'Execute 1')
+            methods.SetUpdateJob('helperWatchdog', true)
         else
             state.pendingLoadHelperStartedAt = 0
             state.pendingLoadHelperDeadlineAt = 0
-            SKIN:Bang('!CommandMeasure', 'MeasureSettingsHelperWatchdog', 'Stop 1')
+            methods.SetUpdateJob('helperWatchdog', false)
         end
         setVariable(argsVariableName, tostring(args or ''))
-        SKIN:Bang('!CommandMeasure', 'MeasureSettingsDeferredLoad', 'Stop 1')
+        methods.SetUpdateJob('deferredLoad', false)
         SKIN:Bang('!UpdateMeasure', measureName)
         SKIN:Bang('!CommandMeasure', measureName, 'Run')
         return true
@@ -512,6 +515,10 @@ return function(app)
         local resolvedKind = trim(helperKind or '')
         local resolvedMeasureName = tostring(measureName or '')
         state.detachedHelperMeasures = state.detachedHelperMeasures or {}
+        if trim(state.detachedHelperMeasures[resolvedKind] or '') ~= '' then
+            logNotice('Settings detached helper request ignored while the same action is still running: ' .. resolvedKind)
+            return false
+        end
         state.detachedHelperMeasures[resolvedKind] = resolvedMeasureName
         state.detachedHelperRunning = true
         state.detachedHelperKind = resolvedKind
@@ -614,7 +621,15 @@ return function(app)
 
             'SettingsComputerInfoHelperArgs',
 
-            methods.computerInfoHelperArguments(options)
+            methods.computerInfoHelperArguments(options),
+
+            {
+
+                loadKind = trim(state.pendingLoadKind or '') ~= '' and trim(state.pendingLoadKind or '') or 'computerInfo',
+
+                timeoutSeconds = 12,
+
+            }
 
         )
 
@@ -802,27 +817,6 @@ return function(app)
 
     function methods.openVersionManagerScriptPath()
         return methods.settingsSkinRootPath() .. '\\tools\\OpenVersionManager.ps1'
-    end
-
-    function methods.versionCatalogScriptPath()
-        return methods.settingsSkinRootPath() .. '\\tools\\GetVersionReleaseCatalog.ps1'
-    end
-
-    function methods.versionCatalogHelperArguments()
-        return '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
-            .. methods.escapeCommandArgument(methods.versionCatalogScriptPath())
-            .. ' -CurrentTargetRoot '
-            .. methods.escapeCommandArgument(methods.settingsSkinRootPath())
-            .. ' -NonInteractive -EmitResultPairs -SyncUpdateCache'
-    end
-
-    function methods.startVersionCatalogHelper()
-        return methods.startDetachedRunCommandHelper(
-            'versionCatalog',
-            'MeasureSettingsVersionCatalogRun',
-            'SettingsVersionCatalogHelperArgs',
-            methods.versionCatalogHelperArguments()
-        )
     end
 
     function methods.openVersionManagerHelperArguments(launchToken)
@@ -1218,8 +1212,7 @@ return function(app)
 
         methods.renderActivePage()
 
-        SKIN:Bang('!CommandMeasure', 'MeasureSettingsDeferredLoad', 'Stop 1')
-        SKIN:Bang('!CommandMeasure', 'MeasureSettingsDeferredLoad', 'Execute 1')
+        methods.SetUpdateJob('deferredLoad', true)
 
     end
 
@@ -1707,24 +1700,6 @@ return function(app)
         )
     end
 
-    function methods.handleVersionCatalogHelperResult(values)
-        local cachePairs = {
-            VersionManagerCacheLatestVersion = trim(values.DMEL_LATESTVERSION or ''),
-            VersionManagerCacheStatus = trim(values.DMEL_CACHESTATUS or ''),
-            VersionManagerCacheErrorCode = trim(values.DMEL_CACHEERRORCODE or ''),
-            VersionManagerCacheFailureHint = trim(values.DMEL_CACHEFAILUREHINT or ''),
-            VersionManagerCacheLastCheckedAtUtc = trim(values.DMEL_CACHELASTCHECKEDATUTC or ''),
-        }
-
-        for variableName, value in pairs(cachePairs) do
-            methods.writePersistentCacheVariable(variableName, value)
-        end
-
-        if methods.handleVersionCatalogCacheRefreshComplete then
-            methods.handleVersionCatalogCacheRefreshComplete(values)
-        end
-    end
-
     function methods.handleOpenLogFolderHelperResult(values)
         local status = string.upper(trim(values.DMEL_STATUS or ''))
         local logPath = trim(values.DMEL_LOGPATH or '')
@@ -1921,8 +1896,6 @@ return function(app)
             methods.handleOpenLogFolderHelperResult(values)
         elseif resolvedKind == 'openVersionManager' then
             methods.handleOpenVersionManagerHelperResult(values)
-        elseif resolvedKind == 'versionCatalog' then
-            methods.handleVersionCatalogHelperResult(values)
         end
 
         methods.clearDetachedHelperState(resolvedKind)
