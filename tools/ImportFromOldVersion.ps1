@@ -1201,7 +1201,7 @@ function New-RootConfigNameCompatManifestContent {
     return @'
 @{
     RootModule = 'DMeloperBlockHudCompat.psm1'
-    ModuleVersion = '1.3.0'
+    ModuleVersion = '1.3.2'
     GUID = '7e2698fc-2f2e-4cda-b6e8-b0df5cbf8931'
     Author = 'DMeloper'
     CompanyName = 'DMeloper'
@@ -3485,6 +3485,102 @@ function Merge-EditorDraftIfActive {
     }
 }
 
+function Get-RequiredVariableValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Specialized.OrderedDictionary]$Variables,
+        [Parameter(Mandatory = $true)]
+        [string]$Key,
+        [Parameter(Mandatory = $true)]
+        [string]$Context
+    )
+
+    if (-not $Variables.Contains($Key)) {
+        throw "$Context is missing required variable '$Key'."
+    }
+
+    return [string]$Variables[$Key]
+}
+
+function New-CleanEditorDraftVariables {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DraftPath,
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Specialized.OrderedDictionary]$HotbarVariables,
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Specialized.OrderedDictionary]$InventoryVariables
+    )
+
+    $draftSource = Read-VariablesFile -Path $DraftPath
+    $schemaVersion = if ($draftSource.Contains('EditorDraftMeta_SchemaVersion')) {
+        [string]$draftSource['EditorDraftMeta_SchemaVersion']
+    }
+    else {
+        '3'
+    }
+
+    $draft = New-VariablesMap
+    foreach ($entry in @(
+        @{ Key = 'EditorDraftMeta_SchemaVersion'; Value = $schemaVersion },
+        @{ Key = 'EditorDraftMeta_Dirty'; Value = '0' },
+        @{ Key = 'EditorDraftMeta_EditorOpen'; Value = '0' },
+        @{ Key = 'EditorDraftMeta_HeartbeatClockMs'; Value = '0' },
+        @{ Key = 'EditorDraftMeta_SelectedSource'; Value = 'hotbar' },
+        @{ Key = 'EditorDraftMeta_SelectedX'; Value = '1' },
+        @{ Key = 'EditorDraftMeta_SelectedY'; Value = '1' },
+        @{ Key = 'EditorDraftMeta_SelectedSection'; Value = 'Slot01' },
+        @{ Key = 'EditorDraftMeta_DragSource'; Value = '' },
+        @{ Key = 'EditorDraftMeta_DragX'; Value = '0' },
+        @{ Key = 'EditorDraftMeta_DragY'; Value = '0' },
+        @{ Key = 'EditorDraftMeta_DragActive'; Value = '0' }
+    )) {
+        Set-MapValue -Map $draft -Key $entry.Key -Value $entry.Value
+    }
+
+    for ($index = 1; $index -le 10; $index++) {
+        $section = 'Slot{0:D2}' -f $index
+        foreach ($field in @('Image', 'Label', 'Action', 'Qty')) {
+            $sourceKey = "HotbarItem_${section}_$field"
+            $draftKey = "EditorDraftItem_${section}_$field"
+            Set-MapValue -Map $draft -Key $draftKey -Value (Get-RequiredVariableValue -Variables $HotbarVariables -Key $sourceKey -Context 'imported HotbarItems.inc')
+        }
+    }
+
+    for ($row = 1; $row -le 4; $row++) {
+        for ($column = 1; $column -le 9; $column++) {
+            $section = "SlotX${column}Y${row}"
+            foreach ($field in @('Image', 'Label', 'Action', 'Qty')) {
+                $sourceKey = "InventoryItem_${section}_$field"
+                $draftKey = "EditorDraftItem_${section}_$field"
+                Set-MapValue -Map $draft -Key $draftKey -Value (Get-RequiredVariableValue -Variables $InventoryVariables -Key $sourceKey -Context 'imported InventoryItems.inc')
+            }
+        }
+    }
+
+    Set-MapValue -Map $draft -Key 'EditorDraftMeta_PageIndex' -Value '1'
+    Set-MapValue -Map $draft -Key 'EditorDraftMeta_PickerModalOpen' -Value '0'
+    return $draft
+}
+
+function Rebuild-EditorDraftFromImportedItems {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetRoot
+    )
+
+    $targetData = Join-RootPath -Root $TargetRoot -RelativePath '@Resources\Customs\Data'
+    $targetDraftPath = Join-RootPath -Root $targetData -RelativePath 'EditorDraft.inc'
+    $hotbarVariables = Read-VariablesFile -Path (Join-RootPath -Root $targetData -RelativePath 'HotbarItems.inc')
+    $inventoryVariables = Read-VariablesFile -Path (Join-RootPath -Root $targetData -RelativePath 'InventoryItems.inc')
+    $draftVariables = New-CleanEditorDraftVariables -DraftPath $targetDraftPath -HotbarVariables $hotbarVariables -InventoryVariables $inventoryVariables
+    $content = ConvertTo-VariablesContent -Variables $draftVariables
+
+    $null = Invoke-MigrationAction -Action 'Rebuild editor draft from imported item data' -Target $targetDraftPath -ScriptBlock {
+        Write-Utf16Text -Path $targetDraftPath -Content $content
+    }
+}
+
 function Ensure-CacheFormat2 {
     param([Parameter(Mandatory = $true)][string]$TargetRoot)
 
@@ -3611,6 +3707,8 @@ function Invoke-Migration {
     Merge-ItemImagesCatalog -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'ItemImages.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'ItemImages.inc') -ImageRenameMap $imageRenameMap
     Rebuild-ImageAdjustmentsCatalog -TargetPath (Join-RootPath -Root $targetData -RelativePath 'ImageAdjustments.inc') -ImageDirectory $targetItemImageDirectory
     Move-LegacyHotbarSlot10IfCustom -SourceHotbarPath $sourceHotbarPath -TargetInventoryPath $targetInventoryPath -ImageRenameMap $imageRenameMap
+    Commit-EditorDraftIfActive -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'EditorDraft.inc') -TargetHotbarPath $targetHotbarPath -TargetInventoryPath $targetInventoryPath -ImageRenameMap $imageRenameMap | Out-Null
+    Rebuild-EditorDraftFromImportedItems -TargetRoot $resolvedTargetRoot
     Merge-ResponsiveLayoutState -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'ResponsiveLayoutState.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'ResponsiveLayoutState.inc') -SourceRoot $resolvedSourceRoot
     Merge-HerobrineStatsFile -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'HerobrineStats.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'HerobrineStats.inc')
     Merge-HerobrineStateFile -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'HerobrineState.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'HerobrineState.inc')

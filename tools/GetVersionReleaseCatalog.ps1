@@ -4,7 +4,9 @@ param(
     [switch]$NonInteractive,
     [switch]$OutputJson,
     [switch]$EmitResultPairs,
-    [switch]$SyncUpdateCache
+    [switch]$SyncUpdateCache,
+    [switch]$PreferFreshCache,
+    [int]$CatalogCacheMaxAgeSeconds = 900
 )
 
 Set-StrictMode -Version 2.0
@@ -410,7 +412,8 @@ function Get-InstalledBlockHudVersions {
         if (-not (Test-Path -LiteralPath $skinPath -PathType Container)) {
             continue
         }
-        foreach ($directory in Get-ChildItem -LiteralPath $skinPath -Directory -Force -ErrorAction SilentlyContinue) {
+        $skinDirectories = @(Get-ChildItem -LiteralPath $skinPath -Directory -Force -ErrorAction SilentlyContinue)
+        foreach ($directory in $skinDirectories) {
             & $addCandidate -Candidate $directory.FullName
         }
     }
@@ -612,6 +615,94 @@ function Write-JsonStdout {
     }
 }
 
+function Get-CompatibleReleaseCatalogCache {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)]$Config,
+        [int]$MaxAgeSeconds = 900,
+        [switch]$AllowStale
+    )
+
+    $cached = Read-VersionManagerReleaseCatalogCache -Root $Root
+    if ($null -eq $cached -or @($cached.releases).Count -eq 0) {
+        return $null
+    }
+
+    foreach ($comparison in @(
+        @([string](Get-VersionManagerObjectPropertyValue -Object $cached -Name 'owner' -DefaultValue ''), [string]$Config.Owner),
+        @([string](Get-VersionManagerObjectPropertyValue -Object $cached -Name 'repo' -DefaultValue ''), [string]$Config.Repo),
+        @([string](Get-VersionManagerObjectPropertyValue -Object $cached -Name 'release_variant' -DefaultValue ''), [string]$Config.ReleaseVariant),
+        @([string](Get-VersionManagerObjectPropertyValue -Object $cached -Name 'asset_name' -DefaultValue ''), [string]$Config.AssetName)
+    )) {
+        if (-not [string]::Equals($comparison[0], $comparison[1], [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $null
+        }
+    }
+
+    $generatedText = [string](Get-VersionManagerObjectPropertyValue -Object $cached -Name 'generated_at_utc' -DefaultValue '')
+    $generatedAt = [DateTime]::MinValue
+    if (-not [DateTime]::TryParse(
+        $generatedText,
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        [System.Globalization.DateTimeStyles]::AssumeUniversal,
+        [ref]$generatedAt
+    )) {
+        return $null
+    }
+
+    $ageSeconds = [Math]::Max(0, ([DateTime]::UtcNow - $generatedAt.ToUniversalTime()).TotalSeconds)
+    if (-not $AllowStale -and $ageSeconds -gt [Math]::Max(0, $MaxAgeSeconds)) {
+        return $null
+    }
+
+    Set-VersionManagerObjectPropertyValue -Object $cached -Name 'catalog_cache_age_seconds' -Value ([Math]::Round($ageSeconds, 1))
+    Set-VersionManagerObjectPropertyValue -Object $cached -Name 'catalog_cache_stale' -Value ($ageSeconds -gt [Math]::Max(0, $MaxAgeSeconds))
+    Set-VersionManagerObjectPropertyValue -Object $cached -Name 'catalog_cache_reused' -Value $true
+    return $cached
+}
+
+function Update-CachedReleaseCatalogLocalState {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)]$Catalog,
+        [Parameter(Mandatory = $true)]$Config
+    )
+
+    $installations = @(Get-InstalledBlockHudVersions -CurrentRoot $Root)
+    foreach ($entry in @($Catalog.releases)) {
+        $version = Convert-ToSemanticVersion -VersionText ([string]$entry.version)
+        $install = if ($null -eq $version) {
+            $null
+        }
+        else {
+            Get-MatchingInstall -Installations $installations -Version $version -ReleaseVariant ([string]$Config.ReleaseVariant)
+        }
+        $hasAsset = -not [string]::IsNullOrWhiteSpace([string]$entry.asset_url)
+        $isLatestStable = [bool]$entry.is_latest_stable
+        $status = if ($isLatestStable -and -not $hasAsset) {
+            'asset_missing'
+        }
+        elseif ($isLatestStable) {
+            'latest_stable'
+        }
+        elseif (-not $hasAsset) {
+            'asset_missing'
+        }
+        elseif ($null -ne $install) {
+            'installed'
+        }
+        else {
+            'available'
+        }
+
+        Set-VersionManagerObjectPropertyValue -Object $entry -Name 'installed_path' -Value $(if ($null -ne $install) { [string]$install.Path } else { '' })
+        Set-VersionManagerObjectPropertyValue -Object $entry -Name 'status' -Value $status
+    }
+
+    Set-VersionManagerObjectPropertyValue -Object $Catalog -Name 'current_target_root' -Value $Root
+    return $Catalog
+}
+
 function Get-VersionReleaseCatalog {
     $resolvedRoot = Resolve-SkinRootCandidate -Candidate $CurrentTargetRoot
     if (-not $resolvedRoot) {
@@ -630,6 +721,18 @@ function Get-VersionReleaseCatalog {
     $config = Get-UpdateConfiguration -Root $resolvedRoot
     if (-not [string]::Equals([string]$config.Provider, 'github', [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Unsupported update provider: $($config.Provider)"
+    }
+
+    $script:CompatibleCachedCatalog = Get-CompatibleReleaseCatalogCache -Root $resolvedRoot -Config $config -MaxAgeSeconds $CatalogCacheMaxAgeSeconds -AllowStale
+    if ($PreferFreshCache) {
+        $freshCachedCatalog = Get-CompatibleReleaseCatalogCache -Root $resolvedRoot -Config $config -MaxAgeSeconds $CatalogCacheMaxAgeSeconds
+        if ($null -ne $freshCachedCatalog) {
+            return (Update-CachedReleaseCatalogLocalState -Root $resolvedRoot -Catalog $freshCachedCatalog -Config $config)
+        }
+        if ($null -ne $script:CompatibleCachedCatalog) {
+            Set-VersionManagerObjectPropertyValue -Object $script:CompatibleCachedCatalog -Name 'catalog_cache_stale' -Value $true
+            return (Update-CachedReleaseCatalogLocalState -Root $resolvedRoot -Catalog $script:CompatibleCachedCatalog -Config $config)
+        }
     }
 
     $releases = @(Invoke-GitHubReleaseCatalogRequest -Owner ([string]$config.Owner) -Repo ([string]$config.Repo))
@@ -674,7 +777,7 @@ function Get-VersionReleaseCatalog {
         })
     }
 
-    return [PSCustomObject]@{
+    $result = [PSCustomObject]@{
         status = 'OK'
         generated_at_utc = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
         current_target_root = $resolvedRoot
@@ -688,16 +791,30 @@ function Get-VersionReleaseCatalog {
         latest_stable_tag = [string]$latestStable.Tag
         releases = $items.ToArray()
     }
+    Set-VersionManagerObjectPropertyValue -Object $result -Name 'catalog_cache_age_seconds' -Value 0
+    Set-VersionManagerObjectPropertyValue -Object $result -Name 'catalog_cache_stale' -Value $false
+    Set-VersionManagerObjectPropertyValue -Object $result -Name 'catalog_cache_reused' -Value $false
+    [void](Save-VersionManagerReleaseCatalogCache -Root $resolvedRoot -Catalog $result)
+    return $result
 }
 
 $catalog = $null
+$script:CompatibleCachedCatalog = $null
 try {
     $catalog = Get-VersionReleaseCatalog
+    $catalogIsStale = [bool](Get-VersionManagerObjectPropertyValue -Object $catalog -Name 'catalog_cache_stale' -DefaultValue $false)
+    $catalogWasReused = [bool](Get-VersionManagerObjectPropertyValue -Object $catalog -Name 'catalog_cache_reused' -DefaultValue $false)
     if ($SyncUpdateCache) {
-        [void](Save-CatalogUpdateCache -Root ([string]$catalog.current_target_root) -Catalog $catalog)
+        if ($catalogWasReused) {
+            $existingUpdateCache = Read-VersionManagerUpdateCache -Root ([string]$catalog.current_target_root)
+            Set-CacheResultPairs -Cache $existingUpdateCache
+        }
+        else {
+            [void](Save-CatalogUpdateCache -Root ([string]$catalog.current_target_root) -Catalog $catalog)
+        }
     }
-    Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'OK'
-    Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value 'Release catalog loaded.'
+    Set-ResultPairValue -Key 'DMEL_STATUS' -Value $(if ($catalogIsStale) { 'WARN' } else { 'OK' })
+    Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value $(if ($catalogIsStale) { 'Using the last cached release catalog.' } else { 'Release catalog loaded.' })
     Write-Log ("Release catalog loaded. items={0}" -f @($catalog.releases).Count)
 }
 catch {
@@ -731,12 +848,22 @@ catch {
         Write-Log $_.ScriptStackTrace 'ERROR'
     }
 
-    $catalog = [PSCustomObject]@{
-        status = 'ERROR'
-        generated_at_utc = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
-        current_target_root = [string]$script:ResultPairs['DMEL_SOURCEPATH']
-        message = $friendlyMessage
-        releases = @()
+    if ($null -ne $script:CompatibleCachedCatalog) {
+        $catalog = $script:CompatibleCachedCatalog
+        Set-VersionManagerObjectPropertyValue -Object $catalog -Name 'catalog_cache_stale' -Value $true
+        Set-VersionManagerObjectPropertyValue -Object $catalog -Name 'message' -Value $friendlyMessage
+        Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'WARN'
+        Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value $friendlyMessage
+        Write-Log 'Using the last compatible release catalog after the live refresh failed.' 'WARN'
+    }
+    else {
+        $catalog = [PSCustomObject]@{
+            status = 'ERROR'
+            generated_at_utc = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
+            current_target_root = [string]$script:ResultPairs['DMEL_SOURCEPATH']
+            message = $friendlyMessage
+            releases = @()
+        }
     }
 }
 finally {

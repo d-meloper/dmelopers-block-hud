@@ -179,24 +179,40 @@ function Test-BlockHudGitHubApiRateLimitException {
 function Invoke-BlockHudGitHubWebRequestText {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
-        [string]$UserAgent = 'DMeloper-Block-HUD-VersionManager'
+        [string]$UserAgent = 'DMeloper-Block-HUD-VersionManager',
+        [ValidateRange(1, 300)][int]$TimeoutSeconds = 15
     )
 
     $headers = @{
         'User-Agent' = $UserAgent
     }
-    $response = Invoke-WebRequest -Uri $Uri -Headers $headers -UseBasicParsing
+    $response = Invoke-WebRequest -Uri $Uri -Headers $headers -UseBasicParsing -TimeoutSec $TimeoutSeconds
     return [string]$response.Content
 }
 
 function Invoke-BlockHudGitHubRestMethodArray {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
-        [Parameter(Mandatory = $true)]$Headers
+        [Parameter(Mandatory = $true)]$Headers,
+        [ValidateRange(1, 300)][int]$TimeoutSeconds = 15
     )
 
-    $response = Invoke-RestMethod -Uri $Uri -Headers $Headers -Method Get
+    $response = Invoke-RestMethod -Uri $Uri -Headers $Headers -Method Get -TimeoutSec $TimeoutSeconds
     return @(ConvertTo-BlockHudReleaseArray -Response $response)
+}
+
+function Invoke-BlockHudGitHubReleaseAssetDownload {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$OutFile,
+        [string]$UserAgent = 'DMeloper-Block-HUD-VersionManager',
+        [ValidateRange(5, 3600)][int]$TimeoutSeconds = 1800
+    )
+
+    $headers = @{
+        'User-Agent' = $UserAgent
+    }
+    Invoke-WebRequest -Uri $Uri -Headers $headers -OutFile $OutFile -UseBasicParsing -TimeoutSec $TimeoutSeconds
 }
 
 function Get-BlockHudGitHubReleaseAssetsFromHtml {

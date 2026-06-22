@@ -8,9 +8,6 @@ return function(app)
 
     local VERSION_MANAGER_LAUNCH_TIMEOUT_SECONDS = 20
     local VERSION_STATUS_CACHE_SECONDS = 1
-    local VERSION_STATUS_AUTO_REFRESH_SECONDS = 24 * 60 * 60
-    local VERSION_STATUS_RETRY_SECONDS = 15 * 60
-    local VERSION_STATUS_REFRESH_TIMEOUT_SECONDS = 120
     local VERSION_STATUS_VISUAL_METERS = {
         'MeterSettingsNoticeBarBG',
         'MeterSettingsNoticeViewAllBG', 'MeterSettingsNoticeViewAllLabel',
@@ -144,109 +141,6 @@ return function(app)
         }
     end
 
-    local function isVersionManagerCacheEmpty(cache)
-        return trim(cache.latestVersion or '') == ''
-            and trim(cache.status or '') == ''
-            and trim(cache.errorCode or '') == ''
-            and trim(cache.lastCheckedAtUtc or '') == ''
-    end
-
-    local function parseCacheCheckedAtSeconds(raw)
-        local year, month, day, hour, minute, second = trim(raw):match('^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)Z$')
-        if not year then
-            return nil
-        end
-
-        return os.time({
-            year = tonumber(year),
-            month = tonumber(month),
-            day = tonumber(day),
-            hour = tonumber(hour),
-            min = tonumber(minute),
-            sec = tonumber(second),
-            isdst = false,
-        })
-    end
-
-    local function cacheAgeSeconds(cache, now)
-        local checkedAt = parseCacheCheckedAtSeconds(cache.lastCheckedAtUtc)
-        if not checkedAt then
-            return nil
-        end
-
-        local age = now - checkedAt
-        if age < 0 then
-            return 0
-        end
-        return age
-    end
-
-    local function isVersionCatalogCacheRefreshRunning(now)
-        if state.versionStatusRefreshRunning ~= true then
-            return false
-        end
-
-        local startedAt = tonumber(state.versionStatusRefreshStartedAt) or 0
-        if startedAt > 0 and (now - startedAt) >= VERSION_STATUS_REFRESH_TIMEOUT_SECONDS then
-            state.versionStatusRefreshRunning = false
-            state.versionStatusRefreshStartedAt = 0
-            logNotice('Version status auto refresh timed out; another refresh may be attempted.')
-            return false
-        end
-
-        return true
-    end
-
-    local function isVersionCatalogRefreshAttemptOnCooldown(now)
-        local lastAttemptAt = tonumber(state.versionStatusLastRefreshAttemptAt) or 0
-        return lastAttemptAt > 0 and (now - lastAttemptAt) < VERSION_STATUS_RETRY_SECONDS
-    end
-
-    local function shouldStartVersionCatalogCacheRefresh(cache, now)
-        if isVersionManagerCacheEmpty(cache) then
-            return true
-        end
-
-        local status = string.lower(trim(cache.status or ''))
-        local latestVersion = trim(cache.latestVersion or '')
-        local latestComparable = parseComparableVersion(latestVersion)
-        local age = cacheAgeSeconds(cache, now)
-
-        if status == 'ready' and (latestVersion == '' or not latestComparable) then
-            return true
-        end
-        if status == 'error' then
-            return age == nil or age >= VERSION_STATUS_RETRY_SECONDS
-        end
-        if latestVersion == '' then
-            return true
-        end
-        if age == nil then
-            return true
-        end
-        return age >= VERSION_STATUS_AUTO_REFRESH_SECONDS
-    end
-
-    local function maybeStartVersionCatalogCacheRefresh(cache, now)
-        if isVersionCatalogCacheRefreshRunning(now) or isVersionCatalogRefreshAttemptOnCooldown(now) then
-            return
-        end
-        if not shouldStartVersionCatalogCacheRefresh(cache, now) then
-            return
-        end
-
-        state.versionStatusLastRefreshAttemptAt = now
-        if methods.startVersionCatalogHelper then
-            local started = methods.startVersionCatalogHelper()
-            if started then
-                state.versionStatusRefreshRunning = true
-                state.versionStatusRefreshStartedAt = now
-            else
-                logNotice('Version status auto refresh could not start.')
-            end
-        end
-    end
-
     local function readVersionManagerLaunchState()
         return {
             launchToken = readCacheVariable('VersionManagerLaunchToken'),
@@ -270,7 +164,6 @@ return function(app)
         local currentVersion = trim(methods.readSettingsMetadataVersion())
         local versionText = methods.appVersionDisplayValue()
         local cache = readVersionManagerCache()
-        maybeStartVersionCatalogCacheRefresh(cache, now)
         local comparison = compareVersions(currentVersion, cache.latestVersion)
         local resolvedStatus = VERSION_STATUS.unknown
 
@@ -309,8 +202,7 @@ return function(app)
             methods.renderVersionStatusState()
         end
         refreshVersionStatusAndLoadingVisuals()
-        SKIN:Bang('!CommandMeasure', 'MeasureSettingsVersionManagerLaunchWatchdog', 'Stop 1')
-        SKIN:Bang('!CommandMeasure', 'MeasureSettingsVersionManagerLaunchWatchdog', 'Execute 1')
+        methods.SetUpdateJob('versionManager', true)
         return token
     end
 
@@ -324,7 +216,7 @@ return function(app)
         if methods.setLoadingVisible then
             methods.setLoadingVisible(false)
         end
-        SKIN:Bang('!CommandMeasure', 'MeasureSettingsVersionManagerLaunchWatchdog', 'Stop 1')
+        methods.SetUpdateJob('versionManager', false)
         if not options or options.render ~= false then
             invalidateVersionStatusCache()
             if methods.renderVersionStatusState then
@@ -336,7 +228,7 @@ return function(app)
 
     function methods.RunPendingVersionManagerLaunch()
         if methods.isVersionManagerLaunchPending() ~= true then
-            SKIN:Bang('!CommandMeasure', 'MeasureSettingsVersionManagerLaunchWatchdog', 'Stop 1')
+            methods.SetUpdateJob('versionManager', false)
             return
         end
 
@@ -392,9 +284,7 @@ return function(app)
         setVariable('SettingsNoticeDismissTooltip', localizedVariableOrText(status.tooltipKey, status.tooltipFallback))
     end
 
-    function methods.handleVersionCatalogCacheRefreshComplete()
-        state.versionStatusRefreshRunning = false
-        state.versionStatusRefreshStartedAt = 0
+    function methods.HandleExternalVersionCatalogRefreshComplete()
         invalidateVersionStatusCache()
         if methods.renderVersionStatusState then
             methods.renderVersionStatusState()

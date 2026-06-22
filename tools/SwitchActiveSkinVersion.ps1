@@ -287,10 +287,15 @@ function Get-CurrentRootDeactivateSpecs {
         [PSCustomObject]@{ RelativePath = 'ExtraContent\Jukebox'; FileName = 'Jukebox.ini' }
         [PSCustomObject]@{ RelativePath = 'ExtraContent\Jukebox\DiscSlot'; FileName = 'JukeboxDiscSlot.ini' }
         [PSCustomObject]@{ RelativePath = 'ExtraContent\Jukebox\WebNowPlayingBridge'; FileName = 'WebNowPlayingBridge.ini' }
+        [PSCustomObject]@{ RelativePath = 'ExtraContent\Jukebox\Jukebox_minimized'; FileName = 'Jukebox_minimized.ini' }
+        [PSCustomObject]@{ RelativePath = 'Activities\Jukebox\Jukebox_minimized'; FileName = 'Jukebox_minimized.ini' }
         [PSCustomObject]@{ RelativePath = 'Contents\Jukebox'; FileName = 'Jukebox.ini' }
         [PSCustomObject]@{ RelativePath = 'Contents\Jukebox\DiscSlot'; FileName = 'JukeboxDiscSlot.ini' }
+        [PSCustomObject]@{ RelativePath = 'Contents\Jukebox\Jukebox_minimized'; FileName = 'Jukebox_minimized.ini' }
         [PSCustomObject]@{ RelativePath = 'Jukebox'; FileName = 'Jukebox.ini' }
         [PSCustomObject]@{ RelativePath = 'JukeboxDiscSlot'; FileName = 'JukeboxDiscSlot.ini' }
+        [PSCustomObject]@{ RelativePath = 'Jukebox_minimized'; FileName = 'Jukebox_minimized.ini' }
+        [PSCustomObject]@{ RelativePath = 'JukeboxMinimized'; FileName = 'JukeboxMinimized.ini' }
     )
 }
 

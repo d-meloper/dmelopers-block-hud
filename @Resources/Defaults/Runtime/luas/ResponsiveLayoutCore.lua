@@ -257,6 +257,11 @@ function M.IsSkinActive(SKIN, id)
     return liveState ~= nil and liveState.Active or false
 end
 
+function M.IsRainmeterSkinActive(SKIN, id)
+    local configName = rainmeterConfigName(SKIN, id)
+    return configName ~= nil and isRainmeterConfigActive(SKIN, configName)
+end
+
 function M.WriteLiveState(SKIN, id, active, x, y, broadcast, width, height)
     if not id or not SKINS[id] then
         return false
@@ -506,6 +511,54 @@ local function monitorWorkAreaForPoint(SKIN, x, y, fallback)
         end
     end
 
+    return best or fallback
+end
+
+local function rectOverlapArea(left, right)
+    if not left or not right then
+        return 0
+    end
+
+    local leftRight = left.right or (left.x + left.width)
+    local leftBottom = left.bottom or (left.y + left.height)
+    local rightRight = right.right or (right.x + right.width)
+    local rightBottom = right.bottom or (right.y + right.height)
+    local overlapWidth = math.max(0, math.min(leftRight, rightRight) - math.max(left.x, right.x))
+    local overlapHeight = math.max(0, math.min(leftBottom, rightBottom) - math.max(left.y, right.y))
+    return overlapWidth * overlapHeight
+end
+
+local function monitorWorkAreaForRect(SKIN, rect, fallback)
+    local areas = monitorWorkAreas(SKIN)
+    if not rect or #areas == 0 then
+        return fallback
+    end
+
+    local best = nil
+    local bestOverlap = 0
+    local centerX = rect.centerX or (rect.x + (rect.width / 2))
+    local centerY = rect.centerY or (rect.y + (rect.height / 2))
+    for _, area in ipairs(areas) do
+        local overlap = rectOverlapArea(rect, area)
+        if overlap > bestOverlap then
+            best = area
+            bestOverlap = overlap
+        elseif overlap > 0 and overlap == bestOverlap then
+            local areaContainsCenter = rectContainsPoint(area, centerX, centerY)
+            local bestContainsCenter = rectContainsPoint(best, centerX, centerY)
+            if areaContainsCenter and not bestContainsCenter then
+                best = area
+            elseif areaContainsCenter == bestContainsCenter
+                and rectsEffectivelyMatch(area, fallback)
+                and not rectsEffectivelyMatch(best, fallback) then
+                best = area
+            end
+        end
+    end
+
+    if bestOverlap <= 0 then
+        return fallback
+    end
     return best or fallback
 end
 
@@ -908,11 +961,12 @@ function M.ResolveRects(SKIN)
 
     do
         local rawWork = work.raw or rawPrimaryWorkArea(SKIN)
+        local inventoryWork = monitorWorkAreaForRect(SKIN, rects.Inventory, rawWork)
         rects.InventoryBG = {
-            x = rawWork.x,
-            y = rawWork.y,
-            width = rawWork.width,
-            height = rawWork.height,
+            x = inventoryWork.x,
+            y = inventoryWork.y,
+            width = inventoryWork.width,
+            height = inventoryWork.height,
             scale = scale,
         }
     end
@@ -1432,6 +1486,8 @@ function M.ApplyCurrentSkin(SKIN)
     elseif id == 'InventoryBG' then
         setVariableForConfig(SKIN, 'InventoryBGWidth', rect.width)
         setVariableForConfig(SKIN, 'InventoryBGHeight', rect.height)
+        SKIN:Bang('!UpdateMeter', 'MeterBackground')
+        SKIN:Bang('!Redraw')
     end
 
     if id ~= 'Herobrine' then
