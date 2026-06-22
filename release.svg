@@ -1,11 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="145.2" height="28" role="img" aria-label="RELEASE: v1.3.1">
-<title>RELEASE: v1.3.1</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="145.2" height="28" role="img" aria-label="RELEASE: v1.3.2">
+<title>RELEASE: v1.3.2</title>
 <g shape-rendering="crispEdges">
 <rect width="76.8" height="28" fill="#2F334D"/>
 <rect x="76.8" width="68.4" height="28" fill="#9FE870"/>
 </g>
 <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" text-rendering="geometricPrecision" font-size="100">
 <text transform="scale(.1)" x="384" y="175" textLength="490">RELEASE</text>
-<text transform="scale(.1)" x="1110" y="175" textLength="420" font-weight="bold" fill="#333">v1.3.1</text>
+<text transform="scale(.1)" x="1110" y="175" textLength="420" font-weight="bold" fill="#333">v1.3.2</text>
 </g>
 </svg>
