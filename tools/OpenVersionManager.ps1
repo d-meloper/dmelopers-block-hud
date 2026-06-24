@@ -1932,17 +1932,23 @@ function Get-VersionManagerSessionProcesses {
     $scriptPattern = [regex]::Escape($scriptPath)
     $windowFlagPattern = '(?i)(^|[\s"''])-WindowSession($|[\s"''])'
 
-    $sessions = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue | Where-Object {
-        $commandLine = [string](Get-ObjectPropertyValue -Object $_ -Name 'CommandLine' -DefaultValue '')
-        if ([string]::IsNullOrWhiteSpace($commandLine)) {
-            return $false
-        }
-        return (
-            ($commandLine -match $scriptPattern) -and
-            ($commandLine -match $rootPattern) -and
-            ($commandLine -match $windowFlagPattern)
-        )
-    })
+    $sessions = @()
+    try {
+        $sessions = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -OperationTimeoutSec 2 -ErrorAction Stop | Where-Object {
+            $commandLine = [string](Get-ObjectPropertyValue -Object $_ -Name 'CommandLine' -DefaultValue '')
+            if ([string]::IsNullOrWhiteSpace($commandLine)) {
+                return $false
+            }
+            return (
+                ($commandLine -match $scriptPattern) -and
+                ($commandLine -match $rootPattern) -and
+                ($commandLine -match $windowFlagPattern)
+            )
+        })
+    }
+    catch {
+        Write-Log ("Skipping existing version manager session cleanup after process query failed: {0}" -f $_.Exception.Message) 'WARN'
+    }
     return $sessions
 }
 

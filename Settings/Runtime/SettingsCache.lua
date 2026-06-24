@@ -479,27 +479,34 @@ return function(app)
     end
     function methods.clearDetachedHelperState(helperKind)
         state.detachedHelperMeasures = state.detachedHelperMeasures or {}
+        state.detachedHelperTokens = state.detachedHelperTokens or {}
         local resolvedKind = trim(helperKind or '')
         if resolvedKind ~= '' then
             state.detachedHelperMeasures[resolvedKind] = nil
+            state.detachedHelperTokens[resolvedKind] = nil
         else
             state.detachedHelperMeasures = {}
+            state.detachedHelperTokens = {}
         end
 
         local latestKind = ''
         local latestMeasureName = ''
+        local latestLaunchToken = ''
         for activeKind, activeMeasureName in pairs(state.detachedHelperMeasures) do
             latestKind = tostring(activeKind or '')
             latestMeasureName = tostring(activeMeasureName or '')
+            latestLaunchToken = tostring(state.detachedHelperTokens[latestKind] or '')
             break
         end
 
         state.detachedHelperRunning = next(state.detachedHelperMeasures) ~= nil
         state.detachedHelperKind = latestKind
         state.detachedHelperMeasureName = latestMeasureName
+        state.detachedHelperLaunchToken = latestLaunchToken
     end
 
-    function methods.startDetachedRunCommandHelper(helperKind, measureName, argsVariableName, args)
+    function methods.startDetachedRunCommandHelper(helperKind, measureName, argsVariableName, args, options)
+        options = options or {}
         if not SKIN:GetMeasure(tostring(measureName or '')) then
             logNotice('Settings detached helper run measure is missing: ' .. tostring(measureName or ''))
             if methods.ShowModalAlertByKeys and trim(helperKind or '') == 'openLogFolder' then
@@ -514,15 +521,19 @@ return function(app)
 
         local resolvedKind = trim(helperKind or '')
         local resolvedMeasureName = tostring(measureName or '')
+        local resolvedLaunchToken = trim(options.launchToken or '')
         state.detachedHelperMeasures = state.detachedHelperMeasures or {}
+        state.detachedHelperTokens = state.detachedHelperTokens or {}
         if trim(state.detachedHelperMeasures[resolvedKind] or '') ~= '' then
             logNotice('Settings detached helper request ignored while the same action is still running: ' .. resolvedKind)
             return false
         end
         state.detachedHelperMeasures[resolvedKind] = resolvedMeasureName
+        state.detachedHelperTokens[resolvedKind] = resolvedLaunchToken
         state.detachedHelperRunning = true
         state.detachedHelperKind = resolvedKind
         state.detachedHelperMeasureName = resolvedMeasureName
+        state.detachedHelperLaunchToken = resolvedLaunchToken
         setVariable(argsVariableName, tostring(args or ''))
         SKIN:Bang('!UpdateMeasure', measureName)
         SKIN:Bang('!CommandMeasure', measureName, 'Run')
@@ -816,14 +827,14 @@ return function(app)
     end
 
     function methods.openVersionManagerScriptPath()
-        return methods.settingsSkinRootPath() .. '\\tools\\OpenVersionManager.ps1'
+        return '..\\tools\\OpenVersionManager.ps1'
     end
 
     function methods.openVersionManagerHelperArguments(launchToken)
         return '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
             .. methods.escapeCommandArgument(methods.openVersionManagerScriptPath())
             .. ' -TargetRoot '
-            .. methods.escapeCommandArgument(methods.settingsSkinRootPath())
+            .. methods.escapeCommandArgument('..')
             .. ' -LaunchToken '
             .. methods.escapeCommandArgument(trim(launchToken or ''))
             .. ' -EmitResultPairs'
@@ -845,7 +856,8 @@ return function(app)
             'openVersionManager',
             'MeasureSettingsOpenVersionManagerRun',
             'SettingsOpenVersionManagerHelperArgs',
-            methods.openVersionManagerHelperArguments(launchToken)
+            methods.openVersionManagerHelperArguments(launchToken),
+            { launchToken = launchToken }
         )
         if not started and methods.clearVersionManagerLaunchPending then
             methods.clearVersionManagerLaunchPending()
@@ -858,14 +870,14 @@ return function(app)
         return started
     end
     function methods.openLogFolderScriptPath()
-        return methods.settingsSkinRootPath() .. '\\tools\\OpenSettingsLogFolder.ps1'
+        return '..\\tools\\OpenSettingsLogFolder.ps1'
     end
 
     function methods.openLogFolderHelperArguments()
         return '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
             .. methods.escapeCommandArgument(methods.openLogFolderScriptPath())
             .. ' -TargetRoot '
-            .. methods.escapeCommandArgument(methods.settingsSkinRootPath())
+            .. methods.escapeCommandArgument('..')
             .. ' -EmitResultPairs'
     end
 
@@ -1642,14 +1654,20 @@ return function(app)
 
 
 
-    function methods.handleOpenVersionManagerHelperResult(values)
+    function methods.handleOpenVersionManagerHelperResult(values, options)
+        options = options or {}
+        local allowFailureModal = options.allowFailureModal == true
+        local resultScope = allowFailureModal and 'current request' or 'stale request'
         local status = string.upper(trim(values.DMEL_STATUS or ''))
         local logPath = trim(values.DMEL_LOGPATH or '')
         local message = trim(values.DMEL_MESSAGE or '')
 
         if status == 'OK' or status == 'CANCEL' then
-            if methods.clearVersionManagerLaunchPending then
+            if allowFailureModal and methods.clearVersionManagerLaunchPending then
                 methods.clearVersionManagerLaunchPending()
+            end
+            if not allowFailureModal then
+                logNotice('Ignored stale Version manager completion: ' .. string.lower(status))
             end
             return
         end
@@ -1665,13 +1683,13 @@ return function(app)
             if #details == 0 then
                 details[#details + 1] = 'Version manager launch confirmation timed out.'
             end
-            logNotice('Version manager warning: ' .. table.concat(details, ' | '))
+            logNotice('Version manager warning (' .. resultScope .. '): ' .. table.concat(details, ' | '))
             -- The launcher has started; keep the Settings watchdog pending so
             -- slower packaged installs can still report the eventual shown/error state.
             return
         end
 
-        if methods.clearVersionManagerLaunchPending then
+        if allowFailureModal and methods.clearVersionManagerLaunchPending then
             methods.clearVersionManagerLaunchPending()
         end
 
@@ -1691,13 +1709,15 @@ return function(app)
         end
 
 
-        logNotice('Version manager ' .. string.lower(status) .. ': ' .. table.concat(details, ' | '))
-        showModalAlert(
-            'error',
-            'ModalAlert_VersionManagerFailed',
-            'Skins could not be opened from Settings. Refresh the skin and try again.',
-            logPath
-        )
+        logNotice('Version manager ' .. string.lower(status) .. ' (' .. resultScope .. '): ' .. table.concat(details, ' | '))
+        if allowFailureModal then
+            showModalAlert(
+                'error',
+                'ModalAlert_VersionManagerFailed',
+                'Skins could not be opened from Settings. Refresh the skin and try again.',
+                logPath
+            )
+        end
     end
 
     function methods.handleOpenLogFolderHelperResult(values)
@@ -1873,7 +1893,9 @@ return function(app)
     function methods.HandleDetachedHelperComplete(helperKind)
         local resolvedKind = trim(helperKind or '')
         state.detachedHelperMeasures = state.detachedHelperMeasures or {}
+        state.detachedHelperTokens = state.detachedHelperTokens or {}
         local measureName = trim(state.detachedHelperMeasures[resolvedKind] or '')
+        local launchToken = trim(state.detachedHelperTokens[resolvedKind] or '')
         if measureName == '' then
             if state.detachedHelperRunning ~= true then
                 return
@@ -1882,6 +1904,7 @@ return function(app)
                 return
             end
             measureName = trim(state.detachedHelperMeasureName or '')
+            launchToken = trim(state.detachedHelperLaunchToken or '')
         end
 
         if measureName == '' then
@@ -1895,7 +1918,15 @@ return function(app)
         if resolvedKind == 'openLogFolder' then
             methods.handleOpenLogFolderHelperResult(values)
         elseif resolvedKind == 'openVersionManager' then
-            methods.handleOpenVersionManagerHelperResult(values)
+            local currentLaunchToken = trim(state.versionManagerLaunchToken or '')
+            local allowFailureModal = state.versionManagerLaunchPending == true
+                and launchToken ~= ''
+                and currentLaunchToken ~= ''
+                and launchToken == currentLaunchToken
+            methods.handleOpenVersionManagerHelperResult(values, {
+                allowFailureModal = allowFailureModal,
+                launchToken = launchToken,
+            })
         end
 
         methods.clearDetachedHelperState(resolvedKind)

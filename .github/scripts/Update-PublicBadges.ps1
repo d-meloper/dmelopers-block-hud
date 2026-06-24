@@ -7,8 +7,7 @@ param(
     [string]$AppInstallationId = $env:DMEL_BADGE_APP_INSTALLATION_ID,
     [string]$OutputDirectory,
     [switch]$NoPush,
-    [switch]$SkipCamoPurge,
-    [switch]$PolicySelfTest
+    [switch]$SkipCamoPurge
 )
 
 Set-StrictMode -Version Latest
@@ -109,31 +108,7 @@ function Invoke-GitHubApi {
     return $result
 }
 
-function Select-PublishedReleases {
-    param([Parameter(Mandatory = $true)][object[]]$Releases)
-
-    return @($Releases | Where-Object { -not [bool]$_.draft })
-}
-
-function Select-StableReleases {
-    param([Parameter(Mandatory = $true)][object[]]$Releases)
-
-    return @($Releases | Where-Object { -not [bool]$_.draft -and -not [bool]$_.prerelease })
-}
-
-function Get-TotalReleaseAssetDownloads {
-    param([Parameter(Mandatory = $true)][object[]]$Releases)
-
-    $total = 0
-    foreach ($release in $Releases) {
-        foreach ($asset in @($release.assets)) {
-            $total += [int]$asset.download_count
-        }
-    }
-    return $total
-}
-
-function Get-AllPublishedReleases {
+function Get-AllStableReleases {
     param(
         [Parameter(Mandatory = $true)][string]$RepoSlug,
         [string]$Token
@@ -146,8 +121,10 @@ function Get-AllPublishedReleases {
         if ($items.Count -eq 0) {
             break
         }
-        foreach ($item in @(Select-PublishedReleases -Releases $items)) {
-            [void]$all.Add($item)
+        foreach ($item in $items) {
+            if (-not [bool]$item.draft -and -not [bool]$item.prerelease) {
+                [void]$all.Add($item)
+            }
         }
         if ($items.Count -lt 100) {
             break
@@ -197,21 +174,12 @@ function ConvertTo-DisplayCount {
     param([Parameter(Mandatory = $true)][int]$Value)
 
     if ($Value -ge 1000000) {
-        return [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:0.####}M', ($Value / 1000000.0))
+        return ('{0:0.#}M' -f ($Value / 1000000.0))
     }
     if ($Value -ge 1000) {
-        return [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:0.#}K', ($Value / 1000.0))
+        return ('{0:0.#}K' -f ($Value / 1000.0))
     }
     return [string]$Value
-}
-
-function Get-DownloadBucket {
-    param([Parameter(Mandatory = $true)][int]$Value)
-
-    if ($Value -lt 0) {
-        throw 'Download count cannot be negative.'
-    }
-    return [int]([Math]::Floor($Value / 100.0) * 100)
 }
 
 function Escape-SvgText {
@@ -312,13 +280,17 @@ function Get-BadgePayload {
     )
 
     $repo = Invoke-GitHubApi -Path "repos/$RepoSlug" -Token $Token
-    $publishedReleases = @(Get-AllPublishedReleases -RepoSlug $RepoSlug -Token $Token)
-    $stableReleases = @(Select-StableReleases -Releases $publishedReleases)
-    if ($stableReleases.Count -eq 0) {
+    $releases = @(Get-AllStableReleases -RepoSlug $RepoSlug -Token $Token)
+    if ($releases.Count -eq 0) {
         throw "No stable GitHub releases found for $RepoSlug."
     }
-    $latest = Get-LatestStableRelease -Releases $stableReleases
-    $downloadCount = Get-TotalReleaseAssetDownloads -Releases $publishedReleases
+    $latest = Get-LatestStableRelease -Releases $releases
+    $downloadCount = 0
+    foreach ($release in $releases) {
+        foreach ($asset in @($release.assets)) {
+            $downloadCount += [int]$asset.download_count
+        }
+    }
 
     return [PSCustomObject]@{
         RepoSlug = $RepoSlug
@@ -367,12 +339,12 @@ function Test-BadgePayloadValuesEqual {
         ([string]$ExistingPayload.RepoSlug -eq [string]$NewPayload.RepoSlug) -and
         ([string]$ExistingPayload.LatestRelease -eq [string]$NewPayload.LatestRelease) -and
         ([string]$ExistingPayload.LatestReleaseName -eq [string]$NewPayload.LatestReleaseName) -and
-        ((Get-DownloadBucket -Value ([int]$ExistingPayload.TotalDownloads)) -eq (Get-DownloadBucket -Value ([int]$NewPayload.TotalDownloads))) -and
+        ([int]$ExistingPayload.TotalDownloads -eq [int]$NewPayload.TotalDownloads) -and
         ([int]$ExistingPayload.Stars -eq [int]$NewPayload.Stars)
     )
 }
 
-function Resolve-UnchangedBadgePayload {
+function Resolve-BadgePayloadTimestamp {
     param(
         [object]$ExistingPayload,
         [Parameter(Mandatory = $true)][object]$NewPayload
@@ -395,7 +367,6 @@ function Resolve-UnchangedBadgePayload {
                 Write-Warning "Existing GeneratedAtUtc is not ISO UTC; keeping raw value. $($_.Exception.Message)"
             }
         }
-        $NewPayload.TotalDownloads = [int]$ExistingPayload.TotalDownloads
         $NewPayload.GeneratedAtUtc = $existingTimestamp
     }
 
@@ -413,8 +384,7 @@ function Write-BadgeFiles {
     }
 
     $releaseSvg = New-BadgeSvg -Label 'RELEASE' -Message ([string]$Payload.LatestRelease) -LabelColor '2F334D' -MessageColor '9FE870'
-    $downloadBucket = Get-DownloadBucket -Value ([int]$Payload.TotalDownloads)
-    $downloadsSvg = New-BadgeSvg -Label 'DOWNLOADS' -Message (ConvertTo-DisplayCount -Value $downloadBucket) -LabelColor '4A4F63' -MessageColor 'FFB07C'
+    $downloadsSvg = New-BadgeSvg -Label 'DOWNLOADS' -Message (ConvertTo-DisplayCount -Value ([int]$Payload.TotalDownloads)) -LabelColor '4A4F63' -MessageColor 'FFB07C'
     $starsSvg = New-BadgeSvg -Label 'STARS' -Message (ConvertTo-DisplayCount -Value ([int]$Payload.Stars)) -LabelColor '2F334D' -MessageColor 'C6C4FF'
 
     Test-SafeBadgeSvg -Name 'release.svg' -Content $releaseSvg
@@ -506,7 +476,7 @@ function Update-BadgeBranch {
         if (($branchProbe -join "`n").Trim().Length -gt 0) {
             Invoke-Git -WorkingDirectory $repoPath -Arguments @('checkout', '-B', $BadgeBranch, "origin/$BadgeBranch") -FailureMessage 'Could not check out existing badge branch' | Out-Null
             Assert-OnlyAllowedBadgeTree -RepositoryPath $repoPath
-            $Payload = Resolve-UnchangedBadgePayload -ExistingPayload (Get-ExistingBadgePayload -RepositoryPath $repoPath) -NewPayload $Payload
+            $Payload = Resolve-BadgePayloadTimestamp -ExistingPayload (Get-ExistingBadgePayload -RepositoryPath $repoPath) -NewPayload $Payload
         }
         else {
             Invoke-Git -WorkingDirectory $repoPath -Arguments @('checkout', '--orphan', $BadgeBranch) -FailureMessage 'Could not create orphan badge branch' | Out-Null
@@ -576,112 +546,6 @@ function Invoke-CamoPurge {
             Write-Warning "Could not inspect rendered README page for Camo purge: $page - $($_.Exception.Message)"
         }
     }
-}
-
-function Invoke-BadgePolicySelfTest {
-    $releaseFixtures = @(
-        [PSCustomObject]@{
-            draft = $false
-            prerelease = $false
-            tag_name = 'v1.0.0'
-            assets = @([PSCustomObject]@{ download_count = 100 })
-        },
-        [PSCustomObject]@{
-            draft = $false
-            prerelease = $true
-            tag_name = 'v1.1.0-beta.1'
-            assets = @(
-                [PSCustomObject]@{ download_count = 20 },
-                [PSCustomObject]@{ download_count = 30 }
-            )
-        },
-        [PSCustomObject]@{
-            draft = $true
-            prerelease = $false
-            tag_name = 'v2.0.0-draft'
-            assets = @([PSCustomObject]@{ download_count = 1000 })
-        }
-    )
-    $publishedFixtures = @(Select-PublishedReleases -Releases $releaseFixtures)
-    $stableFixtures = @(Select-StableReleases -Releases $publishedFixtures)
-    if ($publishedFixtures.Count -ne 2 -or $stableFixtures.Count -ne 1) {
-        throw 'Published/stable release selection policy test failed.'
-    }
-    if ((Get-TotalReleaseAssetDownloads -Releases $publishedFixtures) -ne 150) {
-        throw 'Prerelease downloads were not included or draft downloads were not excluded.'
-    }
-
-    $displayCases = @(
-        @{ Value = 0; Bucket = 0; Display = '0' },
-        @{ Value = 99; Bucket = 0; Display = '0' },
-        @{ Value = 100; Bucket = 100; Display = '100' },
-        @{ Value = 199; Bucket = 100; Display = '100' },
-        @{ Value = 999; Bucket = 900; Display = '900' },
-        @{ Value = 1000; Bucket = 1000; Display = '1K' },
-        @{ Value = 1223; Bucket = 1200; Display = '1.2K' },
-        @{ Value = 1298; Bucket = 1200; Display = '1.2K' },
-        @{ Value = 1300; Bucket = 1300; Display = '1.3K' },
-        @{ Value = 1320; Bucket = 1300; Display = '1.3K' },
-        @{ Value = 1000000; Bucket = 1000000; Display = '1M' },
-        @{ Value = 1000100; Bucket = 1000100; Display = '1.0001M' }
-    )
-    foreach ($case in $displayCases) {
-        $bucket = Get-DownloadBucket -Value $case.Value
-        $display = ConvertTo-DisplayCount -Value $bucket
-        if ($bucket -ne $case.Bucket -or $display -ne $case.Display) {
-            throw "Download bucket test failed for $($case.Value): bucket=$bucket display=$display"
-        }
-    }
-
-    $base = [PSCustomObject]@{
-        RepoSlug = 'owner/repo'
-        GeneratedAtUtc = '2026-06-23T00:00:00.0000000+00:00'
-        GeneratedAtUtcRaw = '2026-06-23T00:00:00.0000000+00:00'
-        LatestRelease = 'v1.0.0'
-        LatestReleaseName = 'Release v1.0.0'
-        TotalDownloads = 1223
-        Stars = 10
-    }
-    $sameBucket = [PSCustomObject]@{
-        RepoSlug = 'owner/repo'
-        GeneratedAtUtc = '2026-06-23T06:00:00.0000000+00:00'
-        LatestRelease = 'v1.0.0'
-        LatestReleaseName = 'Release v1.0.0'
-        TotalDownloads = 1298
-        Stars = 10
-    }
-    if (-not (Test-BadgePayloadValuesEqual -ExistingPayload $base -NewPayload $sameBucket)) {
-        throw 'Same download bucket was incorrectly treated as changed.'
-    }
-    $resolved = Resolve-UnchangedBadgePayload -ExistingPayload $base -NewPayload $sameBucket
-    if ($resolved.TotalDownloads -ne 1223 -or $resolved.GeneratedAtUtc -ne $base.GeneratedAtUtcRaw) {
-        throw 'Unchanged badge values did not preserve the existing payload.'
-    }
-
-    foreach ($change in @(
-        @{ Name = 'download bucket'; Downloads = 1320; Stars = 10; Release = 'v1.0.0' },
-        @{ Name = 'stars'; Downloads = 1298; Stars = 11; Release = 'v1.0.0' },
-        @{ Name = 'release'; Downloads = 1298; Stars = 10; Release = 'v1.0.1' }
-    )) {
-        $candidate = [PSCustomObject]@{
-            RepoSlug = 'owner/repo'
-            GeneratedAtUtc = '2026-06-23T06:00:00.0000000+00:00'
-            LatestRelease = $change.Release
-            LatestReleaseName = if ($change.Release -eq 'v1.0.0') { 'Release v1.0.0' } else { 'Release v1.0.1' }
-            TotalDownloads = $change.Downloads
-            Stars = $change.Stars
-        }
-        if (Test-BadgePayloadValuesEqual -ExistingPayload $base -NewPayload $candidate) {
-            throw "$($change.Name) change was incorrectly treated as unchanged."
-        }
-    }
-
-    Write-Host 'Badge policy self-test passed.'
-}
-
-if ($PolicySelfTest) {
-    Invoke-BadgePolicySelfTest
-    return
 }
 
 $apiToken = $null
