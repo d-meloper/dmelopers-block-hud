@@ -21,7 +21,7 @@ $script:ResultPairs = [ordered]@{
     DMEL_EVENT   = '0'
     DMEL_AUDIOFILE = ''
 }
-$script:ServerLaunchContractVersion = 'hidden-window-v2'
+$script:ServerLaunchContractVersion = 'repeat-reopen-v3'
 $script:LastHeartbeatUnixSeconds = 0
 
 try {
@@ -337,6 +337,9 @@ function Clear-CurrentMediaState {
     $script:CurrentAudioPath = ''
     $script:HasMedia = $false
     $script:IsPlaying = $false
+    $script:MediaReachedEnd = $false
+    $script:LoopRestartPending = $false
+    $script:RestartOpenPending = $false
 }
 
 function Test-CurrentAudioAvailable {
@@ -351,6 +354,45 @@ function Test-CurrentAudioAvailable {
     Clear-CurrentMediaState -ClosePlayer
     Write-PlayerEvent -Status 'ERROR' -Code 'AUDIO_MISSING' -Message 'The Jukebox audio file is missing.' -Detail '' -AudioFile $missingAudio
     return $false
+}
+
+function Restart-CurrentMediaFromBeginning {
+    if (-not (Test-CurrentAudioAvailable)) {
+        return $false
+    }
+
+    $audioPath = [string]$script:CurrentAudioPath
+    try {
+        $script:Player.Stop()
+        $script:Player.Close()
+        $script:RestartOpenPending = $true
+        $script:IsPlaying = $false
+        $script:Player.Open([Uri]$audioPath)
+        $script:Player.Volume = ConvertTo-PlayerVolume -VolumePercent $script:PlaybackVolume
+        $script:HasMedia = $true
+        return $true
+    }
+    catch {
+        $audioFile = Get-AudioDisplayName -Path $audioPath
+        Clear-CurrentMediaState -ClosePlayer
+        Write-PlayerEvent -Status 'ERROR' -Code 'PLAYBACK_FAILED' -Message 'The Jukebox audio could not be played.' -Detail $_.Exception.Message -AudioFile $audioFile
+        return $false
+    }
+}
+
+function Complete-PendingLoopRestart {
+    if (-not $script:LoopRestartPending) {
+        return
+    }
+
+    $script:LoopRestartPending = $false
+    if ($script:LoopPlayback) {
+        [void](Restart-CurrentMediaFromBeginning)
+        return
+    }
+
+    $script:IsPlaying = $false
+    Write-PlayerEvent -Status 'OK' -Code 'TRACK_ENDED' -Message 'The Jukebox track ended.' -Detail '' -AudioFile (Get-AudioDisplayName -Path $script:CurrentAudioPath)
 }
 
 function Test-ProcessAlive {
@@ -431,10 +473,21 @@ function Reset-LegacyServerIfNeeded {
     }
 
     Write-CanonicalLogBlock -Type 'JukeboxPlayer' -Lines @(
-        '[WARN] Restarting Jukebox player server because its launch contract predates hidden-window startup.',
+        '[WARN] Restarting Jukebox player server because its runtime contract is outdated.',
         ('PID=' + [string]$serverPid)
     ) | Out-Null
-    Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue
+    try {
+        $process = Get-Process -Id $serverPid -ErrorAction Stop
+        Stop-Process -InputObject $process -Force -ErrorAction Stop
+        if (-not $process.WaitForExit(5000)) {
+            throw 'The outdated Jukebox player server did not exit within five seconds.'
+        }
+    }
+    catch {
+        if (Test-ProcessAlive -ProcessId $serverPid) {
+            throw
+        }
+    }
     Remove-Item -LiteralPath (Get-PidFilePath) -Force -ErrorAction SilentlyContinue
     Clear-ServerLaunchContract
     Clear-ServerHeartbeat
@@ -821,6 +874,9 @@ function Start-PlayerServer {
     $script:CurrentAudioPath = ''
     $script:HasMedia = $false
     $script:IsPlaying = $false
+    $script:MediaReachedEnd = $false
+    $script:LoopRestartPending = $false
+    $script:RestartOpenPending = $false
     $script:LoopPlayback = [bool]$Loop
     $script:PlaybackVolume = Get-ClampedVolumePercent -Value $Volume
     $script:Dispatcher = $null
@@ -832,18 +888,29 @@ function Start-PlayerServer {
         $script:Dispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
         $script:Player = New-Object System.Windows.Media.MediaPlayer
         $script:Player.Volume = ConvertTo-PlayerVolume -VolumePercent $script:PlaybackVolume
-        $script:Player.add_MediaEnded({
+        $script:Player.add_MediaOpened({
             try {
-                if ($script:LoopPlayback) {
-                    if (-not (Test-CurrentAudioAvailable)) {
-                        return
-                    }
-                    $script:Player.Position = [TimeSpan]::Zero
+                if ($script:RestartOpenPending) {
+                    $script:RestartOpenPending = $false
                     $script:Player.Play()
                     $script:IsPlaying = $true
+                    $script:MediaReachedEnd = $false
+                }
+            }
+            catch {
+                $audioFile = Get-AudioDisplayName -Path $script:CurrentAudioPath
+                Clear-CurrentMediaState -ClosePlayer
+                Write-PlayerEvent -Status 'ERROR' -Code 'PLAYBACK_FAILED' -Message 'The Jukebox audio could not be played.' -Detail $_.Exception.Message -AudioFile $audioFile
+            }
+        })
+        $script:Player.add_MediaEnded({
+            try {
+                $script:IsPlaying = $false
+                $script:MediaReachedEnd = $true
+                if ($script:LoopPlayback) {
+                    $script:LoopRestartPending = $true
                 }
                 else {
-                    $script:IsPlaying = $false
                     Write-PlayerEvent -Status 'OK' -Code 'TRACK_ENDED' -Message 'The Jukebox track ended.' -Detail '' -AudioFile (Get-AudioDisplayName -Path $script:CurrentAudioPath)
                 }
             }
@@ -882,17 +949,22 @@ function Start-PlayerServer {
                         Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
                         $name = [string]$commandData.Command
                         if ([string]::Equals($name, 'Stop', [System.StringComparison]::OrdinalIgnoreCase)) {
+                            $script:LoopRestartPending = $false
+                            $script:RestartOpenPending = $false
                             if ($script:Player) {
                                 $script:Player.Stop()
                                 $script:Player.Close()
                             }
                             $script:IsPlaying = $false
                             $script:HasMedia = $false
+                            $script:MediaReachedEnd = $false
                             $script:Dispatcher.BeginInvokeShutdown([System.Windows.Threading.DispatcherPriority]::Normal)
                             return
                         }
 
                         if ([string]::Equals($name, 'Pause', [System.StringComparison]::OrdinalIgnoreCase)) {
+                            $script:LoopRestartPending = $false
+                            $script:RestartOpenPending = $false
                             if ($script:Player -and $script:HasMedia -and $script:IsPlaying) {
                                 $script:Player.Pause()
                             }
@@ -902,6 +974,11 @@ function Start-PlayerServer {
 
                         if ([string]::Equals($name, 'SetLoop', [System.StringComparison]::OrdinalIgnoreCase)) {
                             $script:LoopPlayback = [bool]$commandData.Loop
+                            if (-not $script:LoopPlayback -and $script:RestartOpenPending) {
+                                $script:RestartOpenPending = $false
+                                $script:IsPlaying = $false
+                                Write-PlayerEvent -Status 'OK' -Code 'TRACK_ENDED' -Message 'The Jukebox track ended.' -Detail '' -AudioFile (Get-AudioDisplayName -Path $script:CurrentAudioPath)
+                            }
                             continue
                         }
 
@@ -914,6 +991,8 @@ function Start-PlayerServer {
                         }
 
                         if ([string]::Equals($name, 'Play', [System.StringComparison]::OrdinalIgnoreCase)) {
+                            $script:LoopRestartPending = $false
+                            $script:RestartOpenPending = $false
                             $script:LoopPlayback = [bool]$commandData.Loop
                             $script:PlaybackVolume = Get-CommandVolumePercent -CommandData $commandData -Fallback $script:PlaybackVolume
                             if ($script:Player) {
@@ -940,6 +1019,13 @@ function Start-PlayerServer {
                                 $script:CurrentAudioPath = $incomingAudio
                                 $script:HasMedia = $true
                                 $script:IsPlaying = $false
+                                $script:MediaReachedEnd = $false
+                                $script:RestartOpenPending = $false
+                            }
+
+                            if ($script:MediaReachedEnd) {
+                                [void](Restart-CurrentMediaFromBeginning)
+                                continue
                             }
 
                             if (-not $script:IsPlaying) {
@@ -960,6 +1046,7 @@ function Start-PlayerServer {
                         Write-PlayerEvent -Status 'ERROR' -Code 'COMMAND_FAILED' -Message 'The Jukebox command could not be completed.' -Detail $_.Exception.Message
                     }
                 }
+                Complete-PendingLoopRestart
             }
             catch {
                 Write-PlayerEvent -Status 'ERROR' -Code 'COMMAND_FAILED' -Message 'The Jukebox command could not be completed.' -Detail $_.Exception.Message
