@@ -136,6 +136,63 @@ function Save-Log {
     Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value $script:LogPath
 }
 
+function Write-VersionManagerLaunchDiagnostic {
+    param(
+        [AllowNull()][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Stage,
+        [AllowNull()][string]$LaunchTokenValue = '',
+        [AllowNull()][string]$Message = '',
+        [AllowNull()][object[]]$Details
+    )
+
+    try {
+        $logPath = Get-BlockHudCanonicalLogPath -Root $Root -ScriptRoot $PSScriptRoot
+        $lines = New-Object System.Collections.Generic.List[string]
+        $lines.Add(('timeUtc={0}' -f ((Get-Date).ToUniversalTime().ToString('o'))))
+        $lines.Add(('stage={0}' -f [string]$Stage))
+        $lines.Add(('pid={0}' -f [string]$PID))
+        if (-not [string]::IsNullOrWhiteSpace($Root)) {
+            $lines.Add(('root={0}' -f [string]$Root))
+        }
+        if (-not [string]::IsNullOrWhiteSpace($LaunchTokenValue)) {
+            $lines.Add(('launchToken={0}' -f [string]$LaunchTokenValue))
+        }
+        if (-not [string]::IsNullOrWhiteSpace($Message)) {
+            $lines.Add(('message={0}' -f [string]$Message))
+        }
+        foreach ($detail in @($Details)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$detail)) {
+                $lines.Add([string]$detail)
+            }
+        }
+        [void](Write-BlockHudCanonicalLogBlock -Path $logPath -Type 'VersionManagerLaunchDebug' -Lines $lines -Encoding $script:Utf8NoBom)
+
+        $summaryParts = New-Object System.Collections.Generic.List[string]
+        $summaryParts.Add(('stage={0}' -f [string]$Stage))
+        if (-not [string]::IsNullOrWhiteSpace($LaunchTokenValue)) {
+            $summaryParts.Add(('launchToken={0}' -f [string]$LaunchTokenValue))
+        }
+        if (-not [string]::IsNullOrWhiteSpace($Message)) {
+            $summaryParts.Add(('message={0}' -f [string]$Message))
+        }
+        foreach ($detail in @($Details)) {
+            $detailText = [string]$detail
+            if (-not [string]::IsNullOrWhiteSpace($detailText)) {
+                $summaryParts.Add($detailText)
+            }
+            if ($summaryParts.Count -ge 6) {
+                break
+            }
+        }
+        $summary = [string]::Join('; ', [string[]]$summaryParts.ToArray())
+        Write-Host ('[VersionManagerLaunchDebug] ' + $summary)
+        $rainmeterLevel = if ([string]$Stage -match '(?i)error|failed') { 'Error' } elseif ([string]$Stage -match '(?i)warn|timeout') { 'Warning' } else { 'Notice' }
+        Write-RainmeterRuntimeLog -Message ('VersionManagerLaunchDebug ' + $summary) -Level $rainmeterLevel
+    }
+    catch {
+    }
+}
+
 function Get-ObjectPropertyValue {
     param(
         [AllowNull()]$Object,
@@ -430,6 +487,9 @@ function Save-VersionManagerLaunchState {
             VersionManagerLaunchMessage = [string]$payload.Message
         })
     }
+    Write-VersionManagerLaunchDiagnostic -Root $Root -Stage ('state:' + [string]$Status) -LaunchTokenValue $LaunchTokenValue -Message $Message -Details @(
+        ('statePath={0}' -f (Get-VersionManagerLaunchStatePath -Root $Root))
+    )
 }
 
 function Wait-VersionManagerLaunchShown {
@@ -437,7 +497,8 @@ function Wait-VersionManagerLaunchShown {
         [Parameter(Mandatory = $true)][string]$Root,
         [string]$ExpectedLaunchToken = '',
         [int]$TimeoutMilliseconds = 5000,
-        [int]$PollMilliseconds = 100
+        [int]$PollMilliseconds = 100,
+        [AllowNull()][System.Diagnostics.Process]$Process
     )
 
     $statePath = Get-VersionManagerLaunchStatePath -Root $Root
@@ -445,6 +506,8 @@ function Wait-VersionManagerLaunchShown {
     $lastStatus = ''
     $lastMessage = ''
     $lastToken = ''
+    $observedProcessExit = $false
+    $observedExitCode = ''
     do {
         try {
             $state = Read-JsonFile -Path $statePath
@@ -475,6 +538,28 @@ function Wait-VersionManagerLaunchShown {
             $lastMessage = $_.Exception.Message
         }
 
+        if ($null -ne $Process) {
+            try {
+                $Process.Refresh()
+                if ($Process.HasExited) {
+                    $observedProcessExit = $true
+                    $observedExitCode = [string]$Process.ExitCode
+                    if (-not [string]::Equals($lastStatus, 'shown', [System.StringComparison]::OrdinalIgnoreCase)) {
+                        $message = ("Skins window session exited before reporting shown. processId={0}; exitCode={1}; observedToken={2}; observedStatus={3}" -f $Process.Id, $observedExitCode, $lastToken, $lastStatus)
+                        return [PSCustomObject]@{
+                            Status = 'ERROR'
+                            Message = $message
+                            ObservedStatus = $lastStatus
+                            ObservedToken = $lastToken
+                        }
+                    }
+                }
+            }
+            catch {
+                $lastMessage = $_.Exception.Message
+            }
+        }
+
         if ([DateTime]::UtcNow -ge $deadline) {
             break
         }
@@ -483,7 +568,7 @@ function Wait-VersionManagerLaunchShown {
 
     return [PSCustomObject]@{
         Status = 'WARN'
-        Message = ("Skins launch was started, but the window did not report shown before the confirmation timeout. expectedToken={0}; observedToken={1}; observedStatus={2}" -f [string]$ExpectedLaunchToken, $lastToken, $lastStatus)
+        Message = ("Skins launch was started, but the window did not report shown before the confirmation timeout. expectedToken={0}; observedToken={1}; observedStatus={2}; processExited={3}; exitCode={4}" -f [string]$ExpectedLaunchToken, $lastToken, $lastStatus, $observedProcessExit, $observedExitCode)
         ObservedStatus = $lastStatus
         ObservedToken = $lastToken
     }
@@ -612,6 +697,20 @@ function Invoke-RainmeterBang {
     $exitCode = $LASTEXITCODE
     if ($null -ne $exitCode -and $exitCode -ne 0) {
         throw "Rainmeter bang failed with exit code ${exitCode}: $Bang"
+    }
+}
+
+function Write-RainmeterRuntimeLog {
+    param(
+        [Parameter(Mandatory = $true)][string]$Message,
+        [ValidateSet('Notice', 'Warning', 'Error')][string]$Level = 'Notice'
+    )
+
+    try {
+        $text = '[DMeloper Block HUD] ' + ([string]$Message)
+        Invoke-RainmeterBang -Bang '!Log' -Arguments @($text, $Level)
+    }
+    catch {
     }
 }
 
@@ -1988,7 +2087,11 @@ function Start-VersionManagerLauncherForRoot {
     Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value $script:LogPath
     Save-VersionManagerLaunchState -Root $resolvedTargetRoot -Status 'launching' -LaunchTokenValue $LaunchToken
 
+    Write-VersionManagerLaunchDiagnostic -Root $resolvedTargetRoot -Stage 'launcher-before-session-cleanup' -LaunchTokenValue $LaunchToken -Details @(
+        ('script={0}' -f $PSCommandPath)
+    )
     Stop-VersionManagerSessions -ResolvedTargetRoot $resolvedTargetRoot
+    Write-VersionManagerLaunchDiagnostic -Root $resolvedTargetRoot -Stage 'launcher-after-session-cleanup' -LaunchTokenValue $LaunchToken
 
     $powershellExe = Get-PowerShellExecutablePath
     $command = '& ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $PSCommandPath) +
@@ -2004,14 +2107,29 @@ function Start-VersionManagerLauncherForRoot {
         '-EncodedCommand'
         $encodedCommand
     )
-    $startedProcess = Start-Process -FilePath $powershellExe -ArgumentList $argumentList -WindowStyle Hidden -PassThru
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $powershellExe
+    $startInfo.Arguments = ($argumentList -join ' ')
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startedProcess = [System.Diagnostics.Process]::Start($startInfo)
+    if ($null -eq $startedProcess) {
+        throw 'The Skin manager window session process could not be started.'
+    }
+    Write-Log ("Started version manager window session PID {0}" -f $startedProcess.Id)
+    Write-VersionManagerLaunchDiagnostic -Root $resolvedTargetRoot -Stage 'launcher-child-started' -LaunchTokenValue $LaunchToken -Details @(
+        ('childPid={0}' -f $startedProcess.Id),
+        ('powershell={0}' -f $powershellExe)
+    )
+    return $startedProcess
 }
 
 function Start-VersionManagerLauncherForSupportedRoot {
     param([Parameter(Mandatory = $true)][string]$ResolvedTargetRoot)
 
     if (Test-VersionManagerSupportedSkinRoot -Root $ResolvedTargetRoot) {
-        Start-VersionManagerLauncherForRoot -ResolvedTargetRoot $ResolvedTargetRoot
+        [void](Start-VersionManagerLauncherForRoot -ResolvedTargetRoot $ResolvedTargetRoot)
         return $true
     }
 
@@ -2025,8 +2143,12 @@ function Start-VersionManagerLauncherForSupportedRoot {
 
 function Start-VersionManagerLauncher {
     $root = Get-TargetRoot
-    Start-VersionManagerLauncherForRoot -ResolvedTargetRoot $root
-    $launchResult = Wait-VersionManagerLaunchShown -Root $root -ExpectedLaunchToken $LaunchToken
+    $process = Start-VersionManagerLauncherForRoot -ResolvedTargetRoot $root
+    $launchResult = Wait-VersionManagerLaunchShown -Root $root -ExpectedLaunchToken $LaunchToken -Process $process
+    Write-VersionManagerLaunchDiagnostic -Root $root -Stage ('launcher-wait-' + [string]$launchResult.Status) -LaunchTokenValue $LaunchToken -Message ([string]$launchResult.Message) -Details @(
+        ('observedStatus={0}' -f [string]$launchResult.ObservedStatus),
+        ('observedToken={0}' -f [string]$launchResult.ObservedToken)
+    )
     return $launchResult
 }
 
@@ -2039,6 +2161,9 @@ function Start-VersionManager {
     $script:LogPath = Get-BlockHudCanonicalLogPath -Root $root -ScriptRoot $PSScriptRoot
     Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value $script:LogPath
     Save-VersionManagerLaunchState -Root $root -Status 'initializing' -LaunchTokenValue $LaunchToken
+    Write-VersionManagerLaunchDiagnostic -Root $root -Stage 'window-session-initializing' -LaunchTokenValue $LaunchToken -Details @(
+        ('script={0}' -f $PSCommandPath)
+    )
 
     $ui = [ordered]@{}
     $ui.Root = $root
@@ -3529,6 +3654,7 @@ try {
 catch {
     Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'ERROR'
     Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value (T 'Helper_VersionManager_Result_OpenFailed' 'Skins could not be opened. Check the log file for details.')
+    $failedRoot = ''
     try {
         $failedRoot = Get-TargetRoot
         if (-not [string]::IsNullOrWhiteSpace($failedRoot) -and (Test-Path -LiteralPath $failedRoot -PathType Container)) {
@@ -3537,6 +3663,9 @@ catch {
     }
     catch {
     }
+    Write-VersionManagerLaunchDiagnostic -Root $failedRoot -Stage 'top-level-error' -LaunchTokenValue $LaunchToken -Message $_.Exception.Message -Details @(
+        $_.Exception.ToString()
+    )
     Write-Log $_.Exception.Message 'ERROR'
     if ($_.InvocationInfo) {
         Write-Log ("at {0}, {1}: line {2}" -f $_.InvocationInfo.MyCommand, $_.InvocationInfo.ScriptName, $_.InvocationInfo.ScriptLineNumber) 'ERROR'

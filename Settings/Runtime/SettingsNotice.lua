@@ -195,6 +195,7 @@ return function(app)
         state.versionManagerLaunchLastStatus = ''
         state.versionManagerLaunchLastObservedToken = ''
         writeVersionManagerLaunchState(token, 'launching', '')
+        logNotice('Version manager launch debug: stage=pending-begin | launchToken=' .. tostring(token))
         if methods.setLoadingVisible then
             methods.setLoadingVisible(true, methods.localize('Settings_Notice_VersionManagerOpening', 'Opening Skins...\nPlease wait.'))
         end
@@ -207,12 +208,16 @@ return function(app)
     end
 
     function methods.clearVersionManagerLaunchPending(options)
+        local token = trim(state.versionManagerLaunchToken or '')
         state.versionManagerLaunchPending = false
         state.versionManagerLaunchStartedAt = 0
         state.versionManagerLaunchToken = ''
         state.versionManagerLaunchLastStatus = ''
         state.versionManagerLaunchLastObservedToken = ''
         writeVersionManagerLaunchState('', '', '')
+        if token ~= '' then
+            logNotice('Version manager launch debug: stage=pending-clear | launchToken=' .. tostring(token))
+        end
         if methods.setLoadingVisible then
             methods.setLoadingVisible(false)
         end
@@ -235,7 +240,7 @@ return function(app)
         local now = nowWallClockSeconds()
         local startedAt = tonumber(state.versionManagerLaunchStartedAt) or 0
         if startedAt > 0 and (now - startedAt) >= VERSION_MANAGER_LAUNCH_TIMEOUT_SECONDS then
-            logNotice('Version manager launch state timed out while waiting for the window to appear.')
+            logNotice('Version manager launch debug: stage=pending-timeout | launchToken=' .. tostring(state.versionManagerLaunchToken or '') .. ' | timeoutSeconds=' .. tostring(VERSION_MANAGER_LAUNCH_TIMEOUT_SECONDS))
             methods.clearVersionManagerLaunchPending()
             return
         end
@@ -253,6 +258,7 @@ return function(app)
 
         state.versionManagerLaunchLastStatus = status
         state.versionManagerLaunchLastObservedToken = observedToken
+        logNotice('Version manager launch debug: stage=poll-state | expectedToken=' .. tostring(expectedToken) .. ' | observedToken=' .. tostring(observedToken) .. ' | status=' .. tostring(status) .. ' | matched=' .. tostring(matched))
 
         if matched and status == 'shown' then
             methods.clearVersionManagerLaunchPending()
@@ -260,7 +266,7 @@ return function(app)
         end
 
         if matched and status == 'error' then
-            logNotice('Version manager launch state reported an error before the window was shown.')
+            logNotice('Version manager launch debug: stage=poll-error | launchToken=' .. tostring(expectedToken))
             methods.clearVersionManagerLaunchPending()
         end
     end
