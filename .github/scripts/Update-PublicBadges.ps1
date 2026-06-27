@@ -108,7 +108,31 @@ function Invoke-GitHubApi {
     return $result
 }
 
-function Get-AllStableReleases {
+function Select-PublishedReleases {
+    param([Parameter(Mandatory = $true)][object[]]$Releases)
+
+    return @($Releases | Where-Object { -not [bool]$_.draft })
+}
+
+function Select-StableReleases {
+    param([Parameter(Mandatory = $true)][object[]]$Releases)
+
+    return @($Releases | Where-Object { -not [bool]$_.draft -and -not [bool]$_.prerelease })
+}
+
+function Get-TotalReleaseAssetDownloads {
+    param([Parameter(Mandatory = $true)][object[]]$Releases)
+
+    $total = 0
+    foreach ($release in $Releases) {
+        foreach ($asset in @($release.assets)) {
+            $total += [int]$asset.download_count
+        }
+    }
+    return $total
+}
+
+function Get-AllPublishedReleases {
     param(
         [Parameter(Mandatory = $true)][string]$RepoSlug,
         [string]$Token
@@ -121,10 +145,8 @@ function Get-AllStableReleases {
         if ($items.Count -eq 0) {
             break
         }
-        foreach ($item in $items) {
-            if (-not [bool]$item.draft -and -not [bool]$item.prerelease) {
-                [void]$all.Add($item)
-            }
+        foreach ($item in @(Select-PublishedReleases -Releases $items)) {
+            [void]$all.Add($item)
         }
         if ($items.Count -lt 100) {
             break
@@ -280,17 +302,13 @@ function Get-BadgePayload {
     )
 
     $repo = Invoke-GitHubApi -Path "repos/$RepoSlug" -Token $Token
-    $releases = @(Get-AllStableReleases -RepoSlug $RepoSlug -Token $Token)
-    if ($releases.Count -eq 0) {
+    $publishedReleases = @(Get-AllPublishedReleases -RepoSlug $RepoSlug -Token $Token)
+    $stableReleases = @(Select-StableReleases -Releases $publishedReleases)
+    if ($stableReleases.Count -eq 0) {
         throw "No stable GitHub releases found for $RepoSlug."
     }
-    $latest = Get-LatestStableRelease -Releases $releases
-    $downloadCount = 0
-    foreach ($release in $releases) {
-        foreach ($asset in @($release.assets)) {
-            $downloadCount += [int]$asset.download_count
-        }
-    }
+    $latest = Get-LatestStableRelease -Releases $stableReleases
+    $downloadCount = Get-TotalReleaseAssetDownloads -Releases $publishedReleases
 
     return [PSCustomObject]@{
         RepoSlug = $RepoSlug
