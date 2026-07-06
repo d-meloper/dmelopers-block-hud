@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$TargetRoot,
-    [switch]$EmitResultPairs
+    [switch]$EmitResultPairs,
+    [switch]$NoOpen
 )
 
 Set-StrictMode -Version 2.0
@@ -86,13 +87,62 @@ function Save-Log {
     Write-Host ("Log: {0}" -f $script:LogPath)
 }
 
+function Format-DiagnosticValue {
+    param([AllowNull()][string]$Value)
+
+    if ($null -eq $Value) {
+        return '<null>'
+    }
+
+    $text = [string]$Value
+    $builder = New-Object System.Text.StringBuilder
+    foreach ($character in $text.ToCharArray()) {
+        $code = [int][char]$character
+        if ($code -lt 32) {
+            [void]$builder.Append(('<U+{0:X4}>' -f $code))
+        }
+        else {
+            [void]$builder.Append($character)
+        }
+    }
+
+    $result = $builder.ToString()
+    if ($result.Length -gt 180) {
+        return $result.Substring(0, 180) + '...'
+    }
+    return $result
+}
+
+function Normalize-PathArgument {
+    param([AllowNull()][string]$Path)
+
+    if ($null -eq $Path) {
+        return ''
+    }
+
+    $normalized = ([string]$Path).Replace([string][char]0, '').Trim()
+    do {
+        $previous = $normalized
+        if ($normalized.Length -ge 2) {
+            $first = $normalized[0]
+            $last = $normalized[$normalized.Length - 1]
+            if (($first -eq '"' -and $last -eq '"') -or ($first -eq "'" -and $last -eq "'")) {
+                $normalized = $normalized.Substring(1, $normalized.Length - 2).Trim()
+            }
+        }
+    } while ($normalized -ne $previous)
+
+    return $normalized
+}
+
 function Resolve-FullPath {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [switch]$AllowMissing
     )
 
-    $expanded = [Environment]::ExpandEnvironmentVariables($Path)
+    $normalizedPath = Normalize-PathArgument -Path $Path
+    $expanded = Normalize-PathArgument -Path ([Environment]::ExpandEnvironmentVariables($normalizedPath))
     if ([string]::IsNullOrWhiteSpace($expanded)) {
         throw 'Path is empty.'
     }
@@ -141,7 +191,12 @@ function Resolve-PreferredLogDirectory {
     }
 
     try {
-        $resolvedTargetRoot = Resolve-FullPath -Path $RequestedTargetRoot
+        $normalizedRequestedTargetRoot = Normalize-PathArgument -Path $RequestedTargetRoot
+        if ($normalizedRequestedTargetRoot -ne [string]$RequestedTargetRoot) {
+            Write-Log ("Normalized TargetRoot argument for log folder open: raw={0}; normalized={1}" -f (Format-DiagnosticValue -Value $RequestedTargetRoot), (Format-DiagnosticValue -Value $normalizedRequestedTargetRoot))
+        }
+
+        $resolvedTargetRoot = Resolve-FullPath -Path $normalizedRequestedTargetRoot
         $script:ResolvedTargetRoot = $resolvedTargetRoot
         if (-not (Test-SkinRoot -Root $resolvedTargetRoot)) {
             Write-Log "TargetRoot is not a valid skin root; falling back to script-root logs: $resolvedTargetRoot" 'WARN'
@@ -199,7 +254,9 @@ function Invoke-OpenLogFolder {
     }
     Write-Log "LogFolder: $targetLogDirectory"
 
-    Start-DetachedExplorer -Target $targetLogDirectory
+    if (-not $NoOpen) {
+        Start-DetachedExplorer -Target $targetLogDirectory
+    }
     Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'OK'
     Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value 'Opened settings helper log folder.'
 }

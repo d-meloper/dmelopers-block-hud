@@ -26,25 +26,6 @@ function Write-OutputPair {
     [Console]::Out.WriteLine($Key + '=' + [string]$Value)
 }
 
-function Write-RainmeterLog {
-    param(
-        [Parameter(Mandatory = $true)][string]$Message,
-        [ValidateSet('Notice', 'Warning', 'Error')][string]$Level = 'Notice'
-    )
-
-    try {
-        $rainmeter = Get-Process -Name 'Rainmeter' -ErrorAction SilentlyContinue |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_.Path) } |
-            Select-Object -First 1 -ExpandProperty Path
-        if ([string]::IsNullOrWhiteSpace($rainmeter) -or -not (Test-Path -LiteralPath $rainmeter)) {
-            return
-        }
-        & $rainmeter '!Log' ('[DMeloper Block HUD] VersionManagerLauncher ' + [string]$Message) $Level | Out-Null
-    }
-    catch {
-    }
-}
-
 function Get-LauncherLogPath {
     try {
         $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -92,7 +73,6 @@ function Emit-LauncherFailure {
     param([Parameter(Mandatory = $true)][string]$Message)
 
     Write-LauncherFileLog -Stage 'error' -Message $Message
-    Write-RainmeterLog -Message ('ERROR ' + $Message) -Level 'Error'
     if ($EmitResultPairs) {
         Write-OutputPair -Key 'DMEL_STATUS' -Value 'ERROR'
         Write-OutputPair -Key 'DMEL_MESSAGE' -Value $Message
@@ -120,7 +100,6 @@ function Get-HelperParameterSet {
     }
     catch {
         Write-LauncherFileLog -Stage 'parameter-detection-error' -Message $_.Exception.Message
-        Write-RainmeterLog -Message ('parameter-detection-error ' + $_.Exception.Message) -Level 'Warning'
     }
     return ,$result
 }
@@ -222,9 +201,6 @@ function Invoke-HelperProcess {
 }
 
 try {
-    Write-LauncherFileLog -Stage 'start' -Message 'Settings launcher wrapper started.'
-    Write-RainmeterLog -Message ('start launchToken=' + [string]$LaunchToken) -Level 'Notice'
-
     $helperPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\tools\OpenVersionManager.ps1'))
     if (-not (Test-Path -LiteralPath $helperPath -PathType Leaf)) {
         throw ("OpenVersionManager helper was not found: {0}" -f $helperPath)
@@ -235,23 +211,11 @@ try {
     if ($supportedParameters.Contains('TargetRoot')) {
         $helperParameters['TargetRoot'] = $TargetRoot
     }
-    else {
-        Write-LauncherFileLog -Stage 'legacy-helper-missing-target-root' -Message 'OpenVersionManager helper does not declare TargetRoot.'
-        Write-RainmeterLog -Message 'legacy-helper-missing-target-root' -Level 'Warning'
-    }
     if ($supportedParameters.Contains('LaunchToken')) {
         $helperParameters['LaunchToken'] = $LaunchToken
     }
-    else {
-        Write-LauncherFileLog -Stage 'legacy-helper-missing-launch-token' -Message 'OpenVersionManager helper does not declare LaunchToken; launching without a token for mixed-version compatibility.'
-        Write-RainmeterLog -Message 'legacy-helper-missing-launch-token' -Level 'Warning'
-    }
     if ($EmitResultPairs -and $supportedParameters.Contains('EmitResultPairs')) {
         $helperParameters['EmitResultPairs'] = $true
-    }
-    elseif ($EmitResultPairs) {
-        Write-LauncherFileLog -Stage 'legacy-helper-missing-result-pairs' -Message 'OpenVersionManager helper does not declare EmitResultPairs.'
-        Write-RainmeterLog -Message 'legacy-helper-missing-result-pairs' -Level 'Warning'
     }
 
     $result = Invoke-HelperProcess -HelperPath $helperPath -Parameters $helperParameters

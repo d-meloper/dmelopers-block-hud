@@ -1,0 +1,736 @@
+-- Split from @Resources\Defaults\Runtime\luas\data\EditorItemService.lua lines 769-1503.
+function EditorItemService.GetPaths(R)
+    return {
+        HotbarData = R .. "Customs\\Data\\HotbarItems.inc",
+        InventoryData = R .. "Customs\\Data\\InventoryItems.inc",
+        InventorySettings = R .. "Customs\\Settings\\Inventory.inc",
+        Draft = R .. "Customs\\Data\\EditorDraft.inc",
+        ProgramPickerCache = R .. "Customs\\Data\\EditorProgramPickerCache.txt",
+        ProgramActionLabels = R .. "Customs\\Data\\ProgramActionLabels.txt",
+        FavoritesCatalog = R .. "Customs\\Data\\EditorFavoritesCatalog.txt",
+        ItemImageDirectory = ensureTrailingSlash(R .. "Customs\\Images\\Items"),
+        RuntimeImageDirectory = ensureTrailingSlash(R .. "Defaults\\Runtime\\images"),
+    }
+end
+
+function EditorItemService.NormalizeSource(source)
+    return normalizeSource(source)
+end
+
+function EditorItemService.IsReservedHotbarSlot(source, x, y)
+    return normalizeSource(source) == "hotbar"
+        and toNumber(x, 0) == RESERVED_SLOT10.x
+        and toNumber(y, 0) == RESERVED_SLOT10.y
+end
+
+function EditorItemService.GetSourceDataPath(R, source)
+    local paths = EditorItemService.GetPaths(R)
+    source = normalizeSource(source)
+
+    if source == "hotbar" then
+        return paths.HotbarData
+    end
+
+    if source == "inventory" then
+        return paths.InventoryData
+    end
+
+    return nil
+end
+
+function EditorItemService.GetSectionName(source, x, y)
+    source = normalizeSource(source)
+    x = toNumber(x, nil)
+    y = toNumber(y, nil)
+
+    if not source or not x or not y then
+        return nil
+    end
+
+    if source == "hotbar" then
+        return string.format("Slot%02d", x)
+    end
+
+    return string.format("SlotX%dY%d", x, y)
+end
+
+function EditorItemService.IsEmptyItemSection(section)
+    if type(section) ~= "table" then
+        return true
+    end
+
+    local qty = toNumber(section.Qty, 0)
+    return trim(section.Image) == ""
+        and trim(section.Label) == ""
+        and normalizeAction(section.Action) == ""
+        and qty == 0
+end
+
+function EditorItemService.GetCoordBounds(source, useBottomSlot)
+    source = normalizeSource(source)
+
+    if source == "hotbar" then
+        return {
+            XMin = 1,
+            XMax = 9,
+            YMin = 1,
+            YMax = 1,
+        }
+    end
+
+    if source == "inventory" then
+        return {
+            XMin = 1,
+            XMax = 9,
+            YMin = useBottomSlot and 1 or 2,
+            YMax = 4,
+        }
+    end
+
+    return nil
+end
+
+function EditorItemService.IsValidCoord(source, x, y, useBottomSlot)
+    if EditorItemService.IsReservedHotbarSlot(source, x, y) then
+        return false
+    end
+
+    local bounds = EditorItemService.GetCoordBounds(source, useBottomSlot)
+    x = toNumber(x, nil)
+    y = toNumber(y, nil)
+
+    if not bounds or not x or not y then
+        return false
+    end
+
+    return x >= bounds.XMin and x <= bounds.XMax
+        and y >= bounds.YMin and y <= bounds.YMax
+end
+
+function EditorItemService.GetPersistedUseBottomSlot(R)
+    local sections = readSections(R, EditorItemService.GetPaths(R).InventorySettings)
+    local variables = sections.Variables or {}
+    return trim(variables.UseInventoryBottomRow) == "1"
+end
+
+function EditorItemService.GetUseBottomSlot(R)
+    return EditorItemService.GetPersistedUseBottomSlot(R)
+end
+
+local function getImageExtension(imageAsset)
+    local extension = trim(imageAsset):match("%.([^%.]+)$")
+    if not extension then
+        return ""
+    end
+
+    return extension:lower()
+end
+
+local function stripImageExtension(imageAsset)
+    local normalized = trim(imageAsset)
+    return normalized:gsub("%.[^%.]+$", "")
+end
+
+local function splitSegments(value, pattern)
+    local segments = {}
+    for segment in tostring(value or ""):gmatch(pattern) do
+        if segment ~= "" then
+            segments[#segments + 1] = segment
+        end
+    end
+    return segments
+end
+
+local function humanizeAppToken(value)
+    local normalized = trim(value)
+    if normalized == "" then
+        return ""
+    end
+
+    normalized = normalized:gsub("[_%-%+]+", " ")
+    normalized = normalized:gsub("([%l%d])([%u])", "%1 %2")
+    normalized = normalized:gsub("(%u)(%u%l)", "%1 %2")
+    normalized = normalized:gsub("%s+", " ")
+
+    return trim(normalized)
+end
+
+local function extractAppsFolderAppId(action)
+    local normalized = trim(action):gsub("/", "\\")
+    return normalized:match("[Ss][Hh][Ee][Ll][Ll]:[Aa][Pp][Pp][Ss][Ff][Oo][Ll][Dd][Ee][Rr]\\+(.+)$")
+end
+
+local function readUtf8TextFile(path)
+    local content = readTextFileAuto(path)
+    if not content then
+        return nil
+    end
+    return content
+end
+
+local lookupCachesByRoot = {}
+
+local function getLookupCache(R)
+    local root = trim(R)
+    local cache = lookupCachesByRoot[root]
+    if cache then
+        return cache
+    end
+
+    cache = {}
+    lookupCachesByRoot[root] = cache
+    return cache
+end
+
+local function clearLookupCache(R, key)
+    local cache = getLookupCache(R)
+    cache[key] = nil
+end
+
+local function getOrBuildLookupCache(R, key, builder)
+    local cache = getLookupCache(R)
+    local cached = cache[key]
+    if cached ~= nil then
+        return cached
+    end
+
+    local built = builder()
+    cache[key] = built
+    return built
+end
+
+local function readProgramActionLabels(R)
+    return getOrBuildLookupCache(R, "programActionLabels", function()
+        if trim(R) == "" then
+            return {}
+        end
+
+        local path = EditorItemService.GetPaths(R).ProgramActionLabels
+        local content = readUtf8TextFile(path)
+        if not content then
+            return {}
+        end
+
+        local labels = {}
+        for line in content:gmatch("[^\r\n]+") do
+            local actionValue, label = line:match("^([^\t]+)\t(.*)$")
+            actionValue = trim(actionValue)
+            label = trim(label)
+            if actionValue ~= "" and label ~= "" then
+                labels[actionValue] = label
+            end
+        end
+
+        return labels
+    end)
+end
+
+local function readProgramPickerCacheLabels(R)
+    return getOrBuildLookupCache(R, "programPickerLabels", function()
+        if trim(R) == "" then
+            return {}
+        end
+
+        local path = EditorItemService.GetPaths(R).ProgramPickerCache
+        local content = readUtf8TextFile(path)
+        if not content then
+            return {}
+        end
+
+        local labels = {}
+        for line in content:gmatch("[^\r\n]+") do
+            local appId, label = line:match("^([^\t]+)\t(.*)$")
+            appId = trim(appId)
+            label = trim(label)
+            if appId ~= "" and label ~= "" then
+                labels[appId] = label
+            end
+        end
+
+        return labels
+    end)
+end
+
+local function lookupProgramPickerLabel(R, actionOrAppId)
+    local appId = extractAppsFolderAppId(actionOrAppId) or trim(actionOrAppId)
+    if appId == "" then
+        return nil
+    end
+
+    return readProgramPickerCacheLabels(R)[appId]
+end
+
+local function readFavoriteCatalogEntries(R)
+    return getOrBuildLookupCache(R, "favoriteCatalogEntries", function()
+        local entries = {}
+
+        for _, entry in ipairs(BUILT_IN_FAVORITES) do
+            entries[#entries + 1] = {
+                Label = trim(entry.Label),
+                Action = normalizeAction(entry.Action),
+            }
+        end
+
+        if trim(R) == "" then
+            return entries
+        end
+
+        local path = EditorItemService.GetPaths(R).FavoritesCatalog
+        local content = readUtf8TextFile(path)
+        if not content then
+            return entries
+        end
+
+        for line in content:gmatch("[^\r\n]+") do
+            if not line:match("^%s*#") then
+                local label, action = line:match("^([^\t]+)\t(.*)$")
+                label = trim(label)
+                action = normalizeAction(action)
+                if label ~= "" and action ~= "" then
+                    entries[#entries + 1] = {
+                        Label = label,
+                        Action = action,
+                    }
+                end
+            end
+        end
+
+        return entries
+    end)
+end
+
+local function lookupFavoriteCatalogLabel(R, action)
+    local normalizedAction = normalizeAction(action)
+    if normalizedAction == "" then
+        return nil
+    end
+
+    local entries = readFavoriteCatalogEntries(R)
+    for index = #entries, 1, -1 do
+        local entry = entries[index]
+        if normalizeAction(entry.Action) == normalizedAction then
+            return trim(entry.Label)
+        end
+    end
+
+    return nil
+end
+
+local function describeAppsFolderAction(action, R)
+    local directLabel = readProgramActionLabels(R)[trim(action)]
+    if directLabel and directLabel ~= "" then
+        return directLabel
+    end
+
+    local appId = extractAppsFolderAppId(action)
+    if not appId then
+        return nil
+    end
+
+    local cachedLabel = lookupProgramPickerLabel(R, appId)
+    if cachedLabel and cachedLabel ~= "" then
+        return cachedLabel
+    end
+
+    local packageAndApp = splitSegments(appId, "[^!]+")
+    local packageFamily = packageAndApp[1] or ""
+    local packageName = trim(packageFamily:match("^(.-)_[^_]+$") or packageFamily)
+    local packageSegments = splitSegments(packageName, "[^%.]+")
+    local appToken = trim(packageAndApp[2] or "")
+    local pathLeaf = trim(appId:match("([^/\\]+)$") or "")
+    local pathStem = trim(pathLeaf:gsub("%.[^%.]+$", ""))
+    local pathSegments = splitSegments(appId, "[^/\\]+")
+    local parentSegment = ""
+    if #pathSegments > 1 then
+        parentSegment = trim(pathSegments[#pathSegments - 1])
+        if parentSegment:match("^%b{}$") then
+            parentSegment = ""
+        end
+    end
+
+    local candidate = ""
+    if appToken ~= "" and appToken:lower() ~= "app" then
+        candidate = humanizeAppToken(appToken)
+    end
+
+    if candidate == "" and pathStem ~= "" then
+        candidate = humanizeAppToken(pathStem)
+    end
+
+    if candidate == "" and parentSegment ~= "" and parentSegment:lower() ~= pathStem:lower() then
+        candidate = humanizeAppToken(parentSegment)
+    end
+
+    if candidate == "" and #packageSegments > 0 then
+        candidate = humanizeAppToken(packageSegments[#packageSegments])
+    end
+
+    if candidate == "" then
+        candidate = humanizeAppToken(packageName)
+    end
+
+    if candidate ~= "" then
+        return candidate
+    end
+
+    return appId
+end
+
+local function normalizeImageAsset(imageAsset)
+    local asset = trim(imageAsset):gsub("/", "\\")
+    if asset == "" then
+        return ""
+    end
+
+    if asset:find("\\", 1, true)
+        or asset:find("#", 1, true)
+        or asset:find("[", 1, true)
+        or asset:find("]", 1, true)
+        or asset:find('"', 1, true)
+        or asset:find(";", 1, true)
+        or asset:find("|", 1, true)
+        or asset:find(":", 1, true)
+        or asset:find("<", 1, true)
+        or asset:find(">", 1, true)
+        or asset:find("?", 1, true)
+        or asset:find("*", 1, true)
+        or asset:find("%c") then
+        return nil
+    end
+
+    local extension = getImageExtension(asset)
+    if extension == "" then
+        asset = asset .. ".png"
+        extension = "png"
+    end
+
+    if not SUPPORTED_IMAGE_EXTENSIONS[extension] then
+        return nil
+    end
+
+    return asset
+end
+
+local function isReservedRuntimeImageAsset(imageAsset)
+    local asset = normalizeImageAsset(imageAsset)
+    return asset ~= nil and asset:lower() == "more.png"
+end
+
+function EditorItemService.NormalizeImageAsset(imageAsset)
+    return normalizeImageAsset(imageAsset)
+end
+
+function EditorItemService.IsReservedRuntimeImageAsset(imageAsset)
+    return isReservedRuntimeImageAsset(imageAsset)
+end
+
+function EditorItemService.GetImageAdjustmentKey(imageAsset)
+    local asset = normalizeImageAsset(imageAsset) or trim(imageAsset)
+    return stripImageExtension(asset)
+end
+
+function EditorItemService.GetImagePath(R, imageAsset)
+    imageAsset = normalizeImageAsset(imageAsset)
+    if not imageAsset or imageAsset == "" then
+        return ""
+    end
+
+    if isReservedRuntimeImageAsset(imageAsset) then
+        return EditorItemService.GetPaths(R).RuntimeImageDirectory .. imageAsset
+    end
+
+    return EditorItemService.GetPaths(R).ItemImageDirectory .. imageAsset
+end
+
+local function buildImageCatalogState()
+    local state = {
+        assets = {},
+        hasCorruptEntries = false,
+    }
+
+    for _, variableName in ipairs({ "ItemImageAssets", "ItemImageKeys" }) do
+        local rawValue = trim(getVariable(variableName, ""))
+        for entry in rawValue:gmatch("[^|]+") do
+            local normalizedAsset = normalizeImageAsset(entry)
+            if normalizedAsset then
+                state.assets[normalizedAsset:lower()] = true
+            elseif trim(entry) ~= "" then
+                state.hasCorruptEntries = true
+            end
+        end
+    end
+
+    return state
+end
+
+function EditorItemService.ImageKeyExists(R, imageAsset)
+    imageAsset = normalizeImageAsset(imageAsset)
+    if not imageAsset or imageAsset == "" then
+        return false
+    end
+
+    if isReservedRuntimeImageAsset(imageAsset) then
+        return false
+    end
+
+    local requestedAsset = imageAsset:lower()
+    local catalogState = buildImageCatalogState()
+    return catalogState.assets[requestedAsset] == true
+end
+
+function EditorItemService.ExtractImageKeyFromPath(R, path)
+    local normalizedPath = trim(path):gsub("/", "\\")
+    if normalizedPath == "" then
+        return nil
+    end
+
+    local itemImageDirectory = EditorItemService.GetPaths(R).ItemImageDirectory
+    local lowerPath = normalizedPath:lower()
+    local lowerDirectory = itemImageDirectory:lower()
+
+    if lowerPath:sub(1, #lowerDirectory) ~= lowerDirectory then
+        return nil
+    end
+
+    local leaf = normalizedPath:sub(#itemImageDirectory + 1)
+    if leaf == "" or leaf:find("\\") then
+        return nil
+    end
+
+    local imageAsset = normalizeImageAsset(leaf)
+    if not imageAsset then
+        return nil
+    end
+
+    if isReservedRuntimeImageAsset(imageAsset) then
+        return nil
+    end
+
+    return imageAsset
+end
+
+function EditorItemService.IsAppsFolderAction(action)
+    return extractAppsFolderAppId(action) ~= nil
+end
+
+function EditorItemService.ClearProgramPickerCache(R)
+    local path = EditorItemService.GetPaths(R).ProgramPickerCache
+    if not tostring(path or ""):find("[\128-\255]") then
+        pcall(os.remove, path)
+    end
+    clearLookupCache(R, "programPickerLabels")
+end
+
+function EditorItemService.ClearProgramActionLabelCache(R)
+    clearLookupCache(R, "programActionLabels")
+end
+
+function EditorItemService.DescribeAction(action, R)
+    local normalized = trim(action)
+    if normalized == "" then
+        return " "
+    end
+
+    local favoriteLabel = lookupFavoriteCatalogLabel(R, normalized)
+    if favoriteLabel and favoriteLabel ~= "" then
+        return favoriteLabel
+    end
+
+    local directLabel = readProgramActionLabels(R)[normalized]
+    if directLabel and directLabel ~= "" then
+        return directLabel
+    end
+
+    local appLabel = describeAppsFolderAction(normalized, R)
+    if appLabel then
+        return appLabel
+    end
+
+    local special = SPECIAL_ACTION_LABELS[normalized:lower()]
+    if special then
+        return special
+    end
+
+    local withoutTail = normalized:gsub("[/\\]+$", "")
+    local name = withoutTail:match("([^/\\]+)$")
+    if name and name ~= "" then
+        return name
+    end
+
+    return normalized
+end
+
+function EditorItemService.ReadDraftSections(R)
+    return readSections(R, EditorItemService.GetPaths(R).Draft)
+end
+
+function EditorItemService.ReadImageAdjustmentSections(R)
+    return readSections(R, R .. "Customs\\Data\\ImageAdjustments.inc")
+end
+
+function EditorItemService.ReadPersistedSections(R, source)
+    local path = EditorItemService.GetSourceDataPath(R, source)
+    if not path then
+        return {}
+    end
+    return readSections(R, path)
+end
+
+function EditorItemService.ReadDraftMetaOnly(R)
+    return buildDraftMeta(readDraftMetaSections(EditorItemService.GetPaths(R).Draft))
+end
+
+function EditorItemService.GetCurrentSessionClockMs()
+    return os.time() * 1000
+end
+
+function EditorItemService.GetDraftSessionHeartbeatIntervalMs()
+    return DRAFT_SESSION_HEARTBEAT_INTERVAL_MS
+end
+
+function EditorItemService.IsDraftSessionStale(R, draftMeta)
+    local meta = draftMeta or EditorItemService.ReadDraftMetaOnly(R)
+    if not meta.EditorOpen then
+        return false
+    end
+
+    local heartbeatClockMs = toNumber(meta.HeartbeatClockMs, 0)
+    if heartbeatClockMs <= 0 then
+        return true
+    end
+
+    local now = EditorItemService.GetCurrentSessionClockMs()
+    if now < heartbeatClockMs then
+        return true
+    end
+
+    return (now - heartbeatClockMs) > DRAFT_SESSION_TIMEOUT_MS
+end
+
+function EditorItemService.IsDraftOpen(R)
+    local meta = EditorItemService.ReadDraftMetaOnly(R)
+    return meta.EditorOpen and not EditorItemService.IsDraftSessionStale(R, meta)
+end
+
+function EditorItemService.ReadDraftMeta(R)
+    return EditorItemService.ReadDraftMetaOnly(R)
+end
+
+function EditorItemService.GetSectionFromCollection(source, x, y, sections)
+    local sectionName = EditorItemService.GetSectionName(source, x, y)
+    if not sectionName then
+        return nil
+    end
+    return (sections or {})[sectionName]
+end
+
+function EditorItemService.MakeRecord(source, x, y, section, variablePrefix)
+    source = normalizeSource(source)
+    x = toNumber(x, nil)
+    y = toNumber(y, nil)
+    if not source or not x or not y then
+        return nil
+    end
+
+    local sectionName = EditorItemService.GetSectionName(source, x, y)
+    if EditorItemService.IsReservedHotbarSlot(source, x, y) then
+        local record = cloneRecord(RESERVED_SLOT10)
+        local rawLabel = trim(section and section.Label or "")
+        local label = trim(resolveVariableReference(section and section.Label or ""))
+
+        if rawLabel == "" or isReservedInventoryLabelValue(rawLabel) or isReservedInventoryLabelValue(label) then
+            record.ItemName = reservedInventoryLabel()
+        elseif label ~= "" then
+            record.ItemName = label
+        end
+        return record
+    end
+
+    return {
+        Source = source,
+        Section = sectionName,
+        x = x,
+        y = y,
+        ImageKey = normalizeImageAsset(section and section.Image or "") or trim(section and section.Image or ""),
+        ItemName = trim(resolveVariableReference(section and section.Label or "")),
+        ExecPath = normalizeAction(section and section.Action or ""),
+        Qty = toNumber(section and section.Qty or 0, 0),
+        ConfirmBeforeRun = normalizeConfirmBeforeRun(section and section.ConfirmBeforeRun or ""),
+        Populated = not EditorItemService.IsEmptyItemSection(section),
+    }
+end
+
+function EditorItemService.GetPersistedSlotRecord(R, source, x, y)
+    local sections = EditorItemService.ReadPersistedSections(R, source)
+    local section = EditorItemService.GetSectionFromCollection(source, x, y, sections)
+    local prefix = normalizeSource(source) == "hotbar" and "HotbarItem" or "InventoryItem"
+    return EditorItemService.MakeRecord(source, x, y, section, prefix) or makeEmptyRecord(source, x, y)
+end
+
+function EditorItemService.GetDraftSlotRecord(R, source, x, y)
+    local section = readDraftSlotSection(R, source, x, y)
+    return EditorItemService.MakeRecord(source, x, y, section, "EditorDraftItem") or makeEmptyRecord(source, x, y)
+end
+
+function EditorItemService.GetSlotRecord(R, source, x, y)
+    if EditorItemService.IsDraftOpen(R) then
+        return EditorItemService.GetDraftSlotRecord(R, source, x, y)
+    end
+
+    return EditorItemService.GetPersistedSlotRecord(R, source, x, y)
+end
+
+function EditorItemService.BuildSourceRecords(R, source, useDraft)
+    local records = {}
+    local sections = useDraft and EditorItemService.ReadDraftSections(R) or EditorItemService.ReadPersistedSections(R, source)
+    source = normalizeSource(source)
+    if not source then
+        return records
+    end
+
+    local bounds = source == "hotbar" and { xMax = 10, yMax = 1 } or { xMax = 9, yMax = 4 }
+    for y = 1, bounds.yMax do
+        for x = 1, bounds.xMax do
+            local prefix
+            if useDraft then
+                prefix = "EditorDraftItem"
+            else
+                prefix = source == "hotbar" and "HotbarItem" or "InventoryItem"
+            end
+            local record = EditorItemService.MakeRecord(source, x, y, EditorItemService.GetSectionFromCollection(source, x, y, sections), prefix)
+            if record then
+                records[#records + 1] = record
+            end
+        end
+    end
+
+    return records
+end
+
+function EditorItemService.BuildInfoList(records)
+    local infos = {}
+    for _, record in ipairs(records or {}) do
+        if record.Populated then
+            infos[#infos + 1] = {
+                Image = record.ImageKey,
+                ItemName = record.ItemName,
+                ExecPath = record.ExecPath,
+                x = record.x,
+                y = record.y,
+                qty = record.Qty,
+                ConfirmBeforeRun = record.ConfirmBeforeRun,
+            }
+        end
+    end
+
+    table.sort(infos, function(a, b)
+        if a.y == b.y then
+            return a.x < b.x
+        end
+        return a.y < b.y
+    end)
+
+    return infos
+end
+
+return EditorItemService

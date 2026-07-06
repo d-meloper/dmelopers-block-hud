@@ -113,7 +113,180 @@ function Get-ExistingPluginPath {
     return ''
 }
 
+function Get-ArchitectureFromVersionInfo {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    try {
+        if (-not [System.IO.File]::Exists($Path)) {
+            return ''
+        }
+
+        $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
+        $text = @(
+            [string]$version.ProductVersion
+            [string]$version.FileDescription
+            [string]$version.Comments
+        ) -join ' '
+
+        if ($text -match '(?i)(32-bit|\bx86\b)') {
+            return 'x86'
+        }
+        if ($text -match '(?i)(64-bit|\bx64\b)') {
+            return 'x64'
+        }
+    }
+    catch {
+    }
+
+    return ''
+}
+
+function Get-PeFileArchitecture {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not [System.IO.File]::Exists($Path)) {
+        return ''
+    }
+
+    $stream = $null
+    $reader = $null
+    try {
+        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $reader = [System.IO.BinaryReader]::new($stream)
+        if ($stream.Length -lt 0x40) {
+            return ''
+        }
+        if ($reader.ReadUInt16() -ne 0x5A4D) {
+            return ''
+        }
+
+        $stream.Seek(0x3C, [System.IO.SeekOrigin]::Begin) | Out-Null
+        $peOffset = $reader.ReadInt32()
+        if ($peOffset -lt 0 -or $peOffset + 6 -gt $stream.Length) {
+            return ''
+        }
+
+        $stream.Seek($peOffset, [System.IO.SeekOrigin]::Begin) | Out-Null
+        if ($reader.ReadUInt32() -ne 0x00004550) {
+            return ''
+        }
+
+        $machine = $reader.ReadUInt16()
+        switch ($machine) {
+            0x014C { return 'x86' }
+            0x8664 { return 'x64' }
+            default { return '' }
+        }
+    }
+    catch {
+        return ''
+    }
+    finally {
+        if ($null -ne $reader) {
+            $reader.Dispose()
+        }
+        elseif ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+}
+
+function Get-BinaryArchitecture {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $arch = Get-ArchitectureFromVersionInfo -Path $Path
+    if (-not [string]::IsNullOrWhiteSpace($arch)) {
+        return $arch
+    }
+
+    return Get-PeFileArchitecture -Path $Path
+}
+
+function Get-ExistingPluginState {
+    param([string]$ExpectedArch = '')
+
+    foreach ($path in Get-InstalledPluginCandidates) {
+        if (-not [System.IO.File]::Exists($path)) {
+            continue
+        }
+
+        $arch = Get-BinaryArchitecture -Path $path
+        $compatible = $true
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedArch)) {
+            $compatible = -not [string]::IsNullOrWhiteSpace($arch) -and [string]::Equals($arch, $ExpectedArch, [System.StringComparison]::OrdinalIgnoreCase)
+        }
+
+        return [PSCustomObject]@{
+            Path = $path
+            Arch = $arch
+            Compatible = $compatible
+        }
+    }
+
+    return [PSCustomObject]@{
+        Path = ''
+        Arch = ''
+        Compatible = $false
+    }
+}
+
+function Get-RainmeterProcessPathById {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
+
+    if ($ProcessId -le 0) {
+        return ''
+    }
+
+    try {
+        $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+        if ($null -ne $process -and -not [string]::IsNullOrWhiteSpace([string]$process.Path)) {
+            return [string]$process.Path
+        }
+    }
+    catch {
+    }
+
+    try {
+        $record = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
+        if ($null -ne $record -and -not [string]::IsNullOrWhiteSpace([string]$record.ExecutablePath)) {
+            return [string]$record.ExecutablePath
+        }
+    }
+    catch {
+    }
+
+    return ''
+}
+
+function Get-PluginArchitectureFromPath {
+    param([AllowNull()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return ''
+    }
+
+    $arch = Get-BinaryArchitecture -Path $Path
+    if (-not [string]::IsNullOrWhiteSpace($arch)) {
+        return $arch
+    }
+
+    if ($Path.IndexOf('Program Files (x86)', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        return 'x86'
+    }
+
+    return ''
+}
+
 function Get-RainmeterPluginArchitecture {
+    $currentRainmeterId = Get-CurrentRainmeterProcessId
+    if ($currentRainmeterId -gt 0) {
+        $currentPath = Get-RainmeterProcessPathById -ProcessId $currentRainmeterId
+        $currentArch = Get-PluginArchitectureFromPath -Path $currentPath
+        if (-not [string]::IsNullOrWhiteSpace($currentArch)) {
+            return $currentArch
+        }
+    }
+
     $rainmeterPaths = @()
     try {
         $rainmeterPaths = @(Get-Process -Name 'Rainmeter' -ErrorAction SilentlyContinue | ForEach-Object { $_.Path } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -123,8 +296,9 @@ function Get-RainmeterPluginArchitecture {
     }
 
     foreach ($path in $rainmeterPaths) {
-        if ($path.IndexOf('Program Files (x86)', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
-            return 'x86'
+        $arch = Get-PluginArchitectureFromPath -Path $path
+        if (-not [string]::IsNullOrWhiteSpace($arch)) {
+            return $arch
         }
     }
 
@@ -256,7 +430,10 @@ function Find-ReleaseAsset {
 }
 
 function Assert-DllLooksValid {
-    param([Parameter(Mandatory = $true)][string]$Path)
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$ExpectedArch = ''
+    )
 
     if (-not [System.IO.File]::Exists($Path)) {
         throw 'Downloaded DLL is missing.'
@@ -278,16 +455,17 @@ function Assert-DllLooksValid {
     finally {
         $stream.Dispose()
     }
+
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedArch)) {
+        $arch = Get-BinaryArchitecture -Path $Path
+        if ([string]::IsNullOrWhiteSpace($arch) -or -not [string]::Equals($arch, $ExpectedArch, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw ('Downloaded DLL architecture is invalid. expected={0}; actual={1}' -f $ExpectedArch, $arch)
+        }
+    }
 }
 
 function Install-WebNowPlayingPlugin {
     param([Parameter(Mandatory = $true)][string]$Repository)
-
-    $existing = Get-ExistingPluginPath
-    if (-not [string]::IsNullOrWhiteSpace($existing)) {
-        Write-InstallerResult -Status 'NOOP' -Code 'ALREADY_INSTALLED' -Message 'WebNowPlaying is already installed.' -InstallPath $existing
-        return
-    }
 
     $targetPath = Get-UserPluginPath
     $targetDirectory = [System.IO.Path]::GetDirectoryName($targetPath)
@@ -298,6 +476,12 @@ function Install-WebNowPlayingPlugin {
     [System.IO.Directory]::CreateDirectory($targetDirectory) | Out-Null
 
     $arch = Get-RainmeterPluginArchitecture
+    $existingState = Get-ExistingPluginState -ExpectedArch $arch
+    if (-not [string]::IsNullOrWhiteSpace($existingState.Path) -and $existingState.Compatible) {
+        Write-InstallerResult -Status 'NOOP' -Code 'ALREADY_INSTALLED' -Message 'WebNowPlaying is already installed.' -Arch $arch -InstallPath $existingState.Path
+        return
+    }
+
     $release = Get-LatestStableRelease -Repository $Repository
     $asset = Find-ReleaseAsset -Release $release -Arch $arch
     $version = [string]$release.tag_name
@@ -308,12 +492,17 @@ function Install-WebNowPlayingPlugin {
     $tempPath = [System.IO.Path]::Combine($targetDirectory, ('WebNowPlaying.{0}.{1}.tmp' -f $arch, [guid]::NewGuid().ToString('N')))
     try {
         Invoke-WebRequest -Uri ([string]$asset.browser_download_url) -Headers @{ 'User-Agent' = 'DMelopers-Block-HUD-Jukebox' } -UseBasicParsing -OutFile $tempPath
-        Assert-DllLooksValid -Path $tempPath
+        Assert-DllLooksValid -Path $tempPath -ExpectedArch $arch
 
         if ([System.IO.File]::Exists($targetPath)) {
-            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
-            Write-InstallerResult -Status 'NOOP' -Code 'ALREADY_INSTALLED' -Message 'WebNowPlaying is already installed.' -Version $version -Arch $arch -InstallPath $targetPath
-            return
+            $targetArch = Get-BinaryArchitecture -Path $targetPath
+            if (-not [string]::IsNullOrWhiteSpace($targetArch) -and [string]::Equals($targetArch, $arch, [System.StringComparison]::OrdinalIgnoreCase)) {
+                Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+                Write-InstallerResult -Status 'NOOP' -Code 'ALREADY_INSTALLED' -Message 'WebNowPlaying is already installed.' -Version $version -Arch $arch -InstallPath $targetPath
+                return
+            }
+
+            Remove-Item -LiteralPath $targetPath -Force
         }
 
         [System.IO.File]::Move($tempPath, $targetPath)
@@ -338,16 +527,21 @@ try {
     else {
         $action = ([string]$Action).Trim().ToUpperInvariant()
     }
-
     if (($action -eq 'CHECK' -or $action -eq 'INSTALL') -and (Test-WebNowPlayingPortConflict)) {
         Write-InstallerResult -Status 'NOOP' -Code 'PORT_IN_USE' -Message ('WebNowPlaying port {0} is already owned by another process.' -f $webNowPlayingPort) -InstallPath (Get-UserPluginPath)
         return
     }
 
-    $existing = Get-ExistingPluginPath
+    $expectedArch = Get-RainmeterPluginArchitecture
+    $existingState = Get-ExistingPluginState -ExpectedArch $expectedArch
     if ($action -eq 'CHECK') {
-        if (-not [string]::IsNullOrWhiteSpace($existing)) {
-            Write-InstallerResult -Status 'OK' -Code 'INSTALLED' -Message 'WebNowPlaying is already installed.' -InstallPath $existing
+        if (-not [string]::IsNullOrWhiteSpace($existingState.Path)) {
+            if ($existingState.Compatible) {
+                Write-InstallerResult -Status 'OK' -Code 'INSTALLED' -Message 'WebNowPlaying is already installed.' -Arch $expectedArch -InstallPath $existingState.Path
+            }
+            else {
+                Write-InstallerResult -Status 'NOOP' -Code 'INCOMPATIBLE_ARCH' -Message ('Installed WebNowPlaying plugin architecture does not match Rainmeter. expected={0}; actual={1}' -f $expectedArch, $existingState.Arch) -Arch $expectedArch -InstallPath $existingState.Path
+            }
         }
         else {
             Write-InstallerResult -Status 'NOOP' -Code 'MISSING' -Message 'WebNowPlaying plugin is not installed.' -InstallPath (Get-UserPluginPath)
