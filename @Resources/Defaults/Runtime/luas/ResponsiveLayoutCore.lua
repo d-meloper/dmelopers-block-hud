@@ -904,6 +904,7 @@ local function resolveFixedWindow(SKIN, id, state, work, width, height)
     return rawX, rawY
 end
 
+-- Split from @Resources\Defaults\Runtime\luas\ResponsiveLayoutCore.lua lines 907-1748.
 function M.ResolveRects(SKIN)
     local work = effectivePrimaryWorkArea(SKIN)
     local scale = normalizeScale(M.GetScale(SKIN))
@@ -1745,4 +1746,3 @@ function M.PersistCurrentFixedPosition(SKIN, id, x, y)
 end
 
 function M.CaptureCurrentSkinState(SKIN)     local id = M.CurrentSkinId(SKIN)     if not id then         return nil     end     return M.GetState(SKIN, id) end  return M
-
