@@ -64,14 +64,7 @@ function Write-OutputPair {
         [AllowNull()][string]$Value
     )
 
-    $writer = New-Object System.IO.StreamWriter([Console]::OpenStandardOutput(), $script:Utf8NoBom)
-    try {
-        $writer.AutoFlush = $true
-        $writer.WriteLine($Key + '=' + [string]$Value)
-    }
-    finally {
-        $writer.Dispose()
-    }
+    [Console]::Out.WriteLine($Key + '=' + [string]$Value)
 }
 
 function Emit-ResultPairs {
@@ -762,26 +755,6 @@ function Test-VersionManagerDisplayableSkinRoot {
     }
 
     return ($leafName.IndexOf("DMeloper's Block HUD", [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
-}
-
-function Test-VersionManagerSupportedSkinRoot {
-    param([AllowNull()][string]$Root)
-
-    if ([string]::IsNullOrWhiteSpace($Root)) {
-        return $false
-    }
-
-    if (-not (Test-SkinRoot -Root $Root)) {
-        return $false
-    }
-
-    $versionText = Get-SkinMetadataVersion -Root $Root
-    $versionValue = Convert-ToVersion -VersionText $versionText
-    if ($null -eq $versionValue) {
-        return $false
-    }
-
-    return ($versionValue -ge [version]'1.2.0')
 }
 
 function Test-VersionManagerUnsupportedVersionText {

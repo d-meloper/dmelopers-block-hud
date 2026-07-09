@@ -2,6 +2,7 @@
 param(
     [string]$TargetRoot = '..',
     [string]$LaunchToken = '',
+    [string]$InitialAction = '',
     [switch]$EmitResultPairs
 )
 
@@ -75,8 +76,47 @@ function Emit-LauncherFailure {
     Write-LauncherFileLog -Stage 'error' -Message $Message
     if ($EmitResultPairs) {
         Write-OutputPair -Key 'DMEL_STATUS' -Value 'ERROR'
-        Write-OutputPair -Key 'DMEL_MESSAGE' -Value $Message
+        Write-OutputPair -Key 'DMEL_SOURCEPATH' -Value ''
+        Write-OutputPair -Key 'DMEL_BACKUPPATH' -Value ''
         Write-OutputPair -Key 'DMEL_LOGPATH' -Value (Get-LauncherLogPath)
+        Write-OutputPair -Key 'DMEL_MESSAGE' -Value $Message
+    }
+}
+
+function Emit-LauncherSuccess {
+    param([Parameter(Mandatory = $true)][string]$Message)
+
+    Write-LauncherFileLog -Stage 'success' -Message $Message
+    if ($EmitResultPairs) {
+        Write-OutputPair -Key 'DMEL_STATUS' -Value 'OK'
+        Write-OutputPair -Key 'DMEL_SOURCEPATH' -Value ''
+        Write-OutputPair -Key 'DMEL_BACKUPPATH' -Value ''
+        Write-OutputPair -Key 'DMEL_LOGPATH' -Value (Get-LauncherLogPath)
+        Write-OutputPair -Key 'DMEL_MESSAGE' -Value $Message
+    }
+}
+
+function Test-LaunchStateShown {
+    try {
+        $resolvedTargetRoot = [System.IO.Path]::GetFullPath($TargetRoot)
+        $statePath = Join-Path $resolvedTargetRoot '@Resources\Customs\Data\VersionManagerLaunchState.json'
+        if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+            return $false
+        }
+        $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $status = [string]$state.Status
+        $token = [string]$state.LaunchToken
+        if (-not [string]::Equals($status, 'shown', [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $false
+        }
+        if (-not [string]::IsNullOrWhiteSpace($LaunchToken) -and -not [string]::Equals($token, $LaunchToken, [System.StringComparison]::Ordinal)) {
+            return $false
+        }
+        return $true
+    }
+    catch {
+        Write-LauncherFileLog -Stage 'launch-state-read-error' -Message $_.Exception.Message
+        return $false
     }
 }
 
@@ -131,7 +171,7 @@ function Invoke-HelperProcess {
     )
 
     $command = '$ProgressPreference = ''SilentlyContinue''; & ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $HelperPath)
-    foreach ($name in @('TargetRoot', 'LaunchToken')) {
+    foreach ($name in @('TargetRoot', 'LaunchToken', 'InitialAction')) {
         if ($Parameters.ContainsKey($name)) {
             $command += ' -' + $name + ' ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value ([string]$Parameters[$name]))
         }
@@ -214,6 +254,9 @@ try {
     if ($supportedParameters.Contains('LaunchToken')) {
         $helperParameters['LaunchToken'] = $LaunchToken
     }
+    if ($supportedParameters.Contains('InitialAction') -and -not [string]::IsNullOrWhiteSpace($InitialAction)) {
+        $helperParameters['InitialAction'] = $InitialAction
+    }
     if ($EmitResultPairs -and $supportedParameters.Contains('EmitResultPairs')) {
         $helperParameters['EmitResultPairs'] = $true
     }
@@ -248,6 +291,10 @@ try {
         }
         if ([string]::IsNullOrWhiteSpace($preview)) {
             $preview = 'OpenVersionManager helper returned no stdout.'
+        }
+        if (Test-LaunchStateShown) {
+            Emit-LauncherSuccess -Message ('OpenVersionManager helper did not emit DMEL_STATUS, but matching launch state reported shown. exitCode=' + [string]$result.ExitCode + '. ' + $preview)
+            return
         }
         Emit-LauncherFailure -Message ('OpenVersionManager helper returned no DMEL_STATUS. exitCode=' + [string]$result.ExitCode + '. ' + $preview)
     }

@@ -182,6 +182,14 @@ return function(app)
 
             setVariable('SettingsRow' .. rowIndex .. '_Field_X', tostring(fieldX))
 
+            if field and field.wideTextField then
+
+                labelW = pixelValue(math.max(0, fieldX - controlGap - contentX), 0)
+
+                setVariable('SettingsRow' .. rowIndex .. '_LabelW', tostring(labelW))
+
+            end
+
             local buttonX = fieldX + dropdownControlW - buttonW
 
             fieldW = pixelValue(math.max(0, dropdownControlW - buttonW - buttonGap), 0)

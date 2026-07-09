@@ -179,7 +179,15 @@ function CloseEditorDiscardDraft()
 
 
 
-    return discardDraftSession(true)
+    local discarded = discardDraftSession(true)
+
+    if discarded and type(CleanupEditorPixelationImagesForCurrentItems) == 'function' then
+
+        CleanupEditorPixelationImagesForCurrentItems()
+
+    end
+
+    return discarded
 
 
 
@@ -938,6 +946,10 @@ function Initialize()
 
 
     applyEditorTheme(trim(SKIN:GetVariable('SettingsThemeMode', 'light')))
+
+
+
+    ApplyEditorStaticLocalizationTextFits()
 
 
 

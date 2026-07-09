@@ -257,22 +257,17 @@ function Apply-LowSpecSettingsCompatibility {
 function Normalize-LanguageCode {
     param(
         [AllowNull()][string]$Value,
-        [string]$Fallback = 'ko-KR'
+        [string]$Fallback = 'en-US',
+        [string]$SkinRoot = ''
     )
 
-    $resolved = ([string]$Value).Trim().ToLowerInvariant()
-    if ($resolved -in @('en', 'en-us')) {
-        return 'en-US'
-    }
-    if ($resolved -in @('ko', 'ko-kr')) {
-        return 'ko-KR'
+    $registry = Read-LanguageRegistry -SkinRoot $SkinRoot
+    $resolved = Resolve-RegisteredLanguageCode -Registry $registry -Value $Value -Fallback $Fallback
+    if (-not [string]::IsNullOrWhiteSpace($resolved)) {
+        return $resolved
     }
 
-    $fallbackResolved = ([string]$Fallback).Trim().ToLowerInvariant()
-    if ($fallbackResolved -eq 'en-us') {
-        return 'en-US'
-    }
-    return 'ko-KR'
+    'en-US'
 }
 
 function Resolve-ImportedLanguageCode {
@@ -281,29 +276,38 @@ function Resolve-ImportedLanguageCode {
     $sourceGeneralPath = Join-RootPath -Root $SourceRoot -RelativePath '@Resources\Customs\Settings\General.inc'
     $sourceVariables = Read-VariablesFile -Path $sourceGeneralPath
     if ($sourceVariables.Contains('LanguageCode')) {
-        return (Normalize-LanguageCode -Value $sourceVariables['LanguageCode'] -Fallback 'ko-KR')
+        return (Normalize-LanguageCode -Value $sourceVariables['LanguageCode'] -Fallback 'en-US' -SkinRoot $SourceRoot)
     }
 
-    return 'ko-KR'
+    return 'en-US'
 }
 
 function Get-ReservedInventoryItemLabel {
-    param([Parameter(Mandatory = $true)][string]$LanguageCode)
+    param(
+        [Parameter(Mandatory = $true)][string]$LanguageCode,
+        [string]$TargetRoot = ''
+    )
 
-    $resolvedLanguageCode = Normalize-LanguageCode -Value $LanguageCode -Fallback 'ko-KR'
-    if ($resolvedLanguageCode -eq 'en-US') {
-        return 'Inventory'
+    $registry = Read-LanguageRegistry -SkinRoot $TargetRoot
+    $resolvedLanguageCode = Normalize-LanguageCode -Value $LanguageCode -Fallback $registry.DefaultFallbackLanguageCode -SkinRoot $TargetRoot
+    foreach ($entry in @($registry.Entries)) {
+        if ([string]::Equals([string]$entry.Code, $resolvedLanguageCode, [System.StringComparison]::OrdinalIgnoreCase) -and -not [string]::IsNullOrWhiteSpace([string]$entry.InventoryLabel)) {
+            return [string]$entry.InventoryLabel
+        }
     }
 
-    return (Expand-UnicodeEscapes -Value '\uC778\uBCA4\uD1A0\uB9AC')
+    return 'Inventory'
 }
 
 function New-HotbarSlot10ReservedBackfill {
-    param([Parameter(Mandatory = $true)][string]$LanguageCode)
+    param(
+        [Parameter(Mandatory = $true)][string]$LanguageCode,
+        [string]$TargetRoot = ''
+    )
 
     return (New-BackfillMap -Values @{
         HotbarItem_Slot10_Image = 'more.png'
-        HotbarItem_Slot10_Label = Get-ReservedInventoryItemLabel -LanguageCode $LanguageCode
+        HotbarItem_Slot10_Label = Get-ReservedInventoryItemLabel -LanguageCode $LanguageCode -TargetRoot $TargetRoot
         HotbarItem_Slot10_Action = '_OPEN_INVENTORY_'
         HotbarItem_Slot10_Qty = '0'
     })
@@ -312,7 +316,8 @@ function New-HotbarSlot10ReservedBackfill {
 function Normalize-HotbarSlot10ReservedLabel {
     param(
         [Parameter(Mandatory = $true)][string]$TargetHotbarPath,
-        [Parameter(Mandatory = $true)][string]$LanguageCode
+        [Parameter(Mandatory = $true)][string]$LanguageCode,
+        [string]$TargetRoot = ''
     )
 
     $hotbarVariables = Read-VariablesFile -Path $TargetHotbarPath
@@ -320,7 +325,7 @@ function Normalize-HotbarSlot10ReservedLabel {
         return
     }
 
-    $label = Get-ReservedInventoryItemLabel -LanguageCode $LanguageCode
+    $label = Get-ReservedInventoryItemLabel -LanguageCode $LanguageCode -TargetRoot $TargetRoot
     $currentLabel = Get-ItemFieldValue -Variables $hotbarVariables -Prefix 'HotbarItem_Slot10' -Field 'Label'
     if ($currentLabel -eq $label) {
         return
@@ -377,7 +382,7 @@ function Sync-ActiveLocalizationCatalog {
         [Parameter(Mandatory = $true)][string]$LanguageCode
     )
 
-    $resolvedLanguageCode = Normalize-LanguageCode -Value $LanguageCode -Fallback 'ko-KR'
+    $resolvedLanguageCode = Normalize-LanguageCode -Value $LanguageCode -Fallback 'en-US' -SkinRoot $TargetRoot
     $generalPath = Join-RootPath -Root $TargetRoot -RelativePath '@Resources\Customs\Settings\General.inc'
     $generalVariables = Read-VariablesFile -Path $generalPath
     Set-MapValue -Map $generalVariables -Key 'LanguageCode' -Value $resolvedLanguageCode

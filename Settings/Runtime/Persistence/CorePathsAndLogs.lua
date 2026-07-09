@@ -58,30 +58,14 @@ return function(app)
     end
 
     function methods.normalizeLanguageCode(raw, fallback)
-        local resolved = string.lower(trim(raw))
-        if resolved == 'en' or resolved == 'en-us' then
-            return 'en-US'
-        end
-        if resolved == 'ko' or resolved == 'ko-kr' then
-            return 'ko-KR'
-        end
-        local fallbackResolved = string.lower(trim(fallback))
-        if fallbackResolved == 'en-us' then
-            return 'en-US'
-        end
-        return 'ko-KR'
+        return app.languageRegistry.NormalizeLanguageCode(SKIN, raw, fallback)
     end
-
-    local RESERVED_INVENTORY_LABEL_BY_LANGUAGE = {
-        ['ko-KR'] = '인벤토리',
-        ['en-US'] = 'Inventory',
-    }
 
     function methods.reservedInventoryLabelForLanguage(languageCode)
-        local resolved = methods.normalizeLanguageCode(languageCode, 'ko-KR')
-        return RESERVED_INVENTORY_LABEL_BY_LANGUAGE[resolved]
-            or RESERVED_INVENTORY_LABEL_BY_LANGUAGE['ko-KR']
+        return app.languageRegistry.GetInventoryLabel(SKIN, languageCode)
     end
+
+    local quoteCommandArgument = nil
 
     local function syncReservedInventoryLabel(path, variableName, actionVariableName, reservedLabel)
         if trim(SKIN:GetVariable(actionVariableName, '')) ~= '_OPEN_INVENTORY_' then
@@ -100,8 +84,44 @@ return function(app)
         return true
     end
 
-    function methods.syncItemLabelsForLanguage(languageCode)
-        local resolved = methods.normalizeLanguageCode(languageCode, 'ko-KR')
+    function methods.defaultItemLabelsScriptPath()
+        return '..\\tools\\Update-DefaultItemLabels.ps1'
+    end
+
+    function methods.startDefaultItemLabelLocalization(languageCode, options)
+        methods.ensurePaths()
+        options = options or {}
+        local resolvedLanguage = methods.normalizeLanguageCode(languageCode, methods.normalizeLanguageCode(nil, nil))
+        local measureName = 'MeasureSettingsDefaultItemLabelsRun'
+        if not SKIN:GetMeasure(measureName) then
+            methods.appendSettingsRuntimeLog('Default item label localization run measure is missing.')
+            return false
+        end
+        local settingsPath = trim(SKIN:GetVariable('CURRENTPATH', ''))
+        settingsPath = settingsPath:gsub('[\\/]+$', '')
+        local skinRoot = settingsPath:match('^(.*)[\\/][^\\/]+$') or settingsPath
+        local args = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+            .. quoteCommandArgument(methods.defaultItemLabelsScriptPath())
+            .. ' -SkinRoot '
+            .. quoteCommandArgument(skinRoot)
+            .. ' -LanguageCode '
+            .. quoteCommandArgument(resolvedLanguage)
+
+        state.pendingDefaultItemLocalizationRunning = true
+        state.pendingDefaultItemLocalizationLanguage = resolvedLanguage
+        state.pendingDefaultItemLocalizationRefreshApp = options.refreshAppOnComplete == true
+        state.pendingDefaultItemLocalizationTargetSet = options.targetSet
+        state.pendingDefaultItemLocalizationRefreshOptions = options.refreshOptions
+
+        setVariable('SettingsDefaultItemLabelsArgs', args)
+        SKIN:Bang('!UpdateMeasure', measureName)
+        SKIN:Bang('!CommandMeasure', measureName, 'Run')
+        return true
+    end
+
+    function methods.syncItemLabelsForLanguage(languageCode, options)
+        options = options or {}
+        local resolved = methods.normalizeLanguageCode(languageCode, methods.normalizeLanguageCode(nil, nil))
         local reservedLabel = methods.reservedInventoryLabelForLanguage(resolved)
         local changed = false
 
@@ -121,25 +141,67 @@ return function(app)
             reservedLabel
         ) or changed
 
+        if methods.startDefaultItemLabelLocalization(resolved, options) then
+            return true
+        end
+
         return changed
     end
 
+    function methods.HandleDefaultItemLabelsComplete()
+        local measure = SKIN:GetMeasure('MeasureSettingsDefaultItemLabelsRun')
+        local raw = ''
+        if measure then
+            raw = tostring(measure:GetStringValue() or '')
+        end
+        local values = methods.parseCommandCaptureVariables and methods.parseCommandCaptureVariables(raw) or {}
+        local status = string.upper(trim(values.DMEL_STATUS or ''))
+        if status ~= 'OK' then
+            local message = trim(values.DMEL_MESSAGE or '')
+            if message == '' then
+                message = 'Default item label localization helper did not report success.'
+            end
+            methods.appendSettingsRuntimeLog(message)
+        end
+
+        local shouldRefreshApp = state.pendingDefaultItemLocalizationRefreshApp == true
+        local targetSet = state.pendingDefaultItemLocalizationTargetSet
+        local refreshOptions = state.pendingDefaultItemLocalizationRefreshOptions
+        state.pendingDefaultItemLocalizationRunning = false
+        state.pendingDefaultItemLocalizationLanguage = nil
+        state.pendingDefaultItemLocalizationRefreshApp = nil
+        state.pendingDefaultItemLocalizationTargetSet = nil
+        state.pendingDefaultItemLocalizationRefreshOptions = nil
+
+        if shouldRefreshApp then
+            SKIN:Bang('!RefreshApp')
+            return true
+        end
+
+        if targetSet then
+            methods.refreshTargets(targetSet, refreshOptions)
+            return true
+        end
+
+        return status == 'OK'
+    end
+
     function methods.languageSwitchLoadingText(languageCode)
-        local fallback = methods.normalizeLanguageCode(languageCode, 'ko-KR') == 'en-US'
-            and 'Changing language...\nPlease wait.'
-            or methods.localize('Settings_Loading', 'Loading...\nPlease wait.')
+        local fallback = methods.normalizeLanguageCode(languageCode, methods.normalizeLanguageCode(nil, nil)) == 'ko-KR'
+            and methods.localize('Settings_Loading', 'Loading...\nPlease wait.')
+            or 'Changing language...\nPlease wait.'
         return methods.localize('Settings_Loading_LanguageSwitch', fallback)
     end
 
     function methods.syncActiveLocalization(languageCode)
-        local resolved = methods.normalizeLanguageCode(languageCode, 'ko-KR')
+        local resolved = methods.normalizeLanguageCode(languageCode, methods.normalizeLanguageCode(nil, nil))
         if methods.syncHelperLocalizationCache then
             methods.syncHelperLocalizationCache(resolved)
         end
         return true
     end
 
-    local function quoteCommandArgument(value)
+    quoteCommandArgument = function(value)
         local resolved = tostring(value or '')
         resolved = resolved:gsub('"', '\\"')
         return '"' .. resolved .. '"'
@@ -151,7 +213,7 @@ return function(app)
 
     function methods.syncHelperLocalizationCache(languageCode)
         methods.ensurePaths()
-        local resolvedLanguage = methods.normalizeLanguageCode(languageCode, 'ko-KR')
+        local resolvedLanguage = methods.normalizeLanguageCode(languageCode, methods.normalizeLanguageCode(nil, nil))
         local measureName = 'MeasureSettingsHelperLocalizationCacheRun'
         if not SKIN:GetMeasure(measureName) then
             methods.appendSettingsRuntimeLog('Helper localization cache run measure is missing.')

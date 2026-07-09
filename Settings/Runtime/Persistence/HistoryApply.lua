@@ -315,7 +315,6 @@ return function(app)
 
         if field.key == 'language' then
             methods.syncActiveLocalization(resolved)
-            methods.syncItemLabelsForLanguage(resolved)
         end
 
         methods.syncInventoryRefreshPositionLockState(field, resolved)
@@ -391,6 +390,11 @@ return function(app)
         end
 
         if options.suppressRefresh == true then
+            if field.key == 'language' then
+                methods.syncItemLabelsForLanguage(resolved, {
+                    refreshAppOnComplete = options.refreshAppAfterItemLabels == true,
+                })
+            end
             return true
         end
 
@@ -466,6 +470,15 @@ return function(app)
         if options.targetSet and refreshOptions then
             options.targetSet.__includeSettings = true
             options.targetSet.__loadingText = refreshOptions.loadingText
+        end
+
+        if field.key == 'language' and not options.targetSet then
+            if methods.syncItemLabelsForLanguage(resolved, {
+                targetSet = targetSet,
+                refreshOptions = refreshOptions,
+            }) then
+                return true
+            end
         end
 
         if not options.targetSet then

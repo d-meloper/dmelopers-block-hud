@@ -23,7 +23,7 @@ return function(app)
             return false
         end
 
-        local currentLanguage = methods.normalizeLanguageCode(methods.readFieldValue(field), 'ko-KR')
+        local currentLanguage = methods.normalizeLanguageCode(methods.readFieldValue(field), methods.normalizeLanguageCode(nil, nil))
         local targetLanguage = methods.normalizeLanguageCode(option.appliedValue, currentLanguage)
         if targetLanguage == currentLanguage then
             return false
@@ -56,7 +56,10 @@ return function(app)
             return false
         end
 
-        methods.applyFieldValue(field, pendingValue, { suppressRefresh = true })
+        methods.applyFieldValue(field, pendingValue, {
+            suppressRefresh = true,
+            refreshAppAfterItemLabels = true,
+        })
 
         if submitActionFieldKey ~= '' then
             methods.ExecuteFieldAction(submitActionFieldKey)
@@ -66,7 +69,9 @@ return function(app)
             methods.pushHistory(field.historyLabel, beforeSnapshot)
         end
 
-        SKIN:Bang('!RefreshApp')
+        if state.pendingDefaultItemLocalizationRunning ~= true then
+            SKIN:Bang('!RefreshApp')
+        end
         return true
     end
 

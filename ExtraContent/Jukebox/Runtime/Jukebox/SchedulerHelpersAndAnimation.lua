@@ -77,6 +77,7 @@ local discSlotVisible = false
 local discSlotLoaded = false
 local discSlotActivationRequested = false
 local discSlotDeferredAttempts = 0
+local discSlotRefreshRecoveryRequested = false
 local discSlotPendingShow = false
 local discSlotPendingShowSkipRefresh = false
 local animationEngine = nil
@@ -177,6 +178,10 @@ webNowPlayingInstallState = {
     token = 0,
     openCommand = '',
     bypassPreflight = false,
+    ownerPid = '',
+    ownerUser = '',
+    ownerDomain = '',
+    ownerLabel = '',
 }
 
 local pendingDiscSlotPlayback = nil
@@ -418,13 +423,18 @@ function webNowPlayingInstallState.buildArgs(action)
     if normalizedAction == '' then
         normalizedAction = 'Check'
     end
-    return table.concat({
+    local args = {
         '-NoProfile',
         '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quotePowerShellArgument(webNowPlayingInstallState.scriptPath()),
         '-Action', quotePowerShellArgument(normalizedAction),
-    }, ' ')
+    }
+    if normalizedAction:lower() == 'terminateportowner' and trim(webNowPlayingInstallState.ownerPid) ~= '' then
+        args[#args + 1] = '-OwnerPid'
+        args[#args + 1] = quotePowerShellArgument(trim(webNowPlayingInstallState.ownerPid))
+    end
+    return table.concat(args, ' ')
 end
 
 local function buildOpenLogFolderArgs()
@@ -943,15 +953,17 @@ function minimizedWidth() return math.max(1, round(SKIN:GetVariable('JukeboxMini
 function minimizedHeight() return math.max(1, round(SKIN:GetVariable('JukeboxMinimizedH', '40'))) end
 function currentWindowX() return round(SKIN:GetVariable('CURRENTCONFIGX', '0')) end
 function currentWindowY() return round(SKIN:GetVariable('CURRENTCONFIGY', '0')) end
-function minimizedBottomY() local work = JukeboxCurrentWorkArea(); return round(work.bottom - minimizedHeight()) end
-function clampMinimizedX(x) local work = JukeboxCurrentWorkArea(); return round(JukeboxClampToRange(round(x), work.x, work.right - minimizedWidth())) end
+function jukeboxMinimizedWorkArea(x) local probeX = round((tonumber(x) or currentWindowX()) + (minimizedWidth() / 2)); local probeY = currentWindowY(); if JukeboxWorkAreaForPoint then return JukeboxWorkAreaForPoint(probeX, probeY, JukeboxCurrentWorkArea()) end; return JukeboxCurrentWorkArea() end
+function minimizedBottomY(x) local work = jukeboxMinimizedWorkArea(x); return round(work.bottom - minimizedHeight()) end
+function clampMinimizedX(x) local work = jukeboxMinimizedWorkArea(x); return round(JukeboxClampToRange(round(x), work.x, work.right - minimizedWidth())) end
 function persistSharedJukeboxX(x, mainY) local targetX = clampMinimizedX(x); local y = storedJukeboxMainY(mainY); SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', string.format('SetFixedPosition(%q,%d,%d)', 'Jukebox', targetX, y)); return targetX end
-function moveJukeboxToMinimizedBottom(x) local targetX = clampMinimizedX(x); local targetY = minimizedBottomY(); SKIN:Bang('!Move', tostring(targetX), tostring(targetY)); minimizedLastWindowY = targetY; return targetX, targetY end
+function moveJukeboxToMinimizedBottom(x) local targetX = clampMinimizedX(x); local targetY = minimizedBottomY(targetX); SKIN:Bang('!Move', tostring(targetX), tostring(targetY)); minimizedLastWindowY = targetY; return targetX, targetY end
 function updateMinimizedMeters() SKIN:Bang('!UpdateMeter', 'MeterJukeboxMinimized'); SKIN:Bang('!UpdateMeter', 'MeterJukeboxMinimizedAnimator') end
+function setJukeboxMinimizedMouseEnabled(enabled) if enabled then SKIN:Bang('!EnableMeasure', 'MeasureJukeboxMinimizedMouse'); SKIN:Bang('!UpdateMeasure', 'MeasureJukeboxMinimizedMouse') else SKIN:Bang('!DisableMeasure', 'MeasureJukeboxMinimizedMouse') end; return true end
 function minimizedImagePath(fileName) return resourcesRoot() .. MINIMIZED_ANIMATOR_IMAGE_ROOT .. tostring(fileName or '') end
 function syncMinimizedModeImages() local baseImage = minimizedImagePath('jukebox.png'); local animatorImage = minimizedImagePath(ANIMATOR_TRANSITION_PROFILES.play); setVariable('JukeboxMinimizedImage', baseImage); setVariable('JukeboxMinimizedAnimatorImage', animatorImage); SKIN:Bang('!SetOption', 'MeterJukeboxMinimized', 'ImageName', baseImage); if minimizedAnimator == nil or minimizedAnimatorPhase == 'hidden' then SKIN:Bang('!SetOption', 'MeterJukeboxMinimizedAnimator', 'ImageName', animatorImage) end; updateMinimizedMeters() end
 function setJukeboxMinimizedAnimatorHidden(hidden) if not JukeboxIsMinimizedForm() then setVariable('JukeboxMinimizedAnimatorHidden', '1'); setVariable('JukeboxMinimizedBaseHidden', '1') else setVariable('JukeboxMinimizedAnimatorHidden', hidden and '1' or '0'); setVariable('JukeboxMinimizedBaseHidden', hidden and '0' or '1') end; updateMinimizedMeters(); redraw() end
-function seedMinimizedAnimatorRandom() if minimizedAnimatorRandomSeeded then return end; local seed = math.floor((os.time() + (currentWindowX() * 31) + (minimizedBottomY() * 17)) % 2147483647); if seed <= 0 then seed = os.time() end; math.randomseed(seed); math.random(); math.random(); math.random(); minimizedAnimatorRandomSeeded = true end
+function seedMinimizedAnimatorRandom() if minimizedAnimatorRandomSeeded then return end; local seed = math.floor((os.time() + (currentWindowX() * 31) + (minimizedBottomY(currentWindowX()) * 17)) % 2147483647); if seed <= 0 then seed = os.time() end; math.randomseed(seed); math.random(); math.random(); math.random(); minimizedAnimatorRandomSeeded = true end
 function chooseMinimizedPlayingSheetIndex() seedMinimizedAnimatorRandom(); local index = math.random(1, ANIMATOR_PLAYING_SHEET_COUNT); if minimizedAnimatorLastPlayingIndex > 0 and ANIMATOR_PLAYING_SHEET_COUNT > 1 then index = math.random(1, ANIMATOR_PLAYING_SHEET_COUNT - 1); if index >= minimizedAnimatorLastPlayingIndex then index = index + 1 end end; minimizedAnimatorLastPlayingIndex = index; return index end
 function profileForMinimizedAnimatorSheet(sheetName, frameCount, frameMs) frameMs = tonumber(frameMs) or ANIMATOR_FRAME_MS; return { sheetPath = minimizedImagePath(sheetName), meterName = 'MeterJukeboxMinimizedAnimator', frameWidth = ANIMATOR_FRAME_WIDTH, frameHeight = MINIMIZED_ANIMATOR_FRAME_HEIGHT, frameCount = frameCount, columns = ANIMATOR_COLUMNS, tickMs = ANIMATOR_TICK_MS, frameMs = frameMs, mode = 'once', redrawOnFrameChangeOnly = true, skipCatchUp = frameMs <= ANIMATOR_FRAME_MS, maxCatchUpFrames = 4, frozen = false, freezeFrame = 0 } end
 function buildMinimizedAnimator(sheetName, frameCount, frameMs) local profile = profileForMinimizedAnimatorSheet(sheetName, frameCount, frameMs); minimizedAnimatorCurrentFrameCount = profile.frameCount; minimizedAnimatorCurrentFrameMs = profile.frameMs; minimizedAnimator = loadAnimationEngine().create(SKIN, profile); minimizedAnimator:Initialize() end
@@ -966,7 +978,7 @@ function enterMinimizedPlayingDelay() minimizedAnimatorPhase = 'waiting'; minimi
 function SetJukeboxMinimizedPlaybackActive(value) minimizedAnimatorPlaybackActive = tostring(value or '') == '1' or tostring(value or ''):lower() == 'true'; setMinimizedPlaybackActiveVariable(minimizedAnimatorPlaybackActive); if not minimizedAnimatorPlaybackActive or isJukeboxNoteAnimationDisabled() then return HideJukeboxMinimizedAnimation() end; if minimizedAnimatorPhase == 'transition' then return true end; if minimizedAnimatorPhase ~= 'playing' and minimizedAnimatorPhase ~= 'waiting' then enterMinimizedPlayingDelay() end; return true end
 function StartJukeboxMinimizedAnimation(kind) kind = normalizeAnimationKind(kind); if kind ~= 'play' then minimizedAnimatorPlaybackActive = false; setMinimizedPlaybackActiveVariable(false) end; HideJukeboxMinimizedAnimation(); if not JukeboxIsMinimizedForm() or isJukeboxNoteAnimationDisabled() then return false end; startMinimizedAnimatorTransition(kind); return true end
 function restoreMinimizedPlaybackVisual() local active = trim(SKIN:GetVariable('JukeboxMinimizedPlaybackActive', '0')) == '1'; if not active and trim(SKIN:GetVariable('JukeboxPlaybackSelectedActive', '0')) == '1' then active = true end; return SetJukeboxMinimizedPlaybackActive(active and '1' or '0') end
-function snapJukeboxMinimizedToBottomWhenIdle() if minimizedDragging then return false end; local y = currentWindowY(); if minimizedLastWindowY ~= nil and y == minimizedLastWindowY then return false end; minimizedLastWindowY = y; if y == minimizedBottomY() then return false end; moveJukeboxToMinimizedBottom(currentWindowX()); return true end
+function snapJukeboxMinimizedToBottomWhenIdle() if minimizedDragging then return false end; local y = currentWindowY(); local expectedY = minimizedBottomY(currentWindowX()); if minimizedLastWindowY ~= nil and y == minimizedLastWindowY and y == expectedY then return false end; minimizedLastWindowY = y; if y == expectedY then return false end; moveJukeboxToMinimizedBottom(currentWindowX()); return true end
 function PollJukeboxMinimizedIdle() return safeCall(function() if not JukeboxIsMinimizedForm() then return StopJukeboxMinimizedIdleTimer() end; return snapJukeboxMinimizedToBottomWhenIdle() end) end
 function ContinueJukeboxMinimizedAnimationAfterDelay() return safeCall(function() if not JukeboxIsMinimizedForm() or isJukeboxNoteAnimationDisabled() then HideJukeboxMinimizedAnimation(); return false end; if minimizedAnimatorPhase ~= 'waiting' then return false end; if not minimizedAnimatorPlaybackActive then HideJukeboxMinimizedAnimation(); return false end; startMinimizedPlayingSheet(); return true end) end
 function UpdateJukeboxMinimizedAnimation() return safeCall(function() if not JukeboxIsMinimizedForm() then HideJukeboxMinimizedAnimation(); return false end; snapJukeboxMinimizedToBottomWhenIdle(); if isJukeboxNoteAnimationDisabled() then if minimizedAnimatorPhase ~= 'hidden' then HideJukeboxMinimizedAnimation() end; return false end; if minimizedAnimatorPhase == 'hidden' then return false end; if minimizedAnimatorPhase == 'waiting' then if not minimizedAnimatorPlaybackActive then HideJukeboxMinimizedAnimation(); return false end; minimizedAnimatorWaitMs = minimizedAnimatorWaitMs + ANIMATOR_TICK_MS; if minimizedAnimatorWaitMs >= ANIMATOR_PLAYING_DELAY_MS then startMinimizedPlayingSheet() end; return true end; if minimizedAnimator == nil then HideJukeboxMinimizedAnimation(); return false end; minimizedAnimator:Update(); minimizedAnimatorElapsedMs = minimizedAnimatorElapsedMs + ANIMATOR_TICK_MS; if minimizedAnimatorElapsedMs < (minimizedAnimatorCurrentFrameMs * math.max(1, minimizedAnimatorCurrentFrameCount)) then return true end; if minimizedAnimatorPhase == 'transition' then local finishedKind = minimizedAnimatorKind; if finishedKind == 'play' and minimizedAnimatorPlaybackActive then enterMinimizedPlayingDelay() else HideJukeboxMinimizedAnimation() end elseif minimizedAnimatorPhase == 'playing' then if minimizedAnimatorPlaybackActive then enterMinimizedPlayingDelay() else HideJukeboxMinimizedAnimation() end else HideJukeboxMinimizedAnimation() end; return true end) end

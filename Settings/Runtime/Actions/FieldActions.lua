@@ -9,7 +9,7 @@ return function(app)
     local languageBranching = app.loadSharedLuaModule('LanguageBranching.lua')
     local function jukeboxHelpUrl()
         return languageBranching.SelectKoreanElseGlobal(
-            languageBranching.CurrentSkinLanguageCode(SKIN, 'ko-KR'),
+            languageBranching.CurrentSkinLanguageCode(SKIN, 'en-US'),
             'https://www.notion.so/aismash/37a2dc0bb4ae80cbbd87c22790d66c5e?source=copy_link',
             'https://www.notion.so/aismash/How-to-Use-the-Jukebox-3912dc0bb4ae806ca6d7c74b2667dd75?source=copy_link'
         )

@@ -1,5 +1,5 @@
 -- Split from ExtraContent\Jukebox\Jukebox.lua lines 2208-3022.
-local function fileNameFromPath(path)
+function fileNameFromPath(path)
     path = trim(path)
     if path == '' then
         return ''
@@ -7,7 +7,7 @@ local function fileNameFromPath(path)
     return path:match('[^\\/]+$') or path
 end
 
-local function audioFileNameFromValues(values)
+function audioFileNameFromValues(values)
     local name = trim(values and values.DMEL_AUDIOFILE or '')
     if name ~= '' then
         return name
@@ -20,7 +20,7 @@ local function audioFileNameFromValues(values)
 end
 
 
-local function requestEmergencyStop(reason)
+function requestEmergencyStop(reason)
     if commandRunning.emergencyStop then
         return false
     end
@@ -38,7 +38,7 @@ local function requestEmergencyStop(reason)
     return true
 end
 
-local function logErrorAndAlert(message)
+function logErrorAndAlert(message)
     forceHideJukeboxAnimator()
     requestEmergencyStop('lua-error')
 
@@ -66,15 +66,15 @@ safeCall = function(callback)
     return result
 end
 
-local function parsePairs(output)
+function parsePairs(output)
     return EnsureJukeboxHelperResultModule().parseDmelPairs(output)
 end
 
-local function outputPreview(output)
+function outputPreview(output)
     return EnsureJukeboxHelperResultModule().outputPreview(output, 180)
 end
 
-local function classifyInvalidHelperOutput(kind, output)
+function classifyInvalidHelperOutput(kind, output)
     if trim(output) == '' then
         return 'ModalAlert_JukeboxHelperNoOutput', ''
     end
@@ -89,7 +89,7 @@ local function classifyInvalidHelperOutput(kind, output)
     end
     return 'ModalAlert_JukeboxHelperMalformedOutput', ''
 end
-local function measureOutput(measureName)
+function measureOutput(measureName)
     local measure = SKIN:GetMeasure(measureName)
     if not measure then
         return ''
@@ -97,7 +97,7 @@ local function measureOutput(measureName)
     return tostring(measure:GetStringValue() or '')
 end
 
-local function summaryKeyForCode(code, defaultKey)
+function summaryKeyForCode(code, defaultKey)
     code = upper(code)
     if code == 'AUDIO_MISSING' then
         return 'ModalAlert_JukeboxAudioMissing'
@@ -113,7 +113,7 @@ local function summaryKeyForCode(code, defaultKey)
     return defaultKey or 'ModalAlert_JukeboxCommandFailed'
 end
 
-local function fallbackForKey(key)
+function fallbackForKey(key)
     if key == 'ModalAlert_JukeboxAudioMissing' then
         return 'The Jukebox audio file is missing: %1'
     elseif key == 'ModalAlert_JukeboxHelperStartFailed' then
@@ -515,6 +515,10 @@ function webNowPlayingInstallState.reset()
     webNowPlayingInstallState.requestedMode = ''
     webNowPlayingInstallState.previousMode = ''
     webNowPlayingInstallState.openCommand = ''
+    webNowPlayingInstallState.ownerPid = ''
+    webNowPlayingInstallState.ownerUser = ''
+    webNowPlayingInstallState.ownerDomain = ''
+    webNowPlayingInstallState.ownerLabel = ''
 end
 
 function webNowPlayingInstallState.fallbackToLocal()
@@ -590,6 +594,12 @@ function webNowPlayingInstallState.handleComplete()
     end
 
     if phase == 'check' then
+        if status == 'NOOP' and code == 'PORT_IN_USE_OTHER_USER' then
+            webNowPlayingInstallState.fallbackToLocal()
+            webNowPlayingInstallState.setPortOwner(values)
+            webNowPlayingInstallState.previousMode = PLAYBACK_SOURCE_LOCAL
+            return webNowPlayingInstallState.openPortOwnerTerminateConfirm()
+        end
         if status == 'NOOP' and code == 'PORT_IN_USE' then
             webNowPlayingInstallState.fallbackToLocal()
             return webNowPlayingInstallState.showInstallAlert(
@@ -633,6 +643,38 @@ function webNowPlayingInstallState.handleComplete()
             'ModalAlert_WebNowPlayingInstallFailed',
             'The plugin for external music app integration could not be loaded. In Jukebox Settings, click playback source \'External music app\' to try again.\n\nThe plugin could not be installed. Check your internet connection and try again.',
             '외부 뮤직 앱 연동을 위한 플러그인을 불러오지 못했습니다. 주크박스 설정에서 재생 소스의 \'외부 뮤직 앱\'을 클릭해 다시 시도해보세요.\n\n플러그인을 설치하지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도하세요.')
+    end
+
+    if phase == 'terminateportowner' then
+        if status == 'OK' and code == 'TERMINATED' then
+            webNowPlayingInstallState.showInstallAlert(
+                'warn',
+                'ModalAlert_WebNowPlayingTerminateSucceeded',
+                'The other account Rainmeter process was terminated. Jukebox will check WebNowPlaying again.',
+                'The other account Rainmeter process was terminated. Jukebox will check WebNowPlaying again.')
+            return webNowPlayingInstallState.start('Check', PLAYBACK_SOURCE_LOCAL)
+        end
+
+        webNowPlayingInstallState.fallbackToLocal()
+        if code == 'ACCESS_DENIED' then
+            return webNowPlayingInstallState.showInstallAlert(
+                'error',
+                'ModalAlert_WebNowPlayingTerminateAccessDenied',
+                'The other account Rainmeter process could not be terminated because access was denied. Log into that Windows account and close Rainmeter manually.',
+                'The other account Rainmeter process could not be terminated because access was denied. Log into that Windows account and close Rainmeter manually.')
+        end
+        if code == 'OWNER_CHANGED' or code == 'ALREADY_STOPPED' or code == 'OWNER_IS_CURRENT' then
+            return webNowPlayingInstallState.showInstallAlert(
+                'warn',
+                'ModalAlert_WebNowPlayingTerminateOwnerChanged',
+                'The WebNowPlaying port owner changed before termination. Try external player mode again after checking Rainmeter in the other Windows account.',
+                'The WebNowPlaying port owner changed before termination. Try external player mode again after checking Rainmeter in the other Windows account.')
+        end
+        return webNowPlayingInstallState.showInstallAlert(
+            'error',
+            'ModalAlert_WebNowPlayingTerminateFailed',
+            'The other account Rainmeter process could not be terminated. Log into that Windows account and close Rainmeter manually.',
+            'The other account Rainmeter process could not be terminated. Log into that Windows account and close Rainmeter manually.')
     end
 
     webNowPlayingInstallState.fallbackToLocal()

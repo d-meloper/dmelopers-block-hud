@@ -39,6 +39,7 @@ function Initialize(allowCrossConfig)
     JukeboxScheduler.responsive = false
     syncJukeboxModeImages()
     syncMinimizedModeImages()
+    setJukeboxMinimizedMouseEnabled(JukeboxIsMinimizedForm())
     setJukeboxAnimatorHidden(true)
     setJukeboxMinimizedAnimatorHidden(true)
     setJukeboxDraggable(true)
@@ -55,6 +56,7 @@ function Initialize(allowCrossConfig)
     syncHelperVariables()
 
     if sourceMode == PLAYBACK_SOURCE_EXTERNAL then
+        quarantineExternalBridgeForStartup(not allowExternal)
         if commandRunning.playback then
             commandRunning.stopPendingAfterExternalSwitch = true
         end
@@ -65,9 +67,7 @@ function Initialize(allowCrossConfig)
             deactivateDiscSlotSkin()
         end
         setJukeboxAnimatorPlaybackActive(false, allowCrossConfig)
-        if allowExternal then
-            webNowPlayingInstallState.start('Check', PLAYBACK_SOURCE_LOCAL)
-        end
+        webNowPlayingInstallState.start('Check', PLAYBACK_SOURCE_LOCAL)
     elseif allowExternal then
         syncExternalBridgeForMode()
     end
@@ -162,6 +162,7 @@ function enterJukeboxMinimizedForm(x)
     writeJukeboxDisplayMode('minimized')
     hideDiscSlotForJukeboxFormSwitch()
     setJukeboxDraggable(true)
+    setJukeboxMinimizedMouseEnabled(true)
     syncMinimizedModeImages()
     setJukeboxAnimatorHidden(true)
     moveJukeboxToMinimizedBottom(targetX)
@@ -182,6 +183,7 @@ function enterJukeboxMainForm(x)
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', string.format('SetFixedPosition(%q,%d,%d)', 'Jukebox', rect.x, rect.y))
     SKIN:Bang('!Move', tostring(rect.x), tostring(rect.y))
     setJukeboxDraggable(true)
+    setJukeboxMinimizedMouseEnabled(false)
     setJukeboxMinimizedAnimatorHidden(true)
     RestorePlaybackAnimation()
     redraw()
@@ -317,6 +319,32 @@ function CancelWebNowPlayingInstall(token)
     end)
 end
 
+function ConfirmWebNowPlayingPortOwnerTerminate(token)
+    return safeCall(function()
+        if trim(token) == '' or trim(webNowPlayingInstallState.ownerPid) == '' then
+            return false
+        end
+        webNowPlayingInstallState.openCommand = ''
+        return webNowPlayingInstallState.openPortOwnerForceConfirm()
+    end)
+end
+
+function ForceTerminateWebNowPlayingPortOwner(token)
+    return safeCall(function()
+        if trim(token) == '' or trim(webNowPlayingInstallState.ownerPid) == '' then
+            return false
+        end
+        webNowPlayingInstallState.openCommand = ''
+        return webNowPlayingInstallState.start('TerminatePortOwner', webNowPlayingInstallState.previousMode)
+    end)
+end
+
+function CancelWebNowPlayingPortOwnerTerminate(token)
+    return safeCall(function()
+        return webNowPlayingInstallState.fallbackToLocal()
+    end)
+end
+
 function HandleWebNowPlayingInstallComplete()
     return safeCall(function()
         return webNowPlayingInstallState.handleComplete()
@@ -386,6 +414,7 @@ function ToggleDiscSlot()
         return playClickSoundForResult(result)
     end)
 end
+
 function TryCompleteDiscSlotDeferredSync()
     return safeCall(function()
         if not discSlotPendingShow then
@@ -398,11 +427,17 @@ function TryCompleteDiscSlotDeferredSync()
             return showDiscSlotNow(configName, discSlotPendingShowSkipRefresh)
         end
         discSlotDeferredAttempts = discSlotDeferredAttempts + 1
+        if discSlotActivationRequested and not discSlotRefreshRecoveryRequested and discSlotDeferredAttempts >= 3 then
+            discSlotRefreshRecoveryRequested = true
+            SKIN:Bang('!Refresh', configName)
+            return true
+        end
         if discSlotDeferredAttempts >= DISC_SLOT_DEFERRED_MAX_ATTEMPTS then
             SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlotDeferredSyncTimer', 'Stop 1')
             discSlotPendingShow = false
             discSlotPendingShowSkipRefresh = false
             discSlotActivationRequested = false
+            discSlotRefreshRecoveryRequested = false
             discSlotLoaded = false
             discSlotVisible = false
             setJukeboxDraggable(true)
@@ -786,7 +821,7 @@ function ShowUnsupportedAudio(fileName, supportedExtensions)
             fallbackForKey('ModalAlert_JukeboxUnsupportedAudio'),
             modalAlertLogPath(),
             { fileName, supportedExtensions },
-            { primaryKey = 'Loc_ModalAlert_OpenFolder', openFolderPath = jukeboxDiscAudioDirectoryPath() })
+            { primaryKey = 'Loc_Common_OpenFolder', openFolderPath = jukeboxDiscAudioDirectoryPath() })
     end)
 end
 function ShowCurrentPlaybackHotbarText()

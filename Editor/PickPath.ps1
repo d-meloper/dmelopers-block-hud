@@ -24,7 +24,7 @@ function Get-PickerUiText() {
         FolderText          = L 'Helper_PickPath_Type_Folder' 'Folder'
         AppText             = L 'Helper_PickPath_Type_Program' 'Program'
         FavoriteText        = L 'Helper_PickPath_Type_Favorite' 'Favorite'
-        CloseText           = L 'Helper_PickPath_DialogClose' 'Close'
+        CloseText           = L 'Common_Close' 'Close'
         FileTitle           = L 'Helper_PickPath_FileTitle' 'Select a file'
         FolderTitle         = L 'Helper_PickPath_FolderTitle' 'Select a folder'
         AllFilesFilterLabel = L 'Helper_PickPath_AllFilesFilterLabel' 'All Files'

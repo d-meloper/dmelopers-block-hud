@@ -632,9 +632,9 @@ function Invoke-Migration {
     Backup-TargetStateToTemporaryRollback -TargetRoot $resolvedTargetRoot
     $script:ImportTargetMutationStarted = $true
     Replace-DirectorySnapshot -SourceDirectory $sourceItemImageDirectory -TargetDirectory $targetItemImageDirectory
-    $hotbarBackfill = New-HotbarSlot10ReservedBackfill -LanguageCode $importedLanguageCode
+    $hotbarBackfill = New-HotbarSlot10ReservedBackfill -LanguageCode $importedLanguageCode -TargetRoot $resolvedTargetRoot
     Merge-VariablesFile -SourcePath $sourceHotbarPath -TargetPath $targetHotbarPath -SameKeysOnly -ExcludeKeyPatterns @('^HotbarItem_Slot10_') -Backfill $hotbarBackfill -ImageRenameMap $imageRenameMap
-    Normalize-HotbarSlot10ReservedLabel -TargetHotbarPath $targetHotbarPath -LanguageCode $importedLanguageCode
+    Normalize-HotbarSlot10ReservedLabel -TargetHotbarPath $targetHotbarPath -LanguageCode $importedLanguageCode -TargetRoot $resolvedTargetRoot
     Merge-VariablesFile -SourcePath $sourceInventoryPath -TargetPath $targetInventoryPath -SameKeysOnly -ImageRenameMap $imageRenameMap
     Merge-ImageAdjustmentsFile -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'ImageAdjustments.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'ImageAdjustments.inc') -ImageRenameMap $imageRenameMap
     Merge-ItemImagesCatalog -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'ItemImages.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'ItemImages.inc') -ImageRenameMap $imageRenameMap

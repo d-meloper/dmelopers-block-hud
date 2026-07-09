@@ -83,6 +83,10 @@ return function(app)
 
                 end
 
+                if methods.applyRowLabelTextFit then
+                    methods.applyRowLabelTextFit(rowIndex, field, rowLabelText)
+                end
+
             end
 
         end

@@ -233,7 +233,7 @@ try {
     $folderText = Get-LocText 'Helper_PickPath_Type_Folder' 'Folder'
     $appText = Get-LocText 'Helper_PickPath_Type_Program' 'Program'
     $favoriteText = Get-LocText 'Helper_PickPath_Type_Favorite' 'Favorite'
-    $closeText = Get-LocText 'Helper_PickPath_DialogClose' 'Close'
+    $closeText = Get-LocText 'Common_Close' 'Close'
     $fileTitle = Get-LocText 'Helper_PickPath_FileTitle' 'Select a file'
     $folderTitle = Get-LocText 'Helper_PickPath_FolderTitle' 'Select a folder'
 

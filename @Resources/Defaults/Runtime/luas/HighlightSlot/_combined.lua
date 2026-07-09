@@ -32,6 +32,8 @@ local HerobrineEvents = nil
 local RainmeterConfigState = nil
 local ResidentUpdateController = nil
 local LanguageBranching = nil
+local LanguageRegistry = nil
+local LocalizationTextFit = nil
 HighlightSlotActionLaunch = nil
 local IsMissingHintVisible = true
 local isOptionHovering = false
@@ -274,9 +276,8 @@ local function closeInventoryPanels(rootPath)
     end
     local function closeInventoryBackground()
         if isRainmeterConfigActive(inventoryBgConfig) then
-            SKIN:Bang('!CommandMeasure', 'MeasureHighlight', 'SuspendInventoryBackgroundResident()', inventoryBgConfig)
+            SKIN:Bang('!DeactivateConfig', inventoryBgConfig)
         end
-        HighlightHideActiveConfig(inventoryBgConfig)
     end
     if currentConfig == inventoryBgConfigKey then
         closeInventory()
@@ -472,6 +473,8 @@ local function LoadEssentials()
     RainmeterConfigState = dofile(R .. 'Defaults\\Runtime\\luas\\RainmeterConfigState.lua')
     ResidentUpdateController = dofile(R .. 'Defaults\\Runtime\\luas\\ResidentUpdateController.lua')
     LanguageBranching = dofile(R .. 'Defaults\\Runtime\\luas\\LanguageBranching.lua')
+    LanguageRegistry = dofile(R .. 'Defaults\\Runtime\\luas\\LanguageRegistry.lua')
+    LocalizationTextFit = dofile(R .. 'Defaults\\Runtime\\luas\\LocalizationTextFit.lua')
     local skinRoot = tostring(SKIN:GetVariable('ROOTCONFIGPATH', '') or '')
     skinRoot = skinRoot:gsub('^%s+', ''):gsub('%s+$', '')
     if skinRoot ~= '' and skinRoot:sub(-1) ~= '\\' and skinRoot:sub(-1) ~= '/' then
@@ -484,6 +487,19 @@ local function LoadEssentials()
     IsHotbar = GetSkinValue('IsHotbar') == 1
     LoadAllSkinValue()
     SKIN:Bang(_G.DMeloper.BANG_SET_VARIABLE, 'HighlightShapeSize', tostring(SlotSize + HighlightSizeOffset))
+end
+function ApplyInventoryStaticLocalizationTextFits()
+    if IsHotbar or not LocalizationTextFit or not LocalizationTextFit.ApplyMeterTextFit then
+        return
+    end
+    LocalizationTextFit.ApplyMeterTextFit(SKIN, 'MeterEditorModeBadgeLabel', '#Loc_Inventory_EditorModeBadgeText#', {
+        baseFontSize = GetSkinNumber('EditorModeBadgeFontSize', 20),
+        widthPx = math.max(0, GetSkinNumber('EditorModeBadgeW', 245) - 18),
+        minScale = 0.55,
+        probeMeterName = 'MeterInventoryTextFitProbe',
+        setText = false,
+        update = false,
+    })
 end
 local function callHerobrine(methodName, ...)
     if HerobrineEvents and type(HerobrineEvents[methodName]) == 'function' then
@@ -641,10 +657,10 @@ local function IsInventoryItem(s)
     return s == _G.DMeloper.OPEN_INVENTORY_KEY
 end
 local function CurrentLanguageCode()
-    return LanguageBranching.CurrentSkinLanguageCode(SKIN, 'ko-KR')
+    return LanguageRegistry.NormalizeLanguageCode(SKIN, LanguageBranching.CurrentSkinLanguageCode(SKIN, 'en-US'), 'en-US')
 end
 local function ReservedInventoryDisplayName()
-    return LanguageBranching.SelectKoreanElseGlobal(CurrentLanguageCode(), '인벤토리', 'Inventory')
+    return LanguageRegistry.GetInventoryLabel(SKIN, CurrentLanguageCode())
 end
 local function InventoryUsageGuideUrl()
     return LanguageBranching.SelectKoreanElseGlobal(
@@ -1623,7 +1639,7 @@ function RunConfirm.open(info, exec, action)
         .. LuaStringLiteral('Loc_RunConfirm_Title') .. ','
         .. LuaStringLiteral('Loc_RunConfirm_Message') .. ','
         .. LuaStringLiteral('Loc_RunConfirm_Run') .. ','
-        .. LuaStringLiteral('Loc_RunConfirm_Cancel') .. ','
+        .. LuaStringLiteral('Loc_Common_Cancel') .. ','
         .. LuaStringLiteral('MeasureHighlight') .. ','
         .. LuaStringLiteral('ConfirmPendingRun') .. ','
         .. LuaStringLiteral('CancelPendingRun') .. ','
@@ -2092,6 +2108,8 @@ function ResumeInventoryResident()
     SKIN:Bang('!UpdateMeasure', 'MeasureAnimation')
     SKIN:Bang('!UpdateMeter', 'MeterPlayerDefault')
     SKIN:Bang('!UpdateMeter', 'MeterPlayerCustom')
+    ApplyInventoryStaticLocalizationTextFits()
+    SKIN:Bang('!UpdateMeter', 'MeterEditorModeBadgeLabel')
     SKIN:Bang('!CommandMeasure', 'MeasureItemInfoInitializer', 'InitInfos()')
     SKIN:Bang('!Redraw')
 end
@@ -2117,45 +2135,37 @@ function SuspendInventoryResident()
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
     SKIN:Bang('!Redraw')
 end
-function ResumeInventoryBackgroundResident()
+function RestoreInventoryBackgroundActiveConfig()
     LoadEssentials()
-    ResidentUpdateController.ResumeSurface('InventoryBG')
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'ApplyLayout()')
     SKIN:Bang('!Draggable', '0')
     SKIN:Bang('!Redraw')
 end
-function RestoreInventoryBackgroundResidentOnRefresh()
+function RestoreInventoryBackgroundActiveConfigOnRefresh()
     LoadEssentials()
     local wasVisible = IsInventoryVisibleStateEnabled()
     if not wasVisible then
         SKIN:Bang('!UpdateMeasure', 'MeasureInventoryBGEnableGuard')
-        SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'ApplyLayout()')
-        SuspendInventoryBackgroundResident()
+        SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
+        SKIN:Bang('!DeactivateConfig')
         return
     end
-    ResumeInventoryBackgroundResident()
+    RestoreInventoryBackgroundActiveConfig()
 end
 function DeactivateClosedInventoryBackgroundOnRefresh()
     LoadEssentials()
     if IsInventoryVisibleStateEnabled() then
-        ResumeInventoryBackgroundResident()
+        RestoreInventoryBackgroundActiveConfig()
         return
     end
 
-    local bootstrapActive = trimText(SKIN:GetVariable('BlockHudZPosBootstrapActive', '0')) ~= '0'
-    if bootstrapActive then
-        SuspendInventoryBackgroundResident()
-        return
-    end
-
-    SuspendInventoryBackgroundResident()
+    SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
     SKIN:Bang('!DeactivateConfig')
 end
-function SuspendInventoryBackgroundResident()
+function DeactivateInventoryBackgroundActiveConfig()
     LoadEssentials()
-    ResidentUpdateController.SuspendSurface('InventoryBG')
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
-    SKIN:Bang('!Redraw')
+    SKIN:Bang('!DeactivateConfig')
 end
 local function prepareInventoryOpenPosition(inventoryActive, inventoryConfig)
     if inventoryActive then
@@ -2257,8 +2267,8 @@ function ActivateAllInventory()
         end
     end
     if inventoryBgActive then
-        showResidentConfigAfterLayout(inventoryBgConfig)
-        HighlightCommandMeasureForActiveConfig('MeasureHighlight', 'ResumeInventoryBackgroundResident()', inventoryBgConfig)
+        HighlightCommandMeasureForActiveConfig('MeasureResponsiveLayout', 'ApplyLayout()', inventoryBgConfig)
+        HighlightCommandMeasureForActiveConfig('MeasureHighlight', 'RestoreInventoryBackgroundActiveConfig()', inventoryBgConfig)
     end
     if inventoryActive then
         showResidentConfigAfterLayout(inventoryConfig)

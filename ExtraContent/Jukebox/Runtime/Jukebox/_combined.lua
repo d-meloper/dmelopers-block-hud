@@ -78,6 +78,7 @@ local discSlotVisible = false
 local discSlotLoaded = false
 local discSlotActivationRequested = false
 local discSlotDeferredAttempts = 0
+local discSlotRefreshRecoveryRequested = false
 local discSlotPendingShow = false
 local discSlotPendingShowSkipRefresh = false
 local animationEngine = nil
@@ -178,6 +179,10 @@ webNowPlayingInstallState = {
     token = 0,
     openCommand = '',
     bypassPreflight = false,
+    ownerPid = '',
+    ownerUser = '',
+    ownerDomain = '',
+    ownerLabel = '',
 }
 
 local pendingDiscSlotPlayback = nil
@@ -419,13 +424,18 @@ function webNowPlayingInstallState.buildArgs(action)
     if normalizedAction == '' then
         normalizedAction = 'Check'
     end
-    return table.concat({
+    local args = {
         '-NoProfile',
         '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quotePowerShellArgument(webNowPlayingInstallState.scriptPath()),
         '-Action', quotePowerShellArgument(normalizedAction),
-    }, ' ')
+    }
+    if normalizedAction:lower() == 'terminateportowner' and trim(webNowPlayingInstallState.ownerPid) ~= '' then
+        args[#args + 1] = '-OwnerPid'
+        args[#args + 1] = quotePowerShellArgument(trim(webNowPlayingInstallState.ownerPid))
+    end
+    return table.concat(args, ' ')
 end
 
 local function buildOpenLogFolderArgs()
@@ -944,15 +954,17 @@ function minimizedWidth() return math.max(1, round(SKIN:GetVariable('JukeboxMini
 function minimizedHeight() return math.max(1, round(SKIN:GetVariable('JukeboxMinimizedH', '40'))) end
 function currentWindowX() return round(SKIN:GetVariable('CURRENTCONFIGX', '0')) end
 function currentWindowY() return round(SKIN:GetVariable('CURRENTCONFIGY', '0')) end
-function minimizedBottomY() local work = JukeboxCurrentWorkArea(); return round(work.bottom - minimizedHeight()) end
-function clampMinimizedX(x) local work = JukeboxCurrentWorkArea(); return round(JukeboxClampToRange(round(x), work.x, work.right - minimizedWidth())) end
+function jukeboxMinimizedWorkArea(x) local probeX = round((tonumber(x) or currentWindowX()) + (minimizedWidth() / 2)); local probeY = currentWindowY(); if JukeboxWorkAreaForPoint then return JukeboxWorkAreaForPoint(probeX, probeY, JukeboxCurrentWorkArea()) end; return JukeboxCurrentWorkArea() end
+function minimizedBottomY(x) local work = jukeboxMinimizedWorkArea(x); return round(work.bottom - minimizedHeight()) end
+function clampMinimizedX(x) local work = jukeboxMinimizedWorkArea(x); return round(JukeboxClampToRange(round(x), work.x, work.right - minimizedWidth())) end
 function persistSharedJukeboxX(x, mainY) local targetX = clampMinimizedX(x); local y = storedJukeboxMainY(mainY); SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', string.format('SetFixedPosition(%q,%d,%d)', 'Jukebox', targetX, y)); return targetX end
-function moveJukeboxToMinimizedBottom(x) local targetX = clampMinimizedX(x); local targetY = minimizedBottomY(); SKIN:Bang('!Move', tostring(targetX), tostring(targetY)); minimizedLastWindowY = targetY; return targetX, targetY end
+function moveJukeboxToMinimizedBottom(x) local targetX = clampMinimizedX(x); local targetY = minimizedBottomY(targetX); SKIN:Bang('!Move', tostring(targetX), tostring(targetY)); minimizedLastWindowY = targetY; return targetX, targetY end
 function updateMinimizedMeters() SKIN:Bang('!UpdateMeter', 'MeterJukeboxMinimized'); SKIN:Bang('!UpdateMeter', 'MeterJukeboxMinimizedAnimator') end
+function setJukeboxMinimizedMouseEnabled(enabled) if enabled then SKIN:Bang('!EnableMeasure', 'MeasureJukeboxMinimizedMouse'); SKIN:Bang('!UpdateMeasure', 'MeasureJukeboxMinimizedMouse') else SKIN:Bang('!DisableMeasure', 'MeasureJukeboxMinimizedMouse') end; return true end
 function minimizedImagePath(fileName) return resourcesRoot() .. MINIMIZED_ANIMATOR_IMAGE_ROOT .. tostring(fileName or '') end
 function syncMinimizedModeImages() local baseImage = minimizedImagePath('jukebox.png'); local animatorImage = minimizedImagePath(ANIMATOR_TRANSITION_PROFILES.play); setVariable('JukeboxMinimizedImage', baseImage); setVariable('JukeboxMinimizedAnimatorImage', animatorImage); SKIN:Bang('!SetOption', 'MeterJukeboxMinimized', 'ImageName', baseImage); if minimizedAnimator == nil or minimizedAnimatorPhase == 'hidden' then SKIN:Bang('!SetOption', 'MeterJukeboxMinimizedAnimator', 'ImageName', animatorImage) end; updateMinimizedMeters() end
 function setJukeboxMinimizedAnimatorHidden(hidden) if not JukeboxIsMinimizedForm() then setVariable('JukeboxMinimizedAnimatorHidden', '1'); setVariable('JukeboxMinimizedBaseHidden', '1') else setVariable('JukeboxMinimizedAnimatorHidden', hidden and '1' or '0'); setVariable('JukeboxMinimizedBaseHidden', hidden and '0' or '1') end; updateMinimizedMeters(); redraw() end
-function seedMinimizedAnimatorRandom() if minimizedAnimatorRandomSeeded then return end; local seed = math.floor((os.time() + (currentWindowX() * 31) + (minimizedBottomY() * 17)) % 2147483647); if seed <= 0 then seed = os.time() end; math.randomseed(seed); math.random(); math.random(); math.random(); minimizedAnimatorRandomSeeded = true end
+function seedMinimizedAnimatorRandom() if minimizedAnimatorRandomSeeded then return end; local seed = math.floor((os.time() + (currentWindowX() * 31) + (minimizedBottomY(currentWindowX()) * 17)) % 2147483647); if seed <= 0 then seed = os.time() end; math.randomseed(seed); math.random(); math.random(); math.random(); minimizedAnimatorRandomSeeded = true end
 function chooseMinimizedPlayingSheetIndex() seedMinimizedAnimatorRandom(); local index = math.random(1, ANIMATOR_PLAYING_SHEET_COUNT); if minimizedAnimatorLastPlayingIndex > 0 and ANIMATOR_PLAYING_SHEET_COUNT > 1 then index = math.random(1, ANIMATOR_PLAYING_SHEET_COUNT - 1); if index >= minimizedAnimatorLastPlayingIndex then index = index + 1 end end; minimizedAnimatorLastPlayingIndex = index; return index end
 function profileForMinimizedAnimatorSheet(sheetName, frameCount, frameMs) frameMs = tonumber(frameMs) or ANIMATOR_FRAME_MS; return { sheetPath = minimizedImagePath(sheetName), meterName = 'MeterJukeboxMinimizedAnimator', frameWidth = ANIMATOR_FRAME_WIDTH, frameHeight = MINIMIZED_ANIMATOR_FRAME_HEIGHT, frameCount = frameCount, columns = ANIMATOR_COLUMNS, tickMs = ANIMATOR_TICK_MS, frameMs = frameMs, mode = 'once', redrawOnFrameChangeOnly = true, skipCatchUp = frameMs <= ANIMATOR_FRAME_MS, maxCatchUpFrames = 4, frozen = false, freezeFrame = 0 } end
 function buildMinimizedAnimator(sheetName, frameCount, frameMs) local profile = profileForMinimizedAnimatorSheet(sheetName, frameCount, frameMs); minimizedAnimatorCurrentFrameCount = profile.frameCount; minimizedAnimatorCurrentFrameMs = profile.frameMs; minimizedAnimator = loadAnimationEngine().create(SKIN, profile); minimizedAnimator:Initialize() end
@@ -967,7 +979,7 @@ function enterMinimizedPlayingDelay() minimizedAnimatorPhase = 'waiting'; minimi
 function SetJukeboxMinimizedPlaybackActive(value) minimizedAnimatorPlaybackActive = tostring(value or '') == '1' or tostring(value or ''):lower() == 'true'; setMinimizedPlaybackActiveVariable(minimizedAnimatorPlaybackActive); if not minimizedAnimatorPlaybackActive or isJukeboxNoteAnimationDisabled() then return HideJukeboxMinimizedAnimation() end; if minimizedAnimatorPhase == 'transition' then return true end; if minimizedAnimatorPhase ~= 'playing' and minimizedAnimatorPhase ~= 'waiting' then enterMinimizedPlayingDelay() end; return true end
 function StartJukeboxMinimizedAnimation(kind) kind = normalizeAnimationKind(kind); if kind ~= 'play' then minimizedAnimatorPlaybackActive = false; setMinimizedPlaybackActiveVariable(false) end; HideJukeboxMinimizedAnimation(); if not JukeboxIsMinimizedForm() or isJukeboxNoteAnimationDisabled() then return false end; startMinimizedAnimatorTransition(kind); return true end
 function restoreMinimizedPlaybackVisual() local active = trim(SKIN:GetVariable('JukeboxMinimizedPlaybackActive', '0')) == '1'; if not active and trim(SKIN:GetVariable('JukeboxPlaybackSelectedActive', '0')) == '1' then active = true end; return SetJukeboxMinimizedPlaybackActive(active and '1' or '0') end
-function snapJukeboxMinimizedToBottomWhenIdle() if minimizedDragging then return false end; local y = currentWindowY(); if minimizedLastWindowY ~= nil and y == minimizedLastWindowY then return false end; minimizedLastWindowY = y; if y == minimizedBottomY() then return false end; moveJukeboxToMinimizedBottom(currentWindowX()); return true end
+function snapJukeboxMinimizedToBottomWhenIdle() if minimizedDragging then return false end; local y = currentWindowY(); local expectedY = minimizedBottomY(currentWindowX()); if minimizedLastWindowY ~= nil and y == minimizedLastWindowY and y == expectedY then return false end; minimizedLastWindowY = y; if y == expectedY then return false end; moveJukeboxToMinimizedBottom(currentWindowX()); return true end
 function PollJukeboxMinimizedIdle() return safeCall(function() if not JukeboxIsMinimizedForm() then return StopJukeboxMinimizedIdleTimer() end; return snapJukeboxMinimizedToBottomWhenIdle() end) end
 function ContinueJukeboxMinimizedAnimationAfterDelay() return safeCall(function() if not JukeboxIsMinimizedForm() or isJukeboxNoteAnimationDisabled() then HideJukeboxMinimizedAnimation(); return false end; if minimizedAnimatorPhase ~= 'waiting' then return false end; if not minimizedAnimatorPlaybackActive then HideJukeboxMinimizedAnimation(); return false end; startMinimizedPlayingSheet(); return true end) end
 function UpdateJukeboxMinimizedAnimation() return safeCall(function() if not JukeboxIsMinimizedForm() then HideJukeboxMinimizedAnimation(); return false end; snapJukeboxMinimizedToBottomWhenIdle(); if isJukeboxNoteAnimationDisabled() then if minimizedAnimatorPhase ~= 'hidden' then HideJukeboxMinimizedAnimation() end; return false end; if minimizedAnimatorPhase == 'hidden' then return false end; if minimizedAnimatorPhase == 'waiting' then if not minimizedAnimatorPlaybackActive then HideJukeboxMinimizedAnimation(); return false end; minimizedAnimatorWaitMs = minimizedAnimatorWaitMs + ANIMATOR_TICK_MS; if minimizedAnimatorWaitMs >= ANIMATOR_PLAYING_DELAY_MS then startMinimizedPlayingSheet() end; return true end; if minimizedAnimator == nil then HideJukeboxMinimizedAnimation(); return false end; minimizedAnimator:Update(); minimizedAnimatorElapsedMs = minimizedAnimatorElapsedMs + ANIMATOR_TICK_MS; if minimizedAnimatorElapsedMs < (minimizedAnimatorCurrentFrameMs * math.max(1, minimizedAnimatorCurrentFrameCount)) then return true end; if minimizedAnimatorPhase == 'transition' then local finishedKind = minimizedAnimatorKind; if finishedKind == 'play' and minimizedAnimatorPlaybackActive then enterMinimizedPlayingDelay() else HideJukeboxMinimizedAnimation() end elseif minimizedAnimatorPhase == 'playing' then if minimizedAnimatorPlaybackActive then enterMinimizedPlayingDelay() else HideJukeboxMinimizedAnimation() end else HideJukeboxMinimizedAnimation() end; return true end) end
@@ -1222,6 +1234,22 @@ local function deactivateExternalBridge()
     return true
 end
 
+local function quarantineExternalBridgeForStartup(forceDeactivate)
+    externalPlaybackState.pendingCommand = nil
+    externalPlaybackState.pendingValueText = nil
+    externalPlaybackState.pendingCommandReconnectRetry = false
+    externalPlaybackState.bridgeActivationRequested = false
+    externalPlaybackState.bridgeReconnectRequested = false
+    externalPlaybackState.bridgeActive = false
+    setExternalPlaybackVariable('JukeboxExternalBridgeActive', '0')
+
+    local configName = webNowPlayingBridgeConfigName()
+    if configName ~= '' and configName:find('[\\/]') and (forceDeactivate or isRainmeterConfigActive(configName)) then
+        SKIN:Bang('!DeactivateConfig', configName)
+    end
+    return true
+end
+
 local function syncExternalBridgeForMode()
     if isExternalPlaybackSourceMode() then
         if commandRunning.webNowPlayingInstall or trim(webNowPlayingInstallState.phase) ~= '' then
@@ -1429,6 +1457,81 @@ function JukeboxCurrentWorkArea()
     }
 end
 
+local function jukeboxWorkAreaRect(x, y, width, height)
+    x = round(tonumber(x) or 0)
+    y = round(tonumber(y) or 0)
+    width = math.max(1, round(tonumber(width) or 1))
+    height = math.max(1, round(tonumber(height) or 1))
+    return {
+        x = x,
+        y = y,
+        width = width,
+        height = height,
+        right = x + width,
+        bottom = y + height,
+        centerX = x + (width / 2),
+        centerY = y + (height / 2),
+    }
+end
+
+local function jukeboxMonitorWorkAreas()
+    local result = {}
+    local seen = {}
+    for index = 1, 16 do
+        local x = tonumber(SKIN:GetVariable('WORKAREAX@' .. tostring(index), ''))
+        local y = tonumber(SKIN:GetVariable('WORKAREAY@' .. tostring(index), ''))
+        local width = tonumber(SKIN:GetVariable('WORKAREAWIDTH@' .. tostring(index), ''))
+        local height = tonumber(SKIN:GetVariable('WORKAREAHEIGHT@' .. tostring(index), ''))
+        if x and y and width and height and width > 0 and height > 0 then
+            local rect = jukeboxWorkAreaRect(x, y, width, height)
+            local key = table.concat({ rect.x, rect.y, rect.width, rect.height }, ':')
+            if not seen[key] then
+                seen[key] = true
+                result[#result + 1] = rect
+            end
+        end
+    end
+    return result
+end
+
+local function jukeboxRectContainsPoint(rect, x, y)
+    return rect and x >= rect.x and x < rect.right and y >= rect.y and y < rect.bottom
+end
+
+local function jukeboxDistanceSquaredToRectCenter(rect, x, y)
+    local dx = (rect.centerX or 0) - x
+    local dy = (rect.centerY or 0) - y
+    return (dx * dx) + (dy * dy)
+end
+
+function JukeboxWorkAreaForPoint(x, y, fallback)
+    x = round(tonumber(x) or 0)
+    y = round(tonumber(y) or 0)
+    local areas = jukeboxMonitorWorkAreas()
+    local best = nil
+    local bestDistance = nil
+    for _, area in ipairs(areas) do
+        if jukeboxRectContainsPoint(area, x, y) then
+            return area
+        end
+        local distance = jukeboxDistanceSquaredToRectCenter(area, x, y)
+        if best == nil or distance < bestDistance then
+            best = area
+            bestDistance = distance
+        end
+    end
+    return best or fallback or JukeboxCurrentWorkArea()
+end
+
+local function jukeboxWorkAreaForRect(rect, fallback)
+    rect = rect or currentJukeboxLiveRect()
+    local width = math.max(1, round(tonumber(rect.width) or 100))
+    local height = math.max(1, round(tonumber(rect.height) or 126))
+    local x = round((tonumber(rect.x) or 0) + (width / 2))
+    local y = round((tonumber(rect.y) or 0) + (height / 2))
+    return JukeboxWorkAreaForPoint(x, y, fallback)
+end
+
 function JukeboxClampToRange(value, minValue, maxValue)
     value = tonumber(value) or 0
     if maxValue < minValue then
@@ -1445,9 +1548,9 @@ end
 
 function JukeboxClampRectToWorkArea(rect)
     rect = rect or currentJukeboxLiveRect()
-    local work = JukeboxCurrentWorkArea()
     local width = math.max(1, round(tonumber(rect.width) or 100))
     local height = math.max(1, round(tonumber(rect.height) or 126))
+    local work = jukeboxWorkAreaForRect(rect, JukeboxCurrentWorkArea())
     return {
         x = round(JukeboxClampToRange(rect.x, work.x, work.right - width)),
         y = round(JukeboxClampToRange(rect.y, work.y, work.bottom - height)),
@@ -1476,6 +1579,7 @@ end
 
 local function scheduleDiscSlotDeferredSync()
     discSlotDeferredAttempts = 0
+    discSlotRefreshRecoveryRequested = false
     SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlotDeferredSyncTimer', 'Stop 1')
     SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlotDeferredSyncTimer', 'Execute 1')
 end
@@ -1527,6 +1631,7 @@ local function activateDiscSlot()
     if isRainmeterConfigActive(configName) then
         discSlotLoaded = true
         discSlotActivationRequested = false
+        discSlotRefreshRecoveryRequested = false
         return configName, false
     end
     if discSlotActivationRequested then
@@ -1559,6 +1664,7 @@ showDiscSlotNow = function(configName, skipRefresh)
     if not setVariableForActiveConfig('JukeboxDiscSlotHidden', '0', configName) then
         discSlotLoaded = false
         discSlotActivationRequested = false
+        discSlotRefreshRecoveryRequested = false
         return false
     end
     SKIN:Bang('!Show', configName)
@@ -1573,6 +1679,7 @@ showDiscSlotNow = function(configName, skipRefresh)
     discSlotPendingShow = false
     discSlotPendingShowSkipRefresh = false
     discSlotActivationRequested = false
+    discSlotRefreshRecoveryRequested = false
     discSlotDeferredAttempts = 0
     if not skipRefresh then
         refreshDiscSlot(configName)
@@ -1646,6 +1753,15 @@ function webNowPlayingInstallState.localized(key, englishFallback, koreanFallbac
     return localizedSummary(key, fallback)
 end
 
+function webNowPlayingInstallState.localizedWithPlaceholder(key, englishFallback, koreanFallback, placeholder)
+    local languageCode = trim(SKIN:GetVariable('LanguageCode', '')):lower()
+    local fallback = englishFallback
+    if languageCode:find('ko', 1, true) == 1 then
+        fallback = koreanFallback or englishFallback
+    end
+    return localizedSummary(key, fallback, placeholder)
+end
+
 function webNowPlayingInstallState.modalConfigName()
     local root = rootConfigName()
     if root == '' then
@@ -1682,10 +1798,75 @@ function webNowPlayingInstallState.openInstallConfirm()
         .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingInstallTitle', 'Plugin installation', '플러그인 설치')) .. ','
         .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingInstallMessage', 'Install the WebNowPlaying plugin for external music app integration. (Size: 52.5KB)', '외부 뮤직 앱 연동을 위해 WebNowPlaying 플러그인을 설치합니다. (용량: 52.5KB)')) .. ','
         .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingInstallButton', 'Install', '설치')) .. ','
-        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingInstallCancel', 'Cancel', '취소')) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('Common_Cancel', 'Cancel', '취소')) .. ','
         .. webNowPlayingInstallState.luaString('MeasureJukebox') .. ','
         .. webNowPlayingInstallState.luaString('ConfirmWebNowPlayingInstall') .. ','
         .. webNowPlayingInstallState.luaString('CancelWebNowPlayingInstall') .. ')'
+
+    webNowPlayingInstallState.requestDeferredOpen()
+    return true
+end
+
+function webNowPlayingInstallState.portOwnerFallbackLabel()
+    return webNowPlayingInstallState.localized(
+        'ModalAlert_WebNowPlayingUnknownOwner',
+        'another Windows local account',
+        'another Windows local account')
+end
+
+function webNowPlayingInstallState.setPortOwner(values)
+    values = values or {}
+    webNowPlayingInstallState.ownerPid = trim(values.DMEL_OWNER_PID or '')
+    webNowPlayingInstallState.ownerUser = trim(values.DMEL_OWNER_USER or '')
+    webNowPlayingInstallState.ownerDomain = trim(values.DMEL_OWNER_DOMAIN or '')
+    if webNowPlayingInstallState.ownerUser ~= '' and webNowPlayingInstallState.ownerDomain ~= '' then
+        webNowPlayingInstallState.ownerLabel = webNowPlayingInstallState.ownerDomain .. '\\' .. webNowPlayingInstallState.ownerUser
+    elseif webNowPlayingInstallState.ownerUser ~= '' then
+        webNowPlayingInstallState.ownerLabel = webNowPlayingInstallState.ownerUser
+    else
+        webNowPlayingInstallState.ownerLabel = webNowPlayingInstallState.portOwnerFallbackLabel()
+    end
+end
+
+function webNowPlayingInstallState.openPortOwnerTerminateConfirm()
+    local configName = webNowPlayingInstallState.modalConfigName()
+    if configName == '' or not configName:find('[\\/]') then
+        return false
+    end
+
+    local token = webNowPlayingInstallState.nextToken()
+    webNowPlayingInstallState.openCommand = 'OpenConfirm('
+        .. webNowPlayingInstallState.luaString(SKIN:GetVariable('CURRENTCONFIG', '')) .. ','
+        .. webNowPlayingInstallState.luaString(token) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingConflictTitle', 'Music app conflict', 'Music app conflict')) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingPortInUseOtherUser', 'Rainmeter is running in another Windows local account and is connected to the WebNowPlaying port, causing a conflict.\\nTo use an external music app in the current local account, the process in the other local account must be terminated.\\nTerminate that Rainmeter process now?', 'Rainmeter is running in another Windows local account and is connected to the WebNowPlaying port, causing a conflict.\\nTo use an external music app in the current local account, the process in the other local account must be terminated.\\nTerminate that Rainmeter process now?')) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingTerminateOtherProcess', 'Terminate process', 'Terminate process')) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('Common_Close', 'Close', 'Close')) .. ','
+        .. webNowPlayingInstallState.luaString('MeasureJukebox') .. ','
+        .. webNowPlayingInstallState.luaString('ConfirmWebNowPlayingPortOwnerTerminate') .. ','
+        .. webNowPlayingInstallState.luaString('CancelWebNowPlayingPortOwnerTerminate') .. ')'
+
+    webNowPlayingInstallState.requestDeferredOpen()
+    return true
+end
+
+function webNowPlayingInstallState.openPortOwnerForceConfirm()
+    local configName = webNowPlayingInstallState.modalConfigName()
+    if configName == '' or not configName:find('[\\/]') then
+        return false
+    end
+
+    local token = webNowPlayingInstallState.nextToken()
+    webNowPlayingInstallState.openCommand = 'OpenConfirm('
+        .. webNowPlayingInstallState.luaString(SKIN:GetVariable('CURRENTCONFIG', '')) .. ','
+        .. webNowPlayingInstallState.luaString(token) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingConflictTitle', 'Music app conflict', 'Music app conflict')) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingTerminateConfirm', 'Force termination can cause unexpected problems. We recommend logging into that Windows account and closing Rainmeter manually. Force terminate now?', 'Force termination can cause unexpected problems. We recommend logging into that Windows account and closing Rainmeter manually. Force terminate now?')) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingForceTerminate', 'Force terminate', 'Force terminate')) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('Common_Close', 'Close', 'Close')) .. ','
+        .. webNowPlayingInstallState.luaString('MeasureJukebox') .. ','
+        .. webNowPlayingInstallState.luaString('ForceTerminateWebNowPlayingPortOwner') .. ','
+        .. webNowPlayingInstallState.luaString('CancelWebNowPlayingPortOwnerTerminate') .. ')'
 
     webNowPlayingInstallState.requestDeferredOpen()
     return true
@@ -2097,7 +2278,7 @@ showCurrentExternalPlaybackHotbarText = function(pinned)
 end
 
 -- Split from ExtraContent\Jukebox\Jukebox.lua lines 2208-3022.
-local function fileNameFromPath(path)
+function fileNameFromPath(path)
     path = trim(path)
     if path == '' then
         return ''
@@ -2105,7 +2286,7 @@ local function fileNameFromPath(path)
     return path:match('[^\\/]+$') or path
 end
 
-local function audioFileNameFromValues(values)
+function audioFileNameFromValues(values)
     local name = trim(values and values.DMEL_AUDIOFILE or '')
     if name ~= '' then
         return name
@@ -2118,7 +2299,7 @@ local function audioFileNameFromValues(values)
 end
 
 
-local function requestEmergencyStop(reason)
+function requestEmergencyStop(reason)
     if commandRunning.emergencyStop then
         return false
     end
@@ -2136,7 +2317,7 @@ local function requestEmergencyStop(reason)
     return true
 end
 
-local function logErrorAndAlert(message)
+function logErrorAndAlert(message)
     forceHideJukeboxAnimator()
     requestEmergencyStop('lua-error')
 
@@ -2164,15 +2345,15 @@ safeCall = function(callback)
     return result
 end
 
-local function parsePairs(output)
+function parsePairs(output)
     return EnsureJukeboxHelperResultModule().parseDmelPairs(output)
 end
 
-local function outputPreview(output)
+function outputPreview(output)
     return EnsureJukeboxHelperResultModule().outputPreview(output, 180)
 end
 
-local function classifyInvalidHelperOutput(kind, output)
+function classifyInvalidHelperOutput(kind, output)
     if trim(output) == '' then
         return 'ModalAlert_JukeboxHelperNoOutput', ''
     end
@@ -2187,7 +2368,7 @@ local function classifyInvalidHelperOutput(kind, output)
     end
     return 'ModalAlert_JukeboxHelperMalformedOutput', ''
 end
-local function measureOutput(measureName)
+function measureOutput(measureName)
     local measure = SKIN:GetMeasure(measureName)
     if not measure then
         return ''
@@ -2195,7 +2376,7 @@ local function measureOutput(measureName)
     return tostring(measure:GetStringValue() or '')
 end
 
-local function summaryKeyForCode(code, defaultKey)
+function summaryKeyForCode(code, defaultKey)
     code = upper(code)
     if code == 'AUDIO_MISSING' then
         return 'ModalAlert_JukeboxAudioMissing'
@@ -2211,7 +2392,7 @@ local function summaryKeyForCode(code, defaultKey)
     return defaultKey or 'ModalAlert_JukeboxCommandFailed'
 end
 
-local function fallbackForKey(key)
+function fallbackForKey(key)
     if key == 'ModalAlert_JukeboxAudioMissing' then
         return 'The Jukebox audio file is missing: %1'
     elseif key == 'ModalAlert_JukeboxHelperStartFailed' then
@@ -2613,6 +2794,10 @@ function webNowPlayingInstallState.reset()
     webNowPlayingInstallState.requestedMode = ''
     webNowPlayingInstallState.previousMode = ''
     webNowPlayingInstallState.openCommand = ''
+    webNowPlayingInstallState.ownerPid = ''
+    webNowPlayingInstallState.ownerUser = ''
+    webNowPlayingInstallState.ownerDomain = ''
+    webNowPlayingInstallState.ownerLabel = ''
 end
 
 function webNowPlayingInstallState.fallbackToLocal()
@@ -2688,6 +2873,12 @@ function webNowPlayingInstallState.handleComplete()
     end
 
     if phase == 'check' then
+        if status == 'NOOP' and code == 'PORT_IN_USE_OTHER_USER' then
+            webNowPlayingInstallState.fallbackToLocal()
+            webNowPlayingInstallState.setPortOwner(values)
+            webNowPlayingInstallState.previousMode = PLAYBACK_SOURCE_LOCAL
+            return webNowPlayingInstallState.openPortOwnerTerminateConfirm()
+        end
         if status == 'NOOP' and code == 'PORT_IN_USE' then
             webNowPlayingInstallState.fallbackToLocal()
             return webNowPlayingInstallState.showInstallAlert(
@@ -2731,6 +2922,38 @@ function webNowPlayingInstallState.handleComplete()
             'ModalAlert_WebNowPlayingInstallFailed',
             'The plugin for external music app integration could not be loaded. In Jukebox Settings, click playback source \'External music app\' to try again.\n\nThe plugin could not be installed. Check your internet connection and try again.',
             '외부 뮤직 앱 연동을 위한 플러그인을 불러오지 못했습니다. 주크박스 설정에서 재생 소스의 \'외부 뮤직 앱\'을 클릭해 다시 시도해보세요.\n\n플러그인을 설치하지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도하세요.')
+    end
+
+    if phase == 'terminateportowner' then
+        if status == 'OK' and code == 'TERMINATED' then
+            webNowPlayingInstallState.showInstallAlert(
+                'warn',
+                'ModalAlert_WebNowPlayingTerminateSucceeded',
+                'The other account Rainmeter process was terminated. Jukebox will check WebNowPlaying again.',
+                'The other account Rainmeter process was terminated. Jukebox will check WebNowPlaying again.')
+            return webNowPlayingInstallState.start('Check', PLAYBACK_SOURCE_LOCAL)
+        end
+
+        webNowPlayingInstallState.fallbackToLocal()
+        if code == 'ACCESS_DENIED' then
+            return webNowPlayingInstallState.showInstallAlert(
+                'error',
+                'ModalAlert_WebNowPlayingTerminateAccessDenied',
+                'The other account Rainmeter process could not be terminated because access was denied. Log into that Windows account and close Rainmeter manually.',
+                'The other account Rainmeter process could not be terminated because access was denied. Log into that Windows account and close Rainmeter manually.')
+        end
+        if code == 'OWNER_CHANGED' or code == 'ALREADY_STOPPED' or code == 'OWNER_IS_CURRENT' then
+            return webNowPlayingInstallState.showInstallAlert(
+                'warn',
+                'ModalAlert_WebNowPlayingTerminateOwnerChanged',
+                'The WebNowPlaying port owner changed before termination. Try external player mode again after checking Rainmeter in the other Windows account.',
+                'The WebNowPlaying port owner changed before termination. Try external player mode again after checking Rainmeter in the other Windows account.')
+        end
+        return webNowPlayingInstallState.showInstallAlert(
+            'error',
+            'ModalAlert_WebNowPlayingTerminateFailed',
+            'The other account Rainmeter process could not be terminated. Log into that Windows account and close Rainmeter manually.',
+            'The other account Rainmeter process could not be terminated. Log into that Windows account and close Rainmeter manually.')
     end
 
     webNowPlayingInstallState.fallbackToLocal()
@@ -2942,6 +3165,7 @@ function Initialize(allowCrossConfig)
     JukeboxScheduler.responsive = false
     syncJukeboxModeImages()
     syncMinimizedModeImages()
+    setJukeboxMinimizedMouseEnabled(JukeboxIsMinimizedForm())
     setJukeboxAnimatorHidden(true)
     setJukeboxMinimizedAnimatorHidden(true)
     setJukeboxDraggable(true)
@@ -2958,6 +3182,7 @@ function Initialize(allowCrossConfig)
     syncHelperVariables()
 
     if sourceMode == PLAYBACK_SOURCE_EXTERNAL then
+        quarantineExternalBridgeForStartup(not allowExternal)
         if commandRunning.playback then
             commandRunning.stopPendingAfterExternalSwitch = true
         end
@@ -2968,9 +3193,7 @@ function Initialize(allowCrossConfig)
             deactivateDiscSlotSkin()
         end
         setJukeboxAnimatorPlaybackActive(false, allowCrossConfig)
-        if allowExternal then
-            webNowPlayingInstallState.start('Check', PLAYBACK_SOURCE_LOCAL)
-        end
+        webNowPlayingInstallState.start('Check', PLAYBACK_SOURCE_LOCAL)
     elseif allowExternal then
         syncExternalBridgeForMode()
     end
@@ -3065,6 +3288,7 @@ function enterJukeboxMinimizedForm(x)
     writeJukeboxDisplayMode('minimized')
     hideDiscSlotForJukeboxFormSwitch()
     setJukeboxDraggable(true)
+    setJukeboxMinimizedMouseEnabled(true)
     syncMinimizedModeImages()
     setJukeboxAnimatorHidden(true)
     moveJukeboxToMinimizedBottom(targetX)
@@ -3085,6 +3309,7 @@ function enterJukeboxMainForm(x)
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', string.format('SetFixedPosition(%q,%d,%d)', 'Jukebox', rect.x, rect.y))
     SKIN:Bang('!Move', tostring(rect.x), tostring(rect.y))
     setJukeboxDraggable(true)
+    setJukeboxMinimizedMouseEnabled(false)
     setJukeboxMinimizedAnimatorHidden(true)
     RestorePlaybackAnimation()
     redraw()
@@ -3220,6 +3445,32 @@ function CancelWebNowPlayingInstall(token)
     end)
 end
 
+function ConfirmWebNowPlayingPortOwnerTerminate(token)
+    return safeCall(function()
+        if trim(token) == '' or trim(webNowPlayingInstallState.ownerPid) == '' then
+            return false
+        end
+        webNowPlayingInstallState.openCommand = ''
+        return webNowPlayingInstallState.openPortOwnerForceConfirm()
+    end)
+end
+
+function ForceTerminateWebNowPlayingPortOwner(token)
+    return safeCall(function()
+        if trim(token) == '' or trim(webNowPlayingInstallState.ownerPid) == '' then
+            return false
+        end
+        webNowPlayingInstallState.openCommand = ''
+        return webNowPlayingInstallState.start('TerminatePortOwner', webNowPlayingInstallState.previousMode)
+    end)
+end
+
+function CancelWebNowPlayingPortOwnerTerminate(token)
+    return safeCall(function()
+        return webNowPlayingInstallState.fallbackToLocal()
+    end)
+end
+
 function HandleWebNowPlayingInstallComplete()
     return safeCall(function()
         return webNowPlayingInstallState.handleComplete()
@@ -3289,6 +3540,7 @@ function ToggleDiscSlot()
         return playClickSoundForResult(result)
     end)
 end
+
 function TryCompleteDiscSlotDeferredSync()
     return safeCall(function()
         if not discSlotPendingShow then
@@ -3301,11 +3553,17 @@ function TryCompleteDiscSlotDeferredSync()
             return showDiscSlotNow(configName, discSlotPendingShowSkipRefresh)
         end
         discSlotDeferredAttempts = discSlotDeferredAttempts + 1
+        if discSlotActivationRequested and not discSlotRefreshRecoveryRequested and discSlotDeferredAttempts >= 3 then
+            discSlotRefreshRecoveryRequested = true
+            SKIN:Bang('!Refresh', configName)
+            return true
+        end
         if discSlotDeferredAttempts >= DISC_SLOT_DEFERRED_MAX_ATTEMPTS then
             SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlotDeferredSyncTimer', 'Stop 1')
             discSlotPendingShow = false
             discSlotPendingShowSkipRefresh = false
             discSlotActivationRequested = false
+            discSlotRefreshRecoveryRequested = false
             discSlotLoaded = false
             discSlotVisible = false
             setJukeboxDraggable(true)
@@ -3689,7 +3947,7 @@ function ShowUnsupportedAudio(fileName, supportedExtensions)
             fallbackForKey('ModalAlert_JukeboxUnsupportedAudio'),
             modalAlertLogPath(),
             { fileName, supportedExtensions },
-            { primaryKey = 'Loc_ModalAlert_OpenFolder', openFolderPath = jukeboxDiscAudioDirectoryPath() })
+            { primaryKey = 'Loc_Common_OpenFolder', openFolderPath = jukeboxDiscAudioDirectoryPath() })
     end)
 end
 function ShowCurrentPlaybackHotbarText()

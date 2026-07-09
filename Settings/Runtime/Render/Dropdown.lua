@@ -9,6 +9,7 @@ return function(app)
     local dropdownClosedText = helpers.dropdownClosedText
     local dropdownOpenText = helpers.dropdownOpenText
     local pixelValue = helpers.pixelValue
+    local applyTextFit = helpers.applyTextFit
 
     function methods.renderDropdown()
 
@@ -263,6 +264,9 @@ return function(app)
                 setVariable('SettingsDropdownOption' .. slotIndex .. 'Hidden', '0')
 
                 setVariable('SettingsDropdownOption' .. slotIndex .. 'LabelText', option.displayLabel)
+                if applyTextFit then
+                    applyTextFit('MeterSettingsDropdownOption' .. tostring(slotIndex) .. 'Label', '', option.displayLabel, 'SettingsUIFontSize', labelW, 0.70)
+                end
 
                 setVariable('SettingsDropdownOption' .. slotIndex .. 'AppliedValue', option.appliedValue)
 
@@ -271,6 +275,9 @@ return function(app)
                 setVariable('SettingsDropdownOption' .. slotIndex .. 'Hidden', '1')
 
                 setVariable('SettingsDropdownOption' .. slotIndex .. 'LabelText', '')
+                if applyTextFit then
+                    applyTextFit('MeterSettingsDropdownOption' .. tostring(slotIndex) .. 'Label', '', '', 'SettingsUIFontSize', labelW, 0.70)
+                end
 
                 setVariable('SettingsDropdownOption' .. slotIndex .. 'AppliedValue', '')
 

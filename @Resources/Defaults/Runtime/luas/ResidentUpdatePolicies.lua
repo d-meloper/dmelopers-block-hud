@@ -7,12 +7,6 @@ return {
             animation = { config = 'Inventory/AnimationDriver', file = 'AnimationDriver.ini', resume = false },
         },
     },
-    InventoryBG = {
-        group = 'ResidentUpdateInventoryBG',
-        oneShotMeasures = { 'MeasureInventoryBGEnableGuard' },
-        drivers = {
-        },
-    },
     Editor = {
         group = 'ResidentUpdateEditor',
         oneShotMeasures = { 'MeasureViewerPreviewBaseImageX', 'MeasureViewerPreviewBaseImageY', 'MeasureViewerPreviewBaseImageW', 'MeasureViewerPreviewBaseImageH' },

@@ -18,26 +18,37 @@ if not hasSkinMethod(skinApi, "GetVariable") then
 end
 local SKIN = skinApi
 
-local function localize(key, fallback)
-    if hasSkinMethod(SKIN, "GetVariable") then
-        return SKIN:GetVariable("Loc_" .. tostring(key or ""), fallback or "")
-    end
-    return fallback or ""
+local function earlyTrim(value)
+    return tostring(value or ""):match("^%s*(.-)%s*$")
 end
 
-local function isEnglishLocale()
-    return tostring(SKIN:GetVariable("LanguageCode", "ko-KR") or ""):match("^%s*(.-)%s*$") == "en-US"
+local function registryInventoryLabelForCode(languageCode)
+    local requested = earlyTrim(languageCode)
+    local fallback = earlyTrim(SKIN:GetVariable("DefaultFallbackLanguageCode", "en-US"))
+    local count = tonumber(SKIN:GetVariable("LanguageCount", "0")) or 0
+    local fallbackLabel = ""
+    for index = 1, count do
+        local prefix = "Language_" .. tostring(index) .. "_"
+        local code = earlyTrim(SKIN:GetVariable(prefix .. "Code", ""))
+        local label = earlyTrim(SKIN:GetVariable(prefix .. "InventoryLabel", ""))
+        if label ~= "" then
+            if code == requested then
+                return label
+            end
+            if code == fallback then
+                fallbackLabel = label
+            end
+        end
+    end
+    return fallbackLabel ~= "" and fallbackLabel or "Inventory"
 end
 
-local function reservedInventoryFallback()
-    if isEnglishLocale() then
-        return "Inventory"
-    end
-    return "인벤토리"
+local function currentLanguageCode()
+    return earlyTrim(SKIN:GetVariable("LanguageCode", SKIN:GetVariable("DefaultFallbackLanguageCode", "en-US")))
 end
 
 local function reservedInventoryLabel()
-    return localize("Editor_ItemReservedInventory", reservedInventoryFallback())
+    return registryInventoryLabelForCode(currentLanguageCode())
 end
 
 local function locRef(key)
@@ -155,7 +166,19 @@ local function isReservedInventoryLabelLiteral(value)
     end
 
     local localized = trim(reservedInventoryLabel())
-    return localized ~= "" and text == localized
+    if localized ~= "" and text == localized then
+        return true
+    end
+
+    local count = tonumber(SKIN:GetVariable("LanguageCount", "0")) or 0
+    for index = 1, count do
+        local label = trim(SKIN:GetVariable("Language_" .. tostring(index) .. "_InventoryLabel", ""))
+        if label ~= "" and text == label then
+            return true
+        end
+    end
+
+    return false
 end
 
 local function isReservedInventoryLabelValue(value)

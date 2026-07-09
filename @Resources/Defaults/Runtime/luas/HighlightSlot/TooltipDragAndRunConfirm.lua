@@ -822,7 +822,7 @@ function RunConfirm.open(info, exec, action)
         .. LuaStringLiteral('Loc_RunConfirm_Title') .. ','
         .. LuaStringLiteral('Loc_RunConfirm_Message') .. ','
         .. LuaStringLiteral('Loc_RunConfirm_Run') .. ','
-        .. LuaStringLiteral('Loc_RunConfirm_Cancel') .. ','
+        .. LuaStringLiteral('Loc_Common_Cancel') .. ','
         .. LuaStringLiteral('MeasureHighlight') .. ','
         .. LuaStringLiteral('ConfirmPendingRun') .. ','
         .. LuaStringLiteral('CancelPendingRun') .. ','

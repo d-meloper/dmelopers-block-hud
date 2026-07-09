@@ -2,12 +2,126 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $utf16LeBom = New-Object System.Text.UnicodeEncoding($false, $true)
 
 function Normalize-LanguageCode {
-    param([string]$LanguageCode)
+    param(
+        [string]$LanguageCode,
+        [string]$SkinRoot = ''
+    )
 
-    if (([string]$LanguageCode).Trim() -ieq 'en-US') {
-        return 'en-US'
+    $registry = Read-LanguageRegistry -SkinRoot $SkinRoot
+    $resolved = Resolve-RegisteredLanguageCode -Registry $registry -Value $LanguageCode -Fallback $registry.DefaultFallbackLanguageCode
+    if (-not [string]::IsNullOrWhiteSpace($resolved)) {
+        return $resolved
     }
-    return 'ko-KR'
+
+    'en-US'
+}
+
+function Get-LanguageRegistryPath {
+    param([string]$SkinRoot)
+
+    if ([string]::IsNullOrWhiteSpace($SkinRoot)) {
+        $SkinRoot = Get-LocalizationSkinRoot -ScriptRoot $PSScriptRoot
+    }
+
+    return [System.IO.Path]::Combine($SkinRoot, '@Resources', 'Localization', 'LanguageRegistry.inc')
+}
+
+function Read-RainmeterVariablesFromText {
+    param([string]$Content)
+
+    $variables = [ordered]@{}
+    $inVariables = $false
+    foreach ($line in (([string]$Content) -split "`r?`n")) {
+        $trimmed = $line.Trim()
+        if ($trimmed.StartsWith('[') -and $trimmed.EndsWith(']')) {
+            $inVariables = $trimmed.Equals('[Variables]', [System.StringComparison]::OrdinalIgnoreCase)
+            continue
+        }
+        if (-not $inVariables -or [string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith(';')) {
+            continue
+        }
+        $separator = $line.IndexOf('=')
+        if ($separator -lt 0) {
+            continue
+        }
+        $variables[$line.Substring(0, $separator).Trim()] = $line.Substring($separator + 1).TrimEnd("`r")
+    }
+    return $variables
+}
+
+function Read-LanguageRegistry {
+    param([string]$SkinRoot = '')
+
+    $path = Get-LanguageRegistryPath -SkinRoot $SkinRoot
+    $variables = Read-RainmeterVariablesFromText -Content (Read-Utf16Text -Path $path)
+    $fallback = if ($variables.Contains('DefaultFallbackLanguageCode') -and -not [string]::IsNullOrWhiteSpace([string]$variables['DefaultFallbackLanguageCode'])) {
+        [string]$variables['DefaultFallbackLanguageCode']
+    } else {
+        'en-US'
+    }
+
+    $entries = New-Object System.Collections.Generic.List[object]
+    $count = 0
+    [void][int]::TryParse([string]$variables['LanguageCount'], [ref]$count)
+    for ($index = 1; $index -le $count; $index++) {
+        $prefix = "Language_${index}_"
+        $code = if ($variables.Contains("${prefix}Code")) { ([string]$variables["${prefix}Code"]).Trim() } else { '' }
+        if ([string]::IsNullOrWhiteSpace($code)) {
+            continue
+        }
+        $displayName = if ($variables.Contains("${prefix}DisplayName")) { [string]$variables["${prefix}DisplayName"] } else { $code }
+        $inventoryLabel = if ($variables.Contains("${prefix}InventoryLabel")) { [string]$variables["${prefix}InventoryLabel"] } else { '' }
+        [void]$entries.Add([PSCustomObject]@{
+            Code = $code
+            DisplayName = $displayName
+            InventoryLabel = $inventoryLabel
+        })
+    }
+
+    $entryArray = @($entries.ToArray())
+    [PSCustomObject]@{
+        Path = $path
+        DefaultFallbackLanguageCode = $fallback
+        Entries = $entryArray
+    }
+}
+
+function Resolve-RegisteredLanguageCode {
+    param(
+        [Parameter(Mandatory = $true)]$Registry,
+        [AllowNull()][string]$Value,
+        [AllowNull()][string]$Fallback
+    )
+
+    $candidate = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($candidate)) {
+        $candidate = ([string]$Fallback).Trim()
+    }
+    $candidateLower = $candidate.ToLowerInvariant()
+
+    foreach ($entry in @($Registry.Entries)) {
+        $code = [string]$entry.Code
+        if ($candidateLower -eq $code.ToLowerInvariant()) {
+            return $code
+        }
+        $baseAlias = ($code -split '[-_]', 2)[0]
+        if (-not [string]::IsNullOrWhiteSpace($baseAlias) -and $candidateLower -eq $baseAlias.ToLowerInvariant()) {
+            return $code
+        }
+        if ($candidateLower -eq ([string]$entry.DisplayName).Trim().ToLowerInvariant()) {
+            return $code
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Fallback) -and $Fallback -ne $Value) {
+        return (Resolve-RegisteredLanguageCode -Registry $Registry -Value $Fallback -Fallback '')
+    }
+
+    if (@($Registry.Entries).Count -gt 0) {
+        return [string]$Registry.Entries[0].Code
+    }
+
+    ''
 }
 
 function Convert-LocalizationEscapes {
@@ -57,14 +171,11 @@ function Read-LanguageCode {
     $content = Read-Utf16Text (Get-LanguageCodePath -SkinRoot $SkinRoot)
     $match = [regex]::Match($content, '(?m)^LanguageCode=(.+?)\r?$')
     if (-not $match.Success) {
-        return 'ko-KR'
+        return (Normalize-LanguageCode -LanguageCode '' -SkinRoot $SkinRoot)
     }
 
     $value = ([string]$match.Groups[1].Value).Trim()
-    if ($value -ieq 'en-US') {
-        return 'en-US'
-    }
-    return 'ko-KR'
+    return (Normalize-LanguageCode -LanguageCode $value -SkinRoot $SkinRoot)
 }
 
 function Get-LocaleFilePath {
@@ -73,7 +184,7 @@ function Get-LocaleFilePath {
         [string]$LanguageCode
     )
 
-    $resolved = if ($LanguageCode -ieq 'en-US') { 'en-US' } else { 'ko-KR' }
+    $resolved = Normalize-LanguageCode -LanguageCode $LanguageCode -SkinRoot $SkinRoot
     return [System.IO.Path]::Combine($SkinRoot, '@Resources', 'Localization', 'Languages', ($resolved + '.inc'))
 }
 
@@ -210,8 +321,8 @@ function Read-LocaleTable {
         try {
             $raw = [System.IO.File]::ReadAllText($cachePath, $utf8NoBom)
             $cache = $raw | ConvertFrom-Json
-            $expectedLanguageCode = Normalize-LanguageCode -LanguageCode $LanguageCode
-            $cacheLanguageCode = Normalize-LanguageCode -LanguageCode ([string]$cache.languageCode)
+            $expectedLanguageCode = Normalize-LanguageCode -LanguageCode $LanguageCode -SkinRoot $SkinRoot
+            $cacheLanguageCode = Normalize-LanguageCode -LanguageCode ([string]$cache.languageCode) -SkinRoot $SkinRoot
             if ($cacheLanguageCode -eq $expectedLanguageCode -and $null -ne $cache.strings) {
                 foreach ($property in $cache.strings.PSObject.Properties) {
                     $propertyName = [string]$property.Name

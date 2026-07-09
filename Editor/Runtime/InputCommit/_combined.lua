@@ -137,16 +137,6 @@ end
 
 
 
-local function isEnglishLocale()
-
-
-
-    return trim(SKIN:GetVariable('LanguageCode', 'ko-KR')) == 'en-US'
-
-
-
-end
-
 local function hasSkinGetVariable()
 
     local ok, method = pcall(function()
@@ -176,6 +166,38 @@ local function L(key, fallback)
 
 end
 
+function registryInventoryLabelForCode(languageCode)
+    if not hasSkinGetVariable() then
+        return 'Inventory'
+    end
+
+    local requested = trim(languageCode)
+    local fallback = trim(SKIN:GetVariable('DefaultFallbackLanguageCode', 'en-US'))
+    local count = tonumber(SKIN:GetVariable('LanguageCount', '0')) or 0
+    local fallbackLabel = ''
+    for index = 1, count do
+        local prefix = 'Language_' .. tostring(index) .. '_'
+        local code = trim(SKIN:GetVariable(prefix .. 'Code', ''))
+        local label = trim(SKIN:GetVariable(prefix .. 'InventoryLabel', ''))
+        if label ~= '' then
+            if code == requested then
+                return label
+            end
+            if code == fallback then
+                fallbackLabel = label
+            end
+        end
+    end
+    return fallbackLabel ~= '' and fallbackLabel or 'Inventory'
+end
+
+function currentLanguageCode()
+    if not hasSkinGetVariable() then
+        return 'en-US'
+    end
+    return trim(SKIN:GetVariable('LanguageCode', SKIN:GetVariable('DefaultFallbackLanguageCode', 'en-US')))
+end
+
 local function locRef(key)
     return '#Loc_' .. tostring(key or '') .. '#'
 end
@@ -196,20 +218,38 @@ local function isReservedInventoryLabelValue(value)
     end
 
     local localized = trim(L('Editor_ItemReservedInventory', ''))
-    return localized ~= '' and text == localized
+    if localized ~= '' and text == localized then
+        return true
+    end
+
+    if text == registryInventoryLabelForCode(currentLanguageCode()) then
+        return true
+    end
+
+    if hasSkinGetVariable() then
+        local count = tonumber(SKIN:GetVariable('LanguageCount', '0')) or 0
+        for index = 1, count do
+            local label = trim(SKIN:GetVariable('Language_' .. tostring(index) .. '_InventoryLabel', ''))
+            if label ~= '' and text == label then
+                return true
+            end
+        end
+    end
+
+    return false
 end
 
 local function canonicalReservedInventoryLabel(value)
     local text = trim(value)
     if text == '' or isReservedInventoryLabelValue(text) then
-        return L('Editor_ItemReservedInventory', 'Inventory')
+        return registryInventoryLabelForCode(currentLanguageCode())
     end
     return text
 end
 
 local function reservedInventoryLabel()
 
-    return L('Editor_ItemReservedInventory', 'Inventory')
+    return registryInventoryLabelForCode(currentLanguageCode())
 
 end
 
@@ -1096,6 +1136,10 @@ local function setImageKey(resolved)
 
 
     SKIN:Bang('!UpdateMeter', 'MeterViewerPreviewImage')
+
+    if type(SyncEditorPixelationState) == 'function' then
+        SyncEditorPixelationState(imageKey)
+    end
 
 
 
@@ -3185,6 +3229,85 @@ local function setActionLocalizationVariable(name, key)
 
 end
 
+EditorLocalizationTextFit = nil
+
+function EnsureEditorLocalizationTextFit()
+    if EditorLocalizationTextFit == nil then
+        EditorLocalizationTextFit = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\LocalizationTextFit.lua')
+    end
+    return EditorLocalizationTextFit
+end
+
+function EditorTextFitNumericVariable(name, fallback)
+    local direct = tonumber(tostring(name or ''))
+    if direct ~= nil then
+        return direct
+    end
+    local replaced = SKIN:ReplaceVariables('#' .. tostring(name or '') .. '#')
+    local numeric = tonumber(replaced)
+    if numeric ~= nil then
+        return numeric
+    end
+    local ok, parsed = pcall(function()
+        return SKIN:ParseFormula(replaced)
+    end)
+    return (ok and tonumber(parsed)) or fallback
+end
+
+function ApplyEditorTextFit(meterName, locKey, text, baseFontVariable, widthVariable)
+    local helper = EnsureEditorLocalizationTextFit()
+    if not helper or not helper.ApplyMeterTextFit then
+        return
+    end
+    helper.ApplyMeterTextFit(SKIN, meterName, text, {
+        locKey = locKey,
+        baseFontSize = EditorTextFitNumericVariable(baseFontVariable, 10) or 10,
+        widthPx = EditorTextFitNumericVariable(widthVariable, 0) or 0,
+        minScale = 0.70,
+        probeMeterName = 'MeterEditorTextFitProbe',
+        setText = false,
+        update = false,
+    })
+end
+
+local function applyEditorStaticTextFitTarget(target)
+    if not target then
+        return
+    end
+    local text = target.text or ('#Loc_' .. target.key .. '#')
+    ApplyEditorTextFit(
+        target.meter,
+        target.key or '',
+        text,
+        target.base,
+        target.width
+    )
+end
+
+function ApplyEditorStaticLocalizationTextFits()
+    local targets = {
+        { meter = 'MeterViewerLoadButtonLabel', key = 'Editor_LoadButton', base = 'ViewerLoadButtonFontSize', width = 'ViewerLoadButtonW' },
+        { meter = 'MeterEditorLoadingLabelLine1', key = 'Editor_Loading_Line1', text = '#EditorLoadingTextLine1#', base = 'EditorUIFontSize', width = 'PanelWidth' },
+        { meter = 'MeterEditorLoadingLabelLine2', key = 'Editor_Loading_Line2', text = '#EditorLoadingTextLine2#', base = 'EditorUIFontSize', width = 'PanelWidth' },
+        { meter = 'MeterEditorNoSelectionMessage', key = 'Editor_NoSelection', base = 12, width = 'EditorNoSelectionMessageW' },
+        { meter = 'MeterTopBarResetButtonLabel', key = 'Settings_Notice_Clear', base = 'EditorUIFontSize', width = 'ActionReset_W' },
+        { meter = 'MeterSlotFormTitle', key = 'Editor_FormTitle', base = 'LabeledInputTitleFontSize', width = 'SlotFormTitle_W' },
+        { meter = 'MeterSlotPathTitle', key = 'Editor_PathTitle', base = 'LabeledInputTitleFontSize', width = 'SlotPathTitle_W' },
+        { meter = 'MeterRunConfirmToggleTitle', key = 'Editor_RunConfirmToggleTitle', base = 12, width = 'EditorRunConfirmToggleTitle_W' },
+        { meter = 'MeterLabeledInputGroupTitle', key = 'Editor_PositionGroupTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInputGroupTitle_W' },
+        { meter = 'MeterLabeledInputTitle', key = 'Editor_XTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInputTitle_W' },
+        { meter = 'MeterLabeledInput2Title', key = 'Editor_YTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInput2Title_W' },
+        { meter = 'MeterLabeledInput3Title', key = 'Editor_QtyTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInput3Title_W' },
+        { meter = 'MeterImageAdjustGroupTitle', key = 'Editor_ImageAdjustGroupTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjustGroupTitle_W' },
+        { meter = 'MeterImageAdjustTitle', key = 'Editor_XTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjustTitle_W' },
+        { meter = 'MeterImageAdjust2Title', key = 'Editor_YTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjust2Title_W' },
+        { meter = 'MeterImageAdjust3Title', key = 'Editor_ImageAdjustSizeTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjust3Title_W' },
+    }
+    for _, target in ipairs(targets) do
+        applyEditorStaticTextFitTarget(target)
+    end
+end
+
 
 
 local function getButtonContractColors(enabled, bgOverride, textOverride)
@@ -3291,7 +3414,7 @@ local function syncItemActionState(record, mode)
 
 
 
-    local primaryLabelKey = 'Editor_Action_Add'
+    local primaryLabelKey = 'Common_Add'
 
 
 
@@ -3427,7 +3550,7 @@ local function syncItemActionState(record, mode)
 
 
 
-                primaryLabelKey = 'Editor_Action_Add'
+                primaryLabelKey = 'Common_Add'
 
 
 
@@ -3464,6 +3587,7 @@ local function syncItemActionState(record, mode)
 
 
     setActionLocalizationVariable('ActionItemPrimary_LabelText', primaryLabelKey)
+    ApplyEditorTextFit('MeterItemActionPrimaryLabel', primaryLabelKey, '#Loc_' .. primaryLabelKey .. '#', 'EditorUIFontSize', 'ItemActionPrimaryW')
 
 
 
@@ -3480,6 +3604,7 @@ local function syncItemActionState(record, mode)
 
 
     applyActionContract('ActionItemCancelDelete', cancelEnabled, cancelCommand, '#Loc_Editor_Action_DeleteCancel#', cancelBgColor, cancelTextColor)
+    ApplyEditorTextFit('MeterItemActionCancelLabel', 'Editor_Action_DeleteCancel', '#Loc_Editor_Action_DeleteCancel#', 'EditorUIFontSize', 'ItemActionCancelW')
 
 
 
@@ -3488,6 +3613,7 @@ local function syncItemActionState(record, mode)
 
 
     applyActionContract('ActionItemConfirmDelete', confirmEnabled, confirmCommand, '#Loc_Editor_Action_DeleteTooltip#', confirmBgColor, confirmTextColor)
+    ApplyEditorTextFit('MeterItemActionConfirmLabel', 'Editor_Action_DeleteConfirm', '#Loc_Editor_Action_DeleteConfirm#', 'EditorUIFontSize', 'ItemActionConfirmW')
 
 
 
@@ -3628,6 +3754,10 @@ local function syncEditorControlGate()
 
 
     applyActionContract('ActionPageNext', enabled, '[!CommandMeasure MeasureInputCommit "NextEditorPage()"]', locRef('Editor_Action_PageNext'))
+
+
+
+    ApplyEditorStaticLocalizationTextFits()
 
 
 
@@ -5057,6 +5187,10 @@ local function updateHistoryButtonState()
 
 
     applyActionContract('ActionReset', canReset, '[!CommandMeasure MeasureInputCommit "ResetEditorSession()"]', locRef('Editor_Action_Reset'))
+
+
+
+    ApplyEditorStaticLocalizationTextFits()
 
 
 
@@ -6737,6 +6871,16 @@ shouldSkipEmptyDraftPersist = function(service, meta)
 
 end
 
+function CleanupEditorPixelationImagesForCurrentItems()
+
+    if type(CleanupEditorPixelationImagesAfterPersist) == 'function' then
+
+        CleanupEditorPixelationImagesAfterPersist()
+
+    end
+
+end
+
 
 
 local function writePersistedFromDraft()
@@ -6853,6 +6997,8 @@ local function persistDraftAndResetSessionState()
 
 
     closeDiscardApplied = true
+
+    CleanupEditorPixelationImagesForCurrentItems()
 
 
 
@@ -8655,6 +8801,53 @@ function Update()
 
 end
 
+EditorInputCommitPixelBridge = {
+    trim = trim,
+    normalizeImageAsset = normalizeImageAsset,
+    defaultImageKey = DEFAULT_NEW_ITEM_IMAGE,
+    playClick = playUiClick,
+    hasSelection = hasActiveEditorSelection,
+    log = logMessage,
+    alert = logEditorErrorAndAlert,
+    setLoadingVisible = setEditorLoadingVisible,
+    commitImageKey = function(imageKey)
+        return commitImageKeyForLocator(imageKey, nil)
+    end,
+    itemImageDirectory = function()
+        local paths = ensureService().GetPaths(editorRoot)
+        return trim(paths and paths.ItemImageDirectory or '')
+    end,
+    itemImagePath = function(imageKey)
+        return ensureService().GetImagePath(editorRoot, normalizeImageAsset(imageKey))
+    end,
+}
+
+function SyncEditorPixelationState(imageKey)
+    if EditorInputCommitPixelBridge and type(EditorInputCommitPixelBridge.syncPixelationState) == 'function' then
+        return EditorInputCommitPixelBridge.syncPixelationState(imageKey)
+    end
+    return nil
+end
+
+function ApplyImagePixelation()
+    logMessage('Warning', 'Editor image pixelation module is not loaded.')
+    return false
+end
+
+function HandleEditorPixelationComplete()
+    logMessage('Warning', 'Editor image pixelation completion was ignored because the module is not loaded.')
+    return false
+end
+
+function CleanupEditorPixelationImagesAfterPersist()
+    return false
+end
+
+function HandleEditorPixelCleanupComplete()
+    logMessage('Warning', 'Editor image pixelation cleanup completion was ignored because the module is not loaded.')
+    return false
+end
+
 -- Split from Editor\InputCommit.lua lines 8665-9686.
 local function closeOpenDraftSessionForResidentSuspend()
     local service = ensureService()
@@ -8836,7 +9029,15 @@ function CloseEditorDiscardDraft()
 
 
 
-    return discardDraftSession(true)
+    local discarded = discardDraftSession(true)
+
+    if discarded and type(CleanupEditorPixelationImagesForCurrentItems) == 'function' then
+
+        CleanupEditorPixelationImagesForCurrentItems()
+
+    end
+
+    return discarded
 
 
 
@@ -9595,6 +9796,10 @@ function Initialize()
 
 
     applyEditorTheme(trim(SKIN:GetVariable('SettingsThemeMode', 'light')))
+
+
+
+    ApplyEditorStaticLocalizationTextFits()
 
 
 

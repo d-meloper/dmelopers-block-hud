@@ -5,6 +5,53 @@ return function(app)
     local trim = app.trim
     local setVariable = app.setVariable
     local snapshotSignature = app.snapshotSignature
+    local function numericVariable(name, fallback)
+        if methods.numericVariable then
+            return methods.numericVariable(name, fallback)
+        end
+
+        local value = tonumber(trim(SKIN:GetVariable(name, tostring(fallback or ''))))
+        if value ~= nil then
+            return value
+        end
+        return fallback
+    end
+
+    local function applyTopActionTextFit()
+        if not app.textFit or not app.textFit.ApplyMeterTextFit then
+            return
+        end
+
+        local baseFontSize = numericVariable('SettingsUIFontSize', 10) or 10
+        local topActionProfiles = {
+            {
+                meterName = 'MeterSettingsTopResetLabel',
+                locKey = 'Common_Reset',
+                text = methods.localize('Common_Reset', 'Reset'),
+                widthVariable = 'SlotSettingsTopReset_W',
+            },
+            {
+                meterName = 'MeterSettingsTopContentLabel',
+                locKey = 'Settings_Tab_Content',
+                text = methods.localize('Settings_Tab_Content', 'Extra Content'),
+                widthVariable = 'SlotSettingsTopContent_W',
+            },
+        }
+
+        for _, profile in ipairs(topActionProfiles) do
+            local width = math.max(0, (numericVariable(profile.widthVariable, 0) or 0) - 20)
+            app.textFit.ApplyMeterTextFit(SKIN, profile.meterName, profile.text, {
+                locKey = profile.locKey,
+                baseFontSize = baseFontSize,
+                widthPx = width,
+                minScale = 0.35,
+                unitPixelFactor = 1.0,
+                probeMeterName = 'MeterSettingsTextFitProbe',
+                setText = false,
+                update = false,
+            })
+        end
+    end
 
     function methods.applyTheme(mode)
         local resolvedMode = mode == 'dark' and 'dark' or 'light'
@@ -57,6 +104,7 @@ return function(app)
         end
         setVariable('ActionSettingsPageCurrent_BgColor', SKIN:GetVariable('SettingsButtonBgColor', ''))
         setVariable('ActionSettingsPageCurrent_TextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
+        applyTopActionTextFit()
     end
 
     function methods.updateHistoryButtons()
@@ -75,6 +123,7 @@ return function(app)
         setVariable('ActionSettingsReset_Command', resetEnabled and '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "ResetSession()"]' or '')
         setVariable('ActionSettingsReset_BgColor', resetEnabled and SKIN:GetVariable('SettingsButtonBgColor', '') or SKIN:GetVariable('SettingsButtonDisabledBgColor', ''))
         setVariable('ActionSettingsReset_TextColor', resetEnabled and SKIN:GetVariable('SettingsButtonTextColor', '') or SKIN:GetVariable('SettingsButtonDisabledTextColor', ''))
+        applyTopActionTextFit()
     end
 
     function methods.updatePageButtons(tab)

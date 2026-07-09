@@ -1,8 +1,10 @@
 param(
     [string]$RequestPath,
 
-    [ValidateSet('', 'Check', 'Install')]
-    [string]$Action = ''
+    [ValidateSet('', 'Check', 'Install', 'TerminatePortOwner')]
+    [string]$Action = '',
+
+    [int]$OwnerPid = 0
 )
 
 Set-StrictMode -Version Latest
@@ -29,7 +31,11 @@ function Write-InstallerResult {
         [Parameter(Mandatory = $true)][string]$Message,
         [string]$Version = '',
         [string]$Arch = '',
-        [string]$InstallPath = ''
+        [string]$InstallPath = '',
+        [int]$OwnerPid = 0,
+        [string]$OwnerUser = '',
+        [string]$OwnerDomain = '',
+        [int]$OwnerSessionId = -1
     )
 
     Write-ResultValue -Key 'DMEL_STATUS' -Value $Status
@@ -38,6 +44,10 @@ function Write-InstallerResult {
     Write-ResultValue -Key 'DMEL_VERSION' -Value $Version
     Write-ResultValue -Key 'DMEL_ARCH' -Value $Arch
     Write-ResultValue -Key 'DMEL_INSTALLPATH' -Value $InstallPath
+    Write-ResultValue -Key 'DMEL_OWNER_PID' -Value $OwnerPid
+    Write-ResultValue -Key 'DMEL_OWNER_USER' -Value $OwnerUser
+    Write-ResultValue -Key 'DMEL_OWNER_DOMAIN' -Value $OwnerDomain
+    Write-ResultValue -Key 'DMEL_OWNER_SESSIONID' -Value $OwnerSessionId
 }
 
 function Read-RequestFile {
@@ -323,6 +333,70 @@ function Get-CurrentRainmeterProcessId {
     return 0
 }
 
+function Get-RainmeterProcessRecord {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
+
+    if ($ProcessId -le 0) {
+        return $null
+    }
+
+    $record = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
+    if ($null -eq $record -or -not [string]::Equals([string]$record.Name, 'Rainmeter.exe', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $null
+    }
+
+    return $record
+}
+
+function Get-ProcessOwnerInfo {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
+
+    $record = Get-RainmeterProcessRecord -ProcessId $ProcessId
+    if ($null -eq $record) {
+        return [PSCustomObject]@{
+            User = ''
+            Domain = ''
+            SessionId = -1
+        }
+    }
+
+    $user = ''
+    $domain = ''
+    try {
+        $owner = Invoke-CimMethod -InputObject $record -MethodName GetOwner -ErrorAction SilentlyContinue
+        if ($null -ne $owner) {
+            $user = [string]$owner.User
+            $domain = [string]$owner.Domain
+        }
+    }
+    catch {
+        $user = ''
+        $domain = ''
+    }
+    if ([string]::IsNullOrWhiteSpace($user)) {
+        try {
+            $wmiRecord = Get-WmiObject -Class Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
+            if ($null -ne $wmiRecord) {
+                $owner = $wmiRecord.GetOwner()
+                if ($null -ne $owner) {
+                    $user = [string]$owner.User
+                    $domain = [string]$owner.Domain
+                }
+            }
+        }
+        catch {
+            $user = ''
+            $domain = ''
+        }
+    }
+
+    return [PSCustomObject]@{
+        User = $user
+        Domain = $domain
+        SessionId = [int]$record.SessionId
+    }
+}
+
 function Get-HttpServiceRainmeterOwnerIds {
     param([Parameter(Mandatory = $true)][int]$Port)
 
@@ -336,21 +410,44 @@ function Get-HttpServiceRainmeterOwnerIds {
         return @()
     }
 
-    $ownerIds = New-Object System.Collections.Generic.HashSet[int]
+    $candidateIds = New-Object System.Collections.Generic.HashSet[int]
     $urlPattern = '(?i)127\.0\.0\.1:{0}(?:[:/]|$)' -f $Port
     for ($index = 0; $index -lt $lines.Count; $index++) {
         if ([string]$lines[$index] -notmatch $urlPattern) {
             continue
         }
 
+        $blockStart = 0
         for ($scan = $index; $scan -ge 0; $scan--) {
-            $line = [string]$lines[$scan]
-            if ($scan -lt $index -and $line.Trim().Length -gt 0 -and $line -notmatch '^\s') {
+            if ([string]$lines[$scan] -match '^Request queue name:') {
+                $blockStart = $scan
                 break
             }
-            if ($line -match '(?i)Rainmeter\.exe' -and $line -match '(?<ProcessId>\d+)') {
-                [void]$ownerIds.Add([int]$Matches.ProcessId)
+        }
+
+        $blockEnd = $lines.Count - 1
+        for ($scan = $index + 1; $scan -lt $lines.Count; $scan++) {
+            if ([string]$lines[$scan] -match '^Request queue name:') {
+                $blockEnd = $scan - 1
+                break
             }
+        }
+
+        for ($scan = $blockStart; $scan -le $blockEnd; $scan++) {
+            $line = [string]$lines[$scan]
+            if ($line -match '(?i)\bID\s*:\s*(?<ProcessId>\d+)') {
+                [void]$candidateIds.Add([int]$Matches.ProcessId)
+            }
+            elseif ($line -match '(?i)Rainmeter\.exe' -and $line -match '(?<ProcessId>\d+)') {
+                [void]$candidateIds.Add([int]$Matches.ProcessId)
+            }
+        }
+    }
+
+    $ownerIds = New-Object System.Collections.Generic.HashSet[int]
+    foreach ($candidateId in $candidateIds) {
+        if ($null -ne (Get-RainmeterProcessRecord -ProcessId ([int]$candidateId))) {
+            [void]$ownerIds.Add([int]$candidateId)
         }
     }
 
@@ -377,20 +474,108 @@ function Test-LoopbackPortAvailable {
     }
 }
 
-function Test-WebNowPlayingPortConflict {
+function Get-WebNowPlayingPortConflictState {
     if (Test-LoopbackPortAvailable -Port $webNowPlayingPort) {
-        return $false
-    }
-
-    $currentRainmeterId = Get-CurrentRainmeterProcessId
-    if ($currentRainmeterId -gt 0) {
-        $ownerIds = @(Get-HttpServiceRainmeterOwnerIds -Port $webNowPlayingPort)
-        if ($ownerIds -contains $currentRainmeterId) {
-            return $false
+        return [PSCustomObject]@{
+            Conflict = $false
+            Code = ''
+            OwnerPid = 0
+            OwnerUser = ''
+            OwnerDomain = ''
+            OwnerSessionId = -1
         }
     }
 
-    return $true
+    $currentRainmeterId = Get-CurrentRainmeterProcessId
+    $ownerIds = @(Get-HttpServiceRainmeterOwnerIds -Port $webNowPlayingPort)
+    $ownerPid = 0
+    if ($currentRainmeterId -gt 0) {
+        $otherOwnerIds = @($ownerIds | Where-Object { [int]$_ -ne $currentRainmeterId })
+        if ($ownerIds -contains $currentRainmeterId -and $otherOwnerIds.Count -eq 0) {
+            return [PSCustomObject]@{
+                Conflict = $false
+                Code = ''
+                OwnerPid = $currentRainmeterId
+                OwnerUser = ''
+                OwnerDomain = ''
+                OwnerSessionId = -1
+            }
+        }
+        if ($otherOwnerIds.Count -gt 0) {
+            $ownerPid = [int]$otherOwnerIds[0]
+        }
+    }
+    elseif ($ownerIds.Count -gt 0) {
+        $ownerPid = [int]$ownerIds[0]
+    }
+
+    $owner = Get-ProcessOwnerInfo -ProcessId $ownerPid
+    $code = 'PORT_IN_USE'
+    if ($ownerPid -gt 0) {
+        $code = 'PORT_IN_USE_OTHER_USER'
+    }
+
+    return [PSCustomObject]@{
+        Conflict = $true
+        Code = $code
+        OwnerPid = $ownerPid
+        OwnerUser = $owner.User
+        OwnerDomain = $owner.Domain
+        OwnerSessionId = $owner.SessionId
+    }
+}
+
+function Stop-WebNowPlayingPortOwner {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
+
+    if ($ProcessId -le 0) {
+        Write-InstallerResult -Status 'ERROR' -Code 'OWNER_INVALID' -Message 'The stored Rainmeter port owner is invalid.' -InstallPath (Get-UserPluginPath)
+        return
+    }
+
+    $currentRainmeterId = Get-CurrentRainmeterProcessId
+    if ($currentRainmeterId -gt 0 -and $ProcessId -eq $currentRainmeterId) {
+        Write-InstallerResult -Status 'ERROR' -Code 'OWNER_IS_CURRENT' -Message 'The current Rainmeter process will not be terminated.' -OwnerPid $ProcessId -InstallPath (Get-UserPluginPath)
+        return
+    }
+
+    $record = Get-RainmeterProcessRecord -ProcessId $ProcessId
+    if ($null -eq $record) {
+        Write-InstallerResult -Status 'NOOP' -Code 'ALREADY_STOPPED' -Message 'The Rainmeter port owner is no longer running.' -OwnerPid $ProcessId -InstallPath (Get-UserPluginPath)
+        return
+    }
+
+    $ownerIds = @(Get-HttpServiceRainmeterOwnerIds -Port $webNowPlayingPort)
+    if (-not ($ownerIds -contains $ProcessId)) {
+        Write-InstallerResult -Status 'NOOP' -Code 'OWNER_CHANGED' -Message 'The WebNowPlaying port owner changed before termination.' -OwnerPid $ProcessId -InstallPath (Get-UserPluginPath)
+        return
+    }
+
+    $owner = Get-ProcessOwnerInfo -ProcessId $ProcessId
+    try {
+        Stop-Process -Id $ProcessId -Force -ErrorAction Stop
+        Start-Sleep -Milliseconds 500
+        $stillRunning = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+        if ($null -ne $stillRunning) {
+            Write-InstallerResult -Status 'ERROR' -Code 'TERMINATE_FAILED' -Message 'The Rainmeter port owner could not be terminated.' -OwnerPid $ProcessId -OwnerUser $owner.User -OwnerDomain $owner.Domain -OwnerSessionId $owner.SessionId -InstallPath (Get-UserPluginPath)
+            return
+        }
+        Write-InstallerResult -Status 'OK' -Code 'TERMINATED' -Message 'The Rainmeter port owner was terminated.' -OwnerPid $ProcessId -OwnerUser $owner.User -OwnerDomain $owner.Domain -OwnerSessionId $owner.SessionId -InstallPath (Get-UserPluginPath)
+    }
+    catch [System.ComponentModel.Win32Exception] {
+        Write-InstallerResult -Status 'ERROR' -Code 'ACCESS_DENIED' -Message 'The Rainmeter port owner could not be terminated because access was denied.' -OwnerPid $ProcessId -OwnerUser $owner.User -OwnerDomain $owner.Domain -OwnerSessionId $owner.SessionId -InstallPath (Get-UserPluginPath)
+    }
+    catch [System.UnauthorizedAccessException] {
+        Write-InstallerResult -Status 'ERROR' -Code 'ACCESS_DENIED' -Message 'The Rainmeter port owner could not be terminated because access was denied.' -OwnerPid $ProcessId -OwnerUser $owner.User -OwnerDomain $owner.Domain -OwnerSessionId $owner.SessionId -InstallPath (Get-UserPluginPath)
+    }
+    catch {
+        if ([string]$_.Exception.Message -match '(?i)access\s+is\s+denied|access\s+denied|denied') {
+            Write-InstallerResult -Status 'ERROR' -Code 'ACCESS_DENIED' -Message 'The Rainmeter port owner could not be terminated because access was denied.' -OwnerPid $ProcessId -OwnerUser $owner.User -OwnerDomain $owner.Domain -OwnerSessionId $owner.SessionId -InstallPath (Get-UserPluginPath)
+        }
+        else {
+            Write-InstallerResult -Status 'ERROR' -Code 'TERMINATE_FAILED' -Message 'The Rainmeter port owner could not be terminated.' -OwnerPid $ProcessId -OwnerUser $owner.User -OwnerDomain $owner.Domain -OwnerSessionId $owner.SessionId -InstallPath (Get-UserPluginPath)
+        }
+    }
 }
 
 function Get-LatestStableRelease {
@@ -519,6 +704,11 @@ try {
     if ([string]::IsNullOrWhiteSpace($Action)) {
         $request = Read-RequestFile -Path $RequestPath
         $action = ([string]$request['ACTION']).Trim().ToUpperInvariant()
+        $requestedOwnerPid = 0
+        [void][int]::TryParse(([string]$request['OWNERPID']).Trim(), [ref]$requestedOwnerPid)
+        if ($requestedOwnerPid -gt 0) {
+            $OwnerPid = $requestedOwnerPid
+        }
         $requestedRepository = ([string]$request['REPOSITORY']).Trim()
         if (-not [string]::IsNullOrWhiteSpace($requestedRepository)) {
             $repository = $requestedRepository
@@ -527,9 +717,17 @@ try {
     else {
         $action = ([string]$Action).Trim().ToUpperInvariant()
     }
-    if (($action -eq 'CHECK' -or $action -eq 'INSTALL') -and (Test-WebNowPlayingPortConflict)) {
-        Write-InstallerResult -Status 'NOOP' -Code 'PORT_IN_USE' -Message ('WebNowPlaying port {0} is already owned by another process.' -f $webNowPlayingPort) -InstallPath (Get-UserPluginPath)
+    if ($action -eq 'TERMINATEPORTOWNER') {
+        Stop-WebNowPlayingPortOwner -ProcessId $OwnerPid
         return
+    }
+
+    if ($action -eq 'CHECK' -or $action -eq 'INSTALL') {
+        $portConflict = Get-WebNowPlayingPortConflictState
+        if ($portConflict.Conflict) {
+            Write-InstallerResult -Status 'NOOP' -Code $portConflict.Code -Message ('WebNowPlaying port {0} is already owned by another Rainmeter process.' -f $webNowPlayingPort) -InstallPath (Get-UserPluginPath) -OwnerPid $portConflict.OwnerPid -OwnerUser $portConflict.OwnerUser -OwnerDomain $portConflict.OwnerDomain -OwnerSessionId $portConflict.OwnerSessionId
+            return
+        }
     }
 
     $expectedArch = Get-RainmeterPluginArchitecture

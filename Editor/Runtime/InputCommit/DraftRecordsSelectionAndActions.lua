@@ -525,6 +525,85 @@ local function setActionLocalizationVariable(name, key)
 
 end
 
+EditorLocalizationTextFit = nil
+
+function EnsureEditorLocalizationTextFit()
+    if EditorLocalizationTextFit == nil then
+        EditorLocalizationTextFit = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\LocalizationTextFit.lua')
+    end
+    return EditorLocalizationTextFit
+end
+
+function EditorTextFitNumericVariable(name, fallback)
+    local direct = tonumber(tostring(name or ''))
+    if direct ~= nil then
+        return direct
+    end
+    local replaced = SKIN:ReplaceVariables('#' .. tostring(name or '') .. '#')
+    local numeric = tonumber(replaced)
+    if numeric ~= nil then
+        return numeric
+    end
+    local ok, parsed = pcall(function()
+        return SKIN:ParseFormula(replaced)
+    end)
+    return (ok and tonumber(parsed)) or fallback
+end
+
+function ApplyEditorTextFit(meterName, locKey, text, baseFontVariable, widthVariable)
+    local helper = EnsureEditorLocalizationTextFit()
+    if not helper or not helper.ApplyMeterTextFit then
+        return
+    end
+    helper.ApplyMeterTextFit(SKIN, meterName, text, {
+        locKey = locKey,
+        baseFontSize = EditorTextFitNumericVariable(baseFontVariable, 10) or 10,
+        widthPx = EditorTextFitNumericVariable(widthVariable, 0) or 0,
+        minScale = 0.70,
+        probeMeterName = 'MeterEditorTextFitProbe',
+        setText = false,
+        update = false,
+    })
+end
+
+local function applyEditorStaticTextFitTarget(target)
+    if not target then
+        return
+    end
+    local text = target.text or ('#Loc_' .. target.key .. '#')
+    ApplyEditorTextFit(
+        target.meter,
+        target.key or '',
+        text,
+        target.base,
+        target.width
+    )
+end
+
+function ApplyEditorStaticLocalizationTextFits()
+    local targets = {
+        { meter = 'MeterViewerLoadButtonLabel', key = 'Editor_LoadButton', base = 'ViewerLoadButtonFontSize', width = 'ViewerLoadButtonW' },
+        { meter = 'MeterEditorLoadingLabelLine1', key = 'Editor_Loading_Line1', text = '#EditorLoadingTextLine1#', base = 'EditorUIFontSize', width = 'PanelWidth' },
+        { meter = 'MeterEditorLoadingLabelLine2', key = 'Editor_Loading_Line2', text = '#EditorLoadingTextLine2#', base = 'EditorUIFontSize', width = 'PanelWidth' },
+        { meter = 'MeterEditorNoSelectionMessage', key = 'Editor_NoSelection', base = 12, width = 'EditorNoSelectionMessageW' },
+        { meter = 'MeterTopBarResetButtonLabel', key = 'Settings_Notice_Clear', base = 'EditorUIFontSize', width = 'ActionReset_W' },
+        { meter = 'MeterSlotFormTitle', key = 'Editor_FormTitle', base = 'LabeledInputTitleFontSize', width = 'SlotFormTitle_W' },
+        { meter = 'MeterSlotPathTitle', key = 'Editor_PathTitle', base = 'LabeledInputTitleFontSize', width = 'SlotPathTitle_W' },
+        { meter = 'MeterRunConfirmToggleTitle', key = 'Editor_RunConfirmToggleTitle', base = 12, width = 'EditorRunConfirmToggleTitle_W' },
+        { meter = 'MeterLabeledInputGroupTitle', key = 'Editor_PositionGroupTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInputGroupTitle_W' },
+        { meter = 'MeterLabeledInputTitle', key = 'Editor_XTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInputTitle_W' },
+        { meter = 'MeterLabeledInput2Title', key = 'Editor_YTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInput2Title_W' },
+        { meter = 'MeterLabeledInput3Title', key = 'Editor_QtyTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInput3Title_W' },
+        { meter = 'MeterImageAdjustGroupTitle', key = 'Editor_ImageAdjustGroupTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjustGroupTitle_W' },
+        { meter = 'MeterImageAdjustTitle', key = 'Editor_XTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjustTitle_W' },
+        { meter = 'MeterImageAdjust2Title', key = 'Editor_YTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjust2Title_W' },
+        { meter = 'MeterImageAdjust3Title', key = 'Editor_ImageAdjustSizeTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjust3Title_W' },
+    }
+    for _, target in ipairs(targets) do
+        applyEditorStaticTextFitTarget(target)
+    end
+end
+
 
 
 local function getButtonContractColors(enabled, bgOverride, textOverride)
@@ -631,7 +710,7 @@ local function syncItemActionState(record, mode)
 
 
 
-    local primaryLabelKey = 'Editor_Action_Add'
+    local primaryLabelKey = 'Common_Add'
 
 
 
@@ -767,7 +846,7 @@ local function syncItemActionState(record, mode)
 
 
 
-                primaryLabelKey = 'Editor_Action_Add'
+                primaryLabelKey = 'Common_Add'
 
 
 
@@ -804,6 +883,7 @@ local function syncItemActionState(record, mode)
 
 
     setActionLocalizationVariable('ActionItemPrimary_LabelText', primaryLabelKey)
+    ApplyEditorTextFit('MeterItemActionPrimaryLabel', primaryLabelKey, '#Loc_' .. primaryLabelKey .. '#', 'EditorUIFontSize', 'ItemActionPrimaryW')
 
 
 
@@ -820,6 +900,7 @@ local function syncItemActionState(record, mode)
 
 
     applyActionContract('ActionItemCancelDelete', cancelEnabled, cancelCommand, '#Loc_Editor_Action_DeleteCancel#', cancelBgColor, cancelTextColor)
+    ApplyEditorTextFit('MeterItemActionCancelLabel', 'Editor_Action_DeleteCancel', '#Loc_Editor_Action_DeleteCancel#', 'EditorUIFontSize', 'ItemActionCancelW')
 
 
 
@@ -828,6 +909,7 @@ local function syncItemActionState(record, mode)
 
 
     applyActionContract('ActionItemConfirmDelete', confirmEnabled, confirmCommand, '#Loc_Editor_Action_DeleteTooltip#', confirmBgColor, confirmTextColor)
+    ApplyEditorTextFit('MeterItemActionConfirmLabel', 'Editor_Action_DeleteConfirm', '#Loc_Editor_Action_DeleteConfirm#', 'EditorUIFontSize', 'ItemActionConfirmW')
 
 
 
@@ -968,6 +1050,10 @@ local function syncEditorControlGate()
 
 
     applyActionContract('ActionPageNext', enabled, '[!CommandMeasure MeasureInputCommit "NextEditorPage()"]', locRef('Editor_Action_PageNext'))
+
+
+
+    ApplyEditorStaticLocalizationTextFits()
 
 
 

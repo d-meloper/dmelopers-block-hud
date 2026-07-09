@@ -144,12 +144,12 @@ function Show-SourceEntryDialog {
     $hint.ForeColor = [System.Drawing.Color]::DimGray
 
     $okButton = New-Object System.Windows.Forms.Button
-    $okButton.Text = T 'Helper_VersionManager_Common_Save' 'Save'
+    $okButton.Text = T 'Common_Save' 'Save'
     $okButton.Bounds = New-Object System.Drawing.Rectangle(352, 88, 88, 28)
     $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
 
     $cancelButton = New-Object System.Windows.Forms.Button
-    $cancelButton.Text = T 'Helper_VersionManager_Common_Close' 'Close'
+    $cancelButton.Text = T 'Common_Close' 'Close'
     $cancelButton.Bounds = New-Object System.Drawing.Rectangle(452, 88, 88, 28)
     $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
 
@@ -525,13 +525,6 @@ function Invoke-VersionReleaseInstall {
         $status = 'ERROR'
     }
 
-    if (($status -eq 'OK' -or $status -eq 'WARN' -or $status -eq 'NOOP') -and $exitCode -ne 0) {
-        $status = 'ERROR'
-        if ([string]::IsNullOrWhiteSpace($message)) {
-            $message = "Install helper exited with code $exitCode despite reporting a successful status."
-        }
-    }
-
     if ($status -eq 'OK' -or $status -eq 'WARN' -or $status -eq 'NOOP') {
         $missingContract = New-Object System.Collections.Generic.List[string]
         if (($status -eq 'OK' -or $status -eq 'NOOP') -and [string]::IsNullOrWhiteSpace([string]($pairs['DMEL_SOURCEPATH']))) {
@@ -644,7 +637,8 @@ function Start-VersionManagerLauncherForRoot {
     $command = '& ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value (Get-VersionManagerEntrypointPath)) +
         ' -TargetRoot ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $resolvedTargetRoot) +
         ' -WindowSession' +
-        $(if ([string]::IsNullOrWhiteSpace($LaunchToken)) { '' } else { ' -LaunchToken ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $LaunchToken) })
+        $(if ([string]::IsNullOrWhiteSpace($LaunchToken)) { '' } else { ' -LaunchToken ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $LaunchToken) }) +
+        $(if ([string]::IsNullOrWhiteSpace($InitialAction)) { '' } else { ' -InitialAction ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $InitialAction) })
     $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
     $argumentList = @(
         '-NoProfile'
@@ -670,22 +664,6 @@ function Start-VersionManagerLauncherForRoot {
         ('powershell={0}' -f $powershellExe)
     )
     return $startedProcess
-}
-
-function Start-VersionManagerLauncherForSupportedRoot {
-    param([Parameter(Mandatory = $true)][string]$ResolvedTargetRoot)
-
-    if (Test-VersionManagerSupportedSkinRoot -Root $ResolvedTargetRoot) {
-        [void](Start-VersionManagerLauncherForRoot -ResolvedTargetRoot $ResolvedTargetRoot)
-        return $true
-    }
-
-    $versionText = Get-SkinMetadataVersion -Root $ResolvedTargetRoot
-    if ([string]::IsNullOrWhiteSpace($versionText)) {
-        $versionText = '?'
-    }
-    Write-Log ("Selected root version v{0} predates Skins support; keeping the manager closed after switch: {1}" -f $versionText, $ResolvedTargetRoot) 'INFO'
-    return $false
 }
 
 function Start-VersionManagerLauncher {

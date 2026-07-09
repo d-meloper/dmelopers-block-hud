@@ -3,7 +3,8 @@ param(
     [string]$TargetRoot,
     [switch]$EmitResultPairs,
     [switch]$WindowSession,
-    [string]$LaunchToken
+    [string]$LaunchToken,
+    [string]$InitialAction = ''
 )
 
 Set-StrictMode -Version 2.0

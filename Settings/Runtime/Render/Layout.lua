@@ -9,6 +9,7 @@ return function(app)
     local dropdownClosedText = helpers.dropdownClosedText
     local dropdownOpenText = helpers.dropdownOpenText
     local pixelValue = helpers.pixelValue
+    local applyTextFit = helpers.applyTextFit
     local settingsTabLocalizationKeyById = {
         general = 'Settings_Tab_General',
         lowSpec = 'Settings_Tab_LowSpec',
@@ -19,6 +20,34 @@ return function(app)
         ui = 'Settings_Tab_UI',
         jukebox = 'Settings_Content_Jukebox',
         herobrine = 'Settings_Content_Herobrine',
+    }
+    local commonFieldLabelKeyByFieldKey = {
+        jukeboxDraggable = 'Settings_Field_CommonDraggable_Label',
+        hotbarDraggable = 'Settings_Field_CommonDraggable_Label',
+        indicatorsDraggable = 'Settings_Field_CommonDraggable_Label',
+        inventoryDraggable = 'Settings_Field_CommonDraggable_Label',
+        clockDraggable = 'Settings_Field_CommonDraggable_Label',
+        jukeboxDragSnap = 'Settings_Field_CommonDragSnap_Label',
+        hotbarDragSnap = 'Settings_Field_CommonDragSnap_Label',
+        indicatorsDragSnap = 'Settings_Field_CommonDragSnap_Label',
+        inventoryDragSnap = 'Settings_Field_CommonDragSnap_Label',
+        clockDragSnap = 'Settings_Field_CommonDragSnap_Label',
+        resetAllSettings = 'Settings_Field_CommonResetSettings_Label',
+        resetHotbarSettings = 'Settings_Field_CommonResetSettings_Label',
+        resetIndicatorsSettings = 'Settings_Field_CommonResetSettings_Label',
+        resetInventorySettings = 'Settings_Field_CommonResetSettings_Label',
+        resetClockSettings = 'Settings_Field_CommonResetSettings_Label',
+        resetHotbarSkinPositions = 'Settings_Field_CommonResetSkinPositions_Label',
+        resetIndicatorsSkinPositions = 'Settings_Field_CommonResetSkinPositions_Label',
+        resetInventorySkinPositions = 'Settings_Field_CommonResetSkinPositions_Label',
+        resetClockSkinPositions = 'Settings_Field_CommonResetSkinPositions_Label',
+    }
+    local commonTooltipKeyByFieldKey = {
+        jukeboxDragSnap = 'Settings_Tooltip_CommonDragSnap',
+        hotbarDragSnap = 'Settings_Tooltip_CommonDragSnap',
+        indicatorsDragSnap = 'Settings_Tooltip_CommonDragSnap',
+        inventoryDragSnap = 'Settings_Tooltip_CommonDragSnap',
+        clockDragSnap = 'Settings_Tooltip_CommonDragSnap',
     }
 
     function methods.tabDisplayText(tab)
@@ -139,6 +168,14 @@ return function(app)
         else
             restoreNormalTabGeometry()
         end
+        if applyTextFit then
+            for index, tab in ipairs(activeTabs) do
+                local key = settingsTabLocalizationKeyById[trim(tab and tab.id or '')]
+                local text = methods.tabDisplayText(tab)
+                local width = methods.numericVariable('SlotSettingsTab' .. tostring(index) .. '_LabelW', 0) or 0
+                applyTextFit('MeterSettingsTab' .. tostring(index) .. 'Label', key, text, 'SettingsTabFontSize', width, 0.70)
+            end
+        end
         applyRowSlotGeometry(state.contentMode == true)
     end
 
@@ -148,7 +185,26 @@ return function(app)
         if fieldKey == '' then
             return fallback
         end
-        return trim(methods.localize('Settings_Field_' .. fieldKey .. '_Label', fallback))
+        return trim(methods.localize(methods.fieldLabelLocalizationKey(field), fallback))
+    end
+
+    function methods.fieldLabelLocalizationKey(field)
+        local fieldKey = trim(field and field.key or '')
+        if fieldKey == '' then
+            return ''
+        end
+        return commonFieldLabelKeyByFieldKey[fieldKey] or ('Settings_Field_' .. fieldKey .. '_Label')
+    end
+
+    function methods.fieldActionLocalizationKey(field)
+        local fieldKey = trim(field and field.key or '')
+        if fieldKey == '' then
+            return ''
+        end
+        if fieldKey == 'refreshHerobrineStats' then
+            return 'Common_Refresh'
+        end
+        return 'Settings_Field_' .. fieldKey .. '_Action'
     end
 
     function methods.fieldActionText(field, fallback)
@@ -158,7 +214,7 @@ return function(app)
             return resolvedFallback
         end
 
-        local localized = trim(methods.localize('Settings_Field_' .. fieldKey .. '_Action', resolvedFallback))
+        local localized = trim(methods.localize(methods.fieldActionLocalizationKey(field), resolvedFallback))
         if localized ~= resolvedFallback then
             return localized
         end
@@ -189,7 +245,7 @@ return function(app)
             return ''
         end
 
-        local localizationKey = 'Settings_Tooltip_' .. fieldKey
+        local localizationKey = commonTooltipKeyByFieldKey[fieldKey] or ('Settings_Tooltip_' .. fieldKey)
         local variableRef = methods.localizationVariableRef and methods.localizationVariableRef(localizationKey) or ''
         if variableRef ~= '' then
             return variableRef

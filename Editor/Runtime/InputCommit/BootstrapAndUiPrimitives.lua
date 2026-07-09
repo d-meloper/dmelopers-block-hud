@@ -136,16 +136,6 @@ end
 
 
 
-local function isEnglishLocale()
-
-
-
-    return trim(SKIN:GetVariable('LanguageCode', 'ko-KR')) == 'en-US'
-
-
-
-end
-
 local function hasSkinGetVariable()
 
     local ok, method = pcall(function()
@@ -175,6 +165,38 @@ local function L(key, fallback)
 
 end
 
+function registryInventoryLabelForCode(languageCode)
+    if not hasSkinGetVariable() then
+        return 'Inventory'
+    end
+
+    local requested = trim(languageCode)
+    local fallback = trim(SKIN:GetVariable('DefaultFallbackLanguageCode', 'en-US'))
+    local count = tonumber(SKIN:GetVariable('LanguageCount', '0')) or 0
+    local fallbackLabel = ''
+    for index = 1, count do
+        local prefix = 'Language_' .. tostring(index) .. '_'
+        local code = trim(SKIN:GetVariable(prefix .. 'Code', ''))
+        local label = trim(SKIN:GetVariable(prefix .. 'InventoryLabel', ''))
+        if label ~= '' then
+            if code == requested then
+                return label
+            end
+            if code == fallback then
+                fallbackLabel = label
+            end
+        end
+    end
+    return fallbackLabel ~= '' and fallbackLabel or 'Inventory'
+end
+
+function currentLanguageCode()
+    if not hasSkinGetVariable() then
+        return 'en-US'
+    end
+    return trim(SKIN:GetVariable('LanguageCode', SKIN:GetVariable('DefaultFallbackLanguageCode', 'en-US')))
+end
+
 local function locRef(key)
     return '#Loc_' .. tostring(key or '') .. '#'
 end
@@ -195,20 +217,38 @@ local function isReservedInventoryLabelValue(value)
     end
 
     local localized = trim(L('Editor_ItemReservedInventory', ''))
-    return localized ~= '' and text == localized
+    if localized ~= '' and text == localized then
+        return true
+    end
+
+    if text == registryInventoryLabelForCode(currentLanguageCode()) then
+        return true
+    end
+
+    if hasSkinGetVariable() then
+        local count = tonumber(SKIN:GetVariable('LanguageCount', '0')) or 0
+        for index = 1, count do
+            local label = trim(SKIN:GetVariable('Language_' .. tostring(index) .. '_InventoryLabel', ''))
+            if label ~= '' and text == label then
+                return true
+            end
+        end
+    end
+
+    return false
 end
 
 local function canonicalReservedInventoryLabel(value)
     local text = trim(value)
     if text == '' or isReservedInventoryLabelValue(text) then
-        return L('Editor_ItemReservedInventory', 'Inventory')
+        return registryInventoryLabelForCode(currentLanguageCode())
     end
     return text
 end
 
 local function reservedInventoryLabel()
 
-    return L('Editor_ItemReservedInventory', 'Inventory')
+    return registryInventoryLabelForCode(currentLanguageCode())
 
 end
 
@@ -1095,6 +1135,10 @@ local function setImageKey(resolved)
 
 
     SKIN:Bang('!UpdateMeter', 'MeterViewerPreviewImage')
+
+    if type(SyncEditorPixelationState) == 'function' then
+        SyncEditorPixelationState(imageKey)
+    end
 
 
 
