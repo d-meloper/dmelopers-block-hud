@@ -1083,6 +1083,10 @@ local function updateHistoryButtonState()
 
 
 
+    ApplyEditorStaticLocalizationTextFits()
+
+
+
     for _, meterName in ipairs({
 
 

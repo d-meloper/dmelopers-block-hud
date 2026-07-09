@@ -248,6 +248,22 @@ local function deactivateExternalBridge()
     return true
 end
 
+local function quarantineExternalBridgeForStartup(forceDeactivate)
+    externalPlaybackState.pendingCommand = nil
+    externalPlaybackState.pendingValueText = nil
+    externalPlaybackState.pendingCommandReconnectRetry = false
+    externalPlaybackState.bridgeActivationRequested = false
+    externalPlaybackState.bridgeReconnectRequested = false
+    externalPlaybackState.bridgeActive = false
+    setExternalPlaybackVariable('JukeboxExternalBridgeActive', '0')
+
+    local configName = webNowPlayingBridgeConfigName()
+    if configName ~= '' and configName:find('[\\/]') and (forceDeactivate or isRainmeterConfigActive(configName)) then
+        SKIN:Bang('!DeactivateConfig', configName)
+    end
+    return true
+end
+
 local function syncExternalBridgeForMode()
     if isExternalPlaybackSourceMode() then
         if commandRunning.webNowPlayingInstall or trim(webNowPlayingInstallState.phase) ~= '' then
@@ -455,6 +471,81 @@ function JukeboxCurrentWorkArea()
     }
 end
 
+local function jukeboxWorkAreaRect(x, y, width, height)
+    x = round(tonumber(x) or 0)
+    y = round(tonumber(y) or 0)
+    width = math.max(1, round(tonumber(width) or 1))
+    height = math.max(1, round(tonumber(height) or 1))
+    return {
+        x = x,
+        y = y,
+        width = width,
+        height = height,
+        right = x + width,
+        bottom = y + height,
+        centerX = x + (width / 2),
+        centerY = y + (height / 2),
+    }
+end
+
+local function jukeboxMonitorWorkAreas()
+    local result = {}
+    local seen = {}
+    for index = 1, 16 do
+        local x = tonumber(SKIN:GetVariable('WORKAREAX@' .. tostring(index), ''))
+        local y = tonumber(SKIN:GetVariable('WORKAREAY@' .. tostring(index), ''))
+        local width = tonumber(SKIN:GetVariable('WORKAREAWIDTH@' .. tostring(index), ''))
+        local height = tonumber(SKIN:GetVariable('WORKAREAHEIGHT@' .. tostring(index), ''))
+        if x and y and width and height and width > 0 and height > 0 then
+            local rect = jukeboxWorkAreaRect(x, y, width, height)
+            local key = table.concat({ rect.x, rect.y, rect.width, rect.height }, ':')
+            if not seen[key] then
+                seen[key] = true
+                result[#result + 1] = rect
+            end
+        end
+    end
+    return result
+end
+
+local function jukeboxRectContainsPoint(rect, x, y)
+    return rect and x >= rect.x and x < rect.right and y >= rect.y and y < rect.bottom
+end
+
+local function jukeboxDistanceSquaredToRectCenter(rect, x, y)
+    local dx = (rect.centerX or 0) - x
+    local dy = (rect.centerY or 0) - y
+    return (dx * dx) + (dy * dy)
+end
+
+function JukeboxWorkAreaForPoint(x, y, fallback)
+    x = round(tonumber(x) or 0)
+    y = round(tonumber(y) or 0)
+    local areas = jukeboxMonitorWorkAreas()
+    local best = nil
+    local bestDistance = nil
+    for _, area in ipairs(areas) do
+        if jukeboxRectContainsPoint(area, x, y) then
+            return area
+        end
+        local distance = jukeboxDistanceSquaredToRectCenter(area, x, y)
+        if best == nil or distance < bestDistance then
+            best = area
+            bestDistance = distance
+        end
+    end
+    return best or fallback or JukeboxCurrentWorkArea()
+end
+
+local function jukeboxWorkAreaForRect(rect, fallback)
+    rect = rect or currentJukeboxLiveRect()
+    local width = math.max(1, round(tonumber(rect.width) or 100))
+    local height = math.max(1, round(tonumber(rect.height) or 126))
+    local x = round((tonumber(rect.x) or 0) + (width / 2))
+    local y = round((tonumber(rect.y) or 0) + (height / 2))
+    return JukeboxWorkAreaForPoint(x, y, fallback)
+end
+
 function JukeboxClampToRange(value, minValue, maxValue)
     value = tonumber(value) or 0
     if maxValue < minValue then
@@ -471,9 +562,9 @@ end
 
 function JukeboxClampRectToWorkArea(rect)
     rect = rect or currentJukeboxLiveRect()
-    local work = JukeboxCurrentWorkArea()
     local width = math.max(1, round(tonumber(rect.width) or 100))
     local height = math.max(1, round(tonumber(rect.height) or 126))
+    local work = jukeboxWorkAreaForRect(rect, JukeboxCurrentWorkArea())
     return {
         x = round(JukeboxClampToRange(rect.x, work.x, work.right - width)),
         y = round(JukeboxClampToRange(rect.y, work.y, work.bottom - height)),
@@ -502,6 +593,7 @@ end
 
 local function scheduleDiscSlotDeferredSync()
     discSlotDeferredAttempts = 0
+    discSlotRefreshRecoveryRequested = false
     SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlotDeferredSyncTimer', 'Stop 1')
     SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlotDeferredSyncTimer', 'Execute 1')
 end
@@ -553,6 +645,7 @@ local function activateDiscSlot()
     if isRainmeterConfigActive(configName) then
         discSlotLoaded = true
         discSlotActivationRequested = false
+        discSlotRefreshRecoveryRequested = false
         return configName, false
     end
     if discSlotActivationRequested then
@@ -585,6 +678,7 @@ showDiscSlotNow = function(configName, skipRefresh)
     if not setVariableForActiveConfig('JukeboxDiscSlotHidden', '0', configName) then
         discSlotLoaded = false
         discSlotActivationRequested = false
+        discSlotRefreshRecoveryRequested = false
         return false
     end
     SKIN:Bang('!Show', configName)
@@ -599,6 +693,7 @@ showDiscSlotNow = function(configName, skipRefresh)
     discSlotPendingShow = false
     discSlotPendingShowSkipRefresh = false
     discSlotActivationRequested = false
+    discSlotRefreshRecoveryRequested = false
     discSlotDeferredAttempts = 0
     if not skipRefresh then
         refreshDiscSlot(configName)
@@ -672,6 +767,15 @@ function webNowPlayingInstallState.localized(key, englishFallback, koreanFallbac
     return localizedSummary(key, fallback)
 end
 
+function webNowPlayingInstallState.localizedWithPlaceholder(key, englishFallback, koreanFallback, placeholder)
+    local languageCode = trim(SKIN:GetVariable('LanguageCode', '')):lower()
+    local fallback = englishFallback
+    if languageCode:find('ko', 1, true) == 1 then
+        fallback = koreanFallback or englishFallback
+    end
+    return localizedSummary(key, fallback, placeholder)
+end
+
 function webNowPlayingInstallState.modalConfigName()
     local root = rootConfigName()
     if root == '' then
@@ -708,10 +812,75 @@ function webNowPlayingInstallState.openInstallConfirm()
         .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingInstallTitle', 'Plugin installation', '플러그인 설치')) .. ','
         .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingInstallMessage', 'Install the WebNowPlaying plugin for external music app integration. (Size: 52.5KB)', '외부 뮤직 앱 연동을 위해 WebNowPlaying 플러그인을 설치합니다. (용량: 52.5KB)')) .. ','
         .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingInstallButton', 'Install', '설치')) .. ','
-        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingInstallCancel', 'Cancel', '취소')) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('Common_Cancel', 'Cancel', '취소')) .. ','
         .. webNowPlayingInstallState.luaString('MeasureJukebox') .. ','
         .. webNowPlayingInstallState.luaString('ConfirmWebNowPlayingInstall') .. ','
         .. webNowPlayingInstallState.luaString('CancelWebNowPlayingInstall') .. ')'
+
+    webNowPlayingInstallState.requestDeferredOpen()
+    return true
+end
+
+function webNowPlayingInstallState.portOwnerFallbackLabel()
+    return webNowPlayingInstallState.localized(
+        'ModalAlert_WebNowPlayingUnknownOwner',
+        'another Windows local account',
+        'another Windows local account')
+end
+
+function webNowPlayingInstallState.setPortOwner(values)
+    values = values or {}
+    webNowPlayingInstallState.ownerPid = trim(values.DMEL_OWNER_PID or '')
+    webNowPlayingInstallState.ownerUser = trim(values.DMEL_OWNER_USER or '')
+    webNowPlayingInstallState.ownerDomain = trim(values.DMEL_OWNER_DOMAIN or '')
+    if webNowPlayingInstallState.ownerUser ~= '' and webNowPlayingInstallState.ownerDomain ~= '' then
+        webNowPlayingInstallState.ownerLabel = webNowPlayingInstallState.ownerDomain .. '\\' .. webNowPlayingInstallState.ownerUser
+    elseif webNowPlayingInstallState.ownerUser ~= '' then
+        webNowPlayingInstallState.ownerLabel = webNowPlayingInstallState.ownerUser
+    else
+        webNowPlayingInstallState.ownerLabel = webNowPlayingInstallState.portOwnerFallbackLabel()
+    end
+end
+
+function webNowPlayingInstallState.openPortOwnerTerminateConfirm()
+    local configName = webNowPlayingInstallState.modalConfigName()
+    if configName == '' or not configName:find('[\\/]') then
+        return false
+    end
+
+    local token = webNowPlayingInstallState.nextToken()
+    webNowPlayingInstallState.openCommand = 'OpenConfirm('
+        .. webNowPlayingInstallState.luaString(SKIN:GetVariable('CURRENTCONFIG', '')) .. ','
+        .. webNowPlayingInstallState.luaString(token) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingConflictTitle', 'Music app conflict', 'Music app conflict')) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingPortInUseOtherUser', 'Rainmeter is running in another Windows local account and is connected to the WebNowPlaying port, causing a conflict.\\nTo use an external music app in the current local account, the process in the other local account must be terminated.\\nTerminate that Rainmeter process now?', 'Rainmeter is running in another Windows local account and is connected to the WebNowPlaying port, causing a conflict.\\nTo use an external music app in the current local account, the process in the other local account must be terminated.\\nTerminate that Rainmeter process now?')) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingTerminateOtherProcess', 'Terminate process', 'Terminate process')) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('Common_Close', 'Close', 'Close')) .. ','
+        .. webNowPlayingInstallState.luaString('MeasureJukebox') .. ','
+        .. webNowPlayingInstallState.luaString('ConfirmWebNowPlayingPortOwnerTerminate') .. ','
+        .. webNowPlayingInstallState.luaString('CancelWebNowPlayingPortOwnerTerminate') .. ')'
+
+    webNowPlayingInstallState.requestDeferredOpen()
+    return true
+end
+
+function webNowPlayingInstallState.openPortOwnerForceConfirm()
+    local configName = webNowPlayingInstallState.modalConfigName()
+    if configName == '' or not configName:find('[\\/]') then
+        return false
+    end
+
+    local token = webNowPlayingInstallState.nextToken()
+    webNowPlayingInstallState.openCommand = 'OpenConfirm('
+        .. webNowPlayingInstallState.luaString(SKIN:GetVariable('CURRENTCONFIG', '')) .. ','
+        .. webNowPlayingInstallState.luaString(token) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingConflictTitle', 'Music app conflict', 'Music app conflict')) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingTerminateConfirm', 'Force termination can cause unexpected problems. We recommend logging into that Windows account and closing Rainmeter manually. Force terminate now?', 'Force termination can cause unexpected problems. We recommend logging into that Windows account and closing Rainmeter manually. Force terminate now?')) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('ModalAlert_WebNowPlayingForceTerminate', 'Force terminate', 'Force terminate')) .. ','
+        .. webNowPlayingInstallState.luaString(webNowPlayingInstallState.localized('Common_Close', 'Close', 'Close')) .. ','
+        .. webNowPlayingInstallState.luaString('MeasureJukebox') .. ','
+        .. webNowPlayingInstallState.luaString('ForceTerminateWebNowPlayingPortOwner') .. ','
+        .. webNowPlayingInstallState.luaString('CancelWebNowPlayingPortOwnerTerminate') .. ')'
 
     webNowPlayingInstallState.requestDeferredOpen()
     return true

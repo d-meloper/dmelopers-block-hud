@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $utf16LeBom = New-Object System.Text.UnicodeEncoding($false, $true)
 $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+. (Join-Path $PSScriptRoot 'Localization.Common.ps1')
 
 function Resolve-FullPath {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -15,15 +16,6 @@ function Resolve-FullPath {
         return [System.IO.Path]::GetFullPath($Path)
     }
     return [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $Path))
-}
-
-function Normalize-LanguageCode {
-    param([string]$Value)
-
-    if (([string]$Value).Trim() -ieq 'en-US') {
-        return 'en-US'
-    }
-    return 'ko-KR'
 }
 
 function Read-Utf16Text {
@@ -44,7 +36,7 @@ function Read-LanguageCodeFromSettings {
     if (-not $match.Success) {
         return 'ko-KR'
     }
-    return (Normalize-LanguageCode -Value $match.Groups[1].Value)
+    return (Normalize-LanguageCode -LanguageCode $match.Groups[1].Value -SkinRoot $Root)
 }
 
 function Read-LocStrings {
@@ -81,7 +73,7 @@ $resolvedSkinRoot = Resolve-FullPath -Path $SkinRoot
 $resolvedLanguageCode = if ([string]::IsNullOrWhiteSpace($LanguageCode)) {
     Read-LanguageCodeFromSettings -Root $resolvedSkinRoot
 } else {
-    Normalize-LanguageCode -Value $LanguageCode
+    Normalize-LanguageCode -LanguageCode $LanguageCode -SkinRoot $resolvedSkinRoot
 }
 
 $catalogPath = [System.IO.Path]::Combine($resolvedSkinRoot, '@Resources', 'Localization', 'Languages', ($resolvedLanguageCode + '.inc'))

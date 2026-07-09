@@ -5,8 +5,6 @@ return function(app)
     local trim = app.trim
     local setVariable = app.setVariable
 
-    local languageDisplayKorean = '한국어'
-    local languageDisplayEnglish = 'English'
     local clockTypeKeyByValue = {
         default = 'Settings_ClockType_BothDefault',
         text = 'Settings_ClockType_TextOnly',
@@ -222,10 +220,7 @@ return function(app)
     end
 
     local function languageDropdownOptions()
-        return {
-            { displayLabel = languageDisplayKorean, appliedValue = 'ko-KR' },
-            { displayLabel = languageDisplayEnglish, appliedValue = 'en-US' },
-        }
+        return app.languageRegistry.GetDropdownOptions(SKIN)
     end
 
     function methods.indicatorDiskDisplayLabel(diskTarget, appliedValue)
@@ -380,7 +375,7 @@ return function(app)
             return resolved
         end
         if field.key == 'language' then
-            return methods.normalizeLanguageCode(resolved, resolved) == 'en-US' and languageDisplayEnglish or languageDisplayKorean
+            return app.languageRegistry.GetDisplayName(SKIN, methods.normalizeLanguageCode(resolved, resolved))
         end
         if field.dropdownId == 'indicatorExpLevel' and resolved == '-1' then
             return indicatorExpLinkedDisplayLabel()
@@ -413,14 +408,7 @@ return function(app)
     function methods.normalizeTextAliasInput(field, raw)
         local resolved = trim(raw)
         if field and field.key == 'language' then
-            local loweredResolved = string.lower(resolved)
-            if loweredResolved == 'en' or loweredResolved == 'en-us' or resolved == languageDisplayEnglish then
-                return 'en-US'
-            end
-            if loweredResolved == 'ko' or loweredResolved == 'ko-kr' or resolved == languageDisplayKorean then
-                return 'ko-KR'
-            end
-            return methods.normalizeLanguageCode(resolved, 'ko-KR')
+            return app.languageRegistry.ResolveLanguageInput(SKIN, resolved, methods.normalizeLanguageCode(nil, nil))
         end
         if field and field.key == 'clockType' then
             local loweredResolved = string.lower(resolved)

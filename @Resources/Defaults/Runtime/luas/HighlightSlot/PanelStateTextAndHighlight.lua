@@ -31,6 +31,8 @@ local HerobrineEvents = nil
 local RainmeterConfigState = nil
 local ResidentUpdateController = nil
 local LanguageBranching = nil
+local LanguageRegistry = nil
+local LocalizationTextFit = nil
 HighlightSlotActionLaunch = nil
 local IsMissingHintVisible = true
 local isOptionHovering = false
@@ -273,9 +275,8 @@ local function closeInventoryPanels(rootPath)
     end
     local function closeInventoryBackground()
         if isRainmeterConfigActive(inventoryBgConfig) then
-            SKIN:Bang('!CommandMeasure', 'MeasureHighlight', 'SuspendInventoryBackgroundResident()', inventoryBgConfig)
+            SKIN:Bang('!DeactivateConfig', inventoryBgConfig)
         end
-        HighlightHideActiveConfig(inventoryBgConfig)
     end
     if currentConfig == inventoryBgConfigKey then
         closeInventory()
@@ -471,6 +472,8 @@ local function LoadEssentials()
     RainmeterConfigState = dofile(R .. 'Defaults\\Runtime\\luas\\RainmeterConfigState.lua')
     ResidentUpdateController = dofile(R .. 'Defaults\\Runtime\\luas\\ResidentUpdateController.lua')
     LanguageBranching = dofile(R .. 'Defaults\\Runtime\\luas\\LanguageBranching.lua')
+    LanguageRegistry = dofile(R .. 'Defaults\\Runtime\\luas\\LanguageRegistry.lua')
+    LocalizationTextFit = dofile(R .. 'Defaults\\Runtime\\luas\\LocalizationTextFit.lua')
     local skinRoot = tostring(SKIN:GetVariable('ROOTCONFIGPATH', '') or '')
     skinRoot = skinRoot:gsub('^%s+', ''):gsub('%s+$', '')
     if skinRoot ~= '' and skinRoot:sub(-1) ~= '\\' and skinRoot:sub(-1) ~= '/' then
@@ -483,6 +486,19 @@ local function LoadEssentials()
     IsHotbar = GetSkinValue('IsHotbar') == 1
     LoadAllSkinValue()
     SKIN:Bang(_G.DMeloper.BANG_SET_VARIABLE, 'HighlightShapeSize', tostring(SlotSize + HighlightSizeOffset))
+end
+function ApplyInventoryStaticLocalizationTextFits()
+    if IsHotbar or not LocalizationTextFit or not LocalizationTextFit.ApplyMeterTextFit then
+        return
+    end
+    LocalizationTextFit.ApplyMeterTextFit(SKIN, 'MeterEditorModeBadgeLabel', '#Loc_Inventory_EditorModeBadgeText#', {
+        baseFontSize = GetSkinNumber('EditorModeBadgeFontSize', 20),
+        widthPx = math.max(0, GetSkinNumber('EditorModeBadgeW', 245) - 18),
+        minScale = 0.55,
+        probeMeterName = 'MeterInventoryTextFitProbe',
+        setText = false,
+        update = false,
+    })
 end
 local function callHerobrine(methodName, ...)
     if HerobrineEvents and type(HerobrineEvents[methodName]) == 'function' then
@@ -640,10 +656,10 @@ local function IsInventoryItem(s)
     return s == _G.DMeloper.OPEN_INVENTORY_KEY
 end
 local function CurrentLanguageCode()
-    return LanguageBranching.CurrentSkinLanguageCode(SKIN, 'ko-KR')
+    return LanguageRegistry.NormalizeLanguageCode(SKIN, LanguageBranching.CurrentSkinLanguageCode(SKIN, 'en-US'), 'en-US')
 end
 local function ReservedInventoryDisplayName()
-    return LanguageBranching.SelectKoreanElseGlobal(CurrentLanguageCode(), '인벤토리', 'Inventory')
+    return LanguageRegistry.GetInventoryLabel(SKIN, CurrentLanguageCode())
 end
 local function InventoryUsageGuideUrl()
     return LanguageBranching.SelectKoreanElseGlobal(

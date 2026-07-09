@@ -1,4 +1,28 @@
 -- Split from ExtraContent\Jukebox\DiscSlot\JukeboxDiscSlot.lua lines 1555-2289.
+JukeboxDiscSlotTextFit = nil
+
+function EnsureJukeboxDiscSlotTextFit()
+    if JukeboxDiscSlotTextFit == nil then
+        JukeboxDiscSlotTextFit = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\LocalizationTextFit.lua')
+    end
+    return JukeboxDiscSlotTextFit
+end
+
+function ApplyDiscSlotTextFit(meterName, text, baseFontSize, widthPx, minScale)
+    local helper = EnsureJukeboxDiscSlotTextFit()
+    if not helper or not helper.ApplyMeterTextFit then
+        return
+    end
+    helper.ApplyMeterTextFit(SKIN, meterName, text, {
+        baseFontSize = tonumber(baseFontSize) or 12,
+        widthPx = tonumber(widthPx) or 0,
+        minScale = tonumber(minScale) or 0.60,
+        probeMeterName = 'MeterJukeboxDiscSlotTextFitProbe',
+        setText = false,
+        update = false,
+    })
+end
+
 local function syncPageMeters()
     local m = pageControlMetrics()
     local controlsHidden = optionsVisible() and 0 or 1
@@ -21,6 +45,7 @@ local function syncPageMeters()
     setVariable('JukeboxDiscSlotOpenFolderX', m.openFolderX + originX)
     setVariable('JukeboxDiscSlotOpenFolderHitX', m.openFolderHitX + originX)
     setVariable('JukeboxDiscSlotOpenFolderHitW', m.openFolderHitW)
+    setVariable('JukeboxDiscSlotOpenFolderW', m.openFolderHitW)
     setVariable('JukeboxDiscSlotRepeatX', m.repeatX + originX)
     setVariable('JukeboxDiscSlotRepeatY', m.repeatY)
     setVariable('JukeboxDiscSlotRepeatHitX', m.repeatHitX + originX)
@@ -149,6 +174,13 @@ local function syncPageMeters()
     setVariable('JukeboxDiscSlotExternalShuffleY', external.shuffleY)
     setVariable('JukeboxDiscSlotExternalPlayHidden', external.playHidden)
     setVariable('JukeboxDiscSlotExternalPauseHidden', external.pauseHidden)
+    ApplyDiscSlotTextFit(
+        'MeterJukeboxDiscSlotOpenFolder',
+        '#Loc_Common_OpenFolder#',
+        m.fontSize,
+        math.max(0, m.openFolderHitW - 8),
+        0.55
+    )
     updateMeter('MeterJukeboxDiscSlotOpenFolderHit')
     updateMeter('MeterJukeboxDiscSlotOpenFolder')
     updateMeter('MeterJukeboxDiscSlotRepeatHit')

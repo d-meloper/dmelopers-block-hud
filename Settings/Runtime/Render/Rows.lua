@@ -9,6 +9,57 @@ return function(app)
     local dropdownClosedText = helpers.dropdownClosedText
     local dropdownOpenText = helpers.dropdownOpenText
     local pixelValue = helpers.pixelValue
+    local applyTextFit = helpers.applyTextFit
+
+    local function fieldLabelKey(field)
+        if methods.fieldLabelLocalizationKey then
+            return methods.fieldLabelLocalizationKey(field)
+        end
+        local fieldKey = trim(field and field.key or '')
+        if fieldKey == '' then
+            return ''
+        end
+        return 'Settings_Field_' .. fieldKey .. '_Label'
+    end
+
+    local function fieldActionKey(field)
+        if methods.fieldActionLocalizationKey then
+            return methods.fieldActionLocalizationKey(field)
+        end
+        local fieldKey = trim(field and field.key or '')
+        if fieldKey == '' then
+            return ''
+        end
+        return 'Settings_Field_' .. fieldKey .. '_Action'
+    end
+
+    local function applyRowLabelFit(rowIndex, field, text)
+        if not applyTextFit then
+            return
+        end
+        local width = methods.numericVariable('SettingsRow' .. rowIndex .. '_LabelW', methods.numericVariable('SlotSettingsRow' .. rowIndex .. '_LabelW', 0)) or 0
+        applyTextFit('MeterSettingsRow' .. tostring(rowIndex) .. 'Label', fieldLabelKey(field), text, 'SettingsLabelFontSize', math.max(0, width - 4), 0.35, 1.0)
+    end
+
+    local function applyRowFieldFit(rowIndex, text)
+        if not applyTextFit then
+            return
+        end
+        local width = methods.numericVariable('SettingsRow' .. rowIndex .. '_FieldContentW', methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_W', 0)) or 0
+        applyTextFit('MeterSettingsRow' .. tostring(rowIndex) .. 'FieldText', '', text, 'SettingsUIFontSize', width, 0.45, 1.0)
+    end
+
+    local function applyRowActionFit(rowIndex, field, text, secondary)
+        if not applyTextFit then
+            return
+        end
+        local suffix = secondary and 'ActionSecondary' or 'Action'
+        local meterSuffix = secondary and 'ActionSecondaryLabel' or 'ActionLabel'
+        local width = methods.numericVariable('SettingsRow' .. rowIndex .. '_' .. suffix .. '_W', 0) or 0
+        local pad = methods.numericVariable('SlotSettingsRowText_ContentPad', methods.numericVariable('SettingsInnerPad', 10)) or 10
+        applyTextFit('MeterSettingsRow' .. tostring(rowIndex) .. meterSuffix, fieldActionKey(field), text, 'SettingsUIFontSize', math.max(0, width - (2 * pad)), 0.35, 1.0)
+    end
+
     function methods.configureTextRow(rowIndex, field)
 
         local displayValue = methods.displayValueForField(field, methods.readFieldValue(field))
@@ -26,6 +77,7 @@ return function(app)
         setVariable('SettingsRow' .. rowIndex .. '_FieldCommand', '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "PrepareTextField(\'' .. field.key .. '\')"][!CommandMeasure MeasureSettingsCommit "OpenPreparedTextField()"]')
 
         methods.syncTextFieldGeometry(rowIndex, field)
+        applyRowFieldFit(rowIndex, displayValue)
 
         local inlineActionFieldKey = trim(field and field.inlineActionFieldKey or '')
 
@@ -121,7 +173,9 @@ return function(app)
 
                 setVariable('SettingsRow' .. rowIndex .. '_Action_LabelY', tostring(controlY + (controlH / 2)))
 
-                setVariable('SettingsRow' .. rowIndex .. '_ActionText', methods.fieldActionText(inlineActionField, trim(field.inlineActionText or inlineActionField.defaultActionText or '')))
+                local inlineActionText = methods.fieldActionText(inlineActionField, trim(field.inlineActionText or inlineActionField.defaultActionText or ''))
+                setVariable('SettingsRow' .. rowIndex .. '_ActionText', inlineActionText)
+                applyRowActionFit(rowIndex, inlineActionField, inlineActionText, false)
 
                 setVariable('SettingsRow' .. rowIndex .. '_ActionCommand', string.format("[!CommandMeasure MeasureSettingsCommit \"PlayUiClick()\"][!CommandMeasure MeasureSettingsCommit \"ExecuteFieldAction('%s')\"]", inlineActionField.key))
 
@@ -215,6 +269,7 @@ return function(app)
         setVariable('SettingsRow' .. rowIndex .. '_FieldCommand', '')
 
         methods.syncTextFieldGeometry(rowIndex, field)
+        applyRowFieldFit(rowIndex, displayValue)
 
         setVariable('SettingsRow' .. rowIndex .. '_DropdownButtonHidden', '1')
 
@@ -315,10 +370,12 @@ return function(app)
         setVariable('SettingsRow' .. rowIndex .. '_Action_H', tostring(controlH))
         setVariable('SettingsRow' .. rowIndex .. '_Action_LabelX', tostring(controlX + (primaryW / 2)))
         setVariable('SettingsRow' .. rowIndex .. '_Action_LabelY', tostring(labelY))
-        setVariable('SettingsRow' .. rowIndex .. '_ActionText', optionLabel(primary))
+        local primaryText = optionLabel(primary)
+        setVariable('SettingsRow' .. rowIndex .. '_ActionText', primaryText)
         setVariable('SettingsRow' .. rowIndex .. '_ActionCommand', '')
         setVariable('SettingsRow' .. rowIndex .. '_ActionBgColor', optionBgColor(primarySelected))
         setVariable('SettingsRow' .. rowIndex .. '_ActionTextColor', optionTextColor(primarySelected))
+        applyRowActionFit(rowIndex, field, primaryText, false)
 
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondary_X', tostring(secondaryX))
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondary_Y', tostring(controlY))
@@ -326,10 +383,12 @@ return function(app)
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondary_H', tostring(controlH))
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondary_LabelX', tostring(secondaryX + (secondaryW / 2)))
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondary_LabelY', tostring(labelY))
-        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryText', optionLabel(secondary))
+        local secondaryText = optionLabel(secondary)
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryText', secondaryText)
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryCommand', '')
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryBgColor', optionBgColor(secondarySelected))
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryTextColor', optionTextColor(secondarySelected))
+        applyRowActionFit(rowIndex, field, secondaryText, true)
 
         state.currentRowActionByIndex[rowIndex] = isDisabled and nil or { kind = 'selectSegmentedOption', fieldKey = field.key, value = primaryValue }
         state.currentRowSecondaryActionByIndex[rowIndex] = isDisabled and nil or { kind = 'selectSegmentedOption', fieldKey = field.key, value = secondaryValue }
@@ -490,6 +549,8 @@ return function(app)
 
             setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryText', methods.localize('Settings_Confirm_Confirm', methods.localize('Common_Confirm', '확정')))
 
+            applyRowActionFit(rowIndex, field, SKIN:GetVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryText', ''), true)
+
             setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryCommand', string.format("[!CommandMeasure MeasureSettingsCommit \"PlayUiClick()\"][!CommandMeasure MeasureSettingsCommit \"ExecuteFieldAction('%s')\"]", field.key))
 
             state.currentRowSecondaryActionByIndex[rowIndex] = { kind = 'executeFieldAction', fieldKey = field.key }
@@ -501,6 +562,7 @@ return function(app)
         end
 
         setVariable('SettingsRow' .. rowIndex .. '_ActionText', actionText)
+        applyRowActionFit(rowIndex, field, actionText, false)
 
         setVariable('SettingsRow' .. rowIndex .. '_ActionCommand', actionCommand)
 
@@ -514,5 +576,9 @@ return function(app)
 
         setVariable('SettingsRow' .. rowIndex .. '_ActionTextColor', actionTextColor)
 
+    end
+
+    function methods.applyRowLabelTextFit(rowIndex, field, text)
+        applyRowLabelFit(rowIndex, field, text)
     end
 end

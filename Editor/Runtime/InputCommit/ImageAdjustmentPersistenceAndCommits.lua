@@ -249,6 +249,16 @@ shouldSkipEmptyDraftPersist = function(service, meta)
 
 end
 
+function CleanupEditorPixelationImagesForCurrentItems()
+
+    if type(CleanupEditorPixelationImagesAfterPersist) == 'function' then
+
+        CleanupEditorPixelationImagesAfterPersist()
+
+    end
+
+end
+
 
 
 local function writePersistedFromDraft()
@@ -365,6 +375,8 @@ local function persistDraftAndResetSessionState()
 
 
     closeDiscardApplied = true
+
+    CleanupEditorPixelationImagesForCurrentItems()
 
 
 

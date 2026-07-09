@@ -233,7 +233,7 @@ return function(app)
             hideEditButton = { 'MeterEdit' },
             hideSettingsButton = { 'MeterSettingsUIButton' },
         }
-        if key ~= 'hideSteve' and not meterByKey[key] then
+        if not meterByKey[key] then
             return false
         end
         methods.ensurePaths()
@@ -245,14 +245,10 @@ return function(app)
                 local configPath = state.rootConfig .. '\\' .. target.config
                 SKIN:Bang('!SetVariable', field.variableName, tostring(resolved), configPath)
                 if inventoryActive then
-                    if key == 'hideSteve' then
-                        SKIN:Bang('!CommandMeasure', 'MeasurePlayerSkinState', 'Sync()', configPath)
-                    else
-                        for _, meterName in ipairs(meterByKey[key]) do
-                            SKIN:Bang('!UpdateMeter', meterName, configPath)
-                        end
-                        SKIN:Bang('!Redraw', configPath)
+                    for _, meterName in ipairs(meterByKey[key]) do
+                        SKIN:Bang('!UpdateMeter', meterName, configPath)
                     end
+                    SKIN:Bang('!Redraw', configPath)
                 end
             end
         end

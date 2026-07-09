@@ -35,6 +35,7 @@ $script:ResultPairs = [ordered]@{
     DMEL_BACKUPPATH = ''
     DMEL_LOGPATH = ''
     DMEL_MESSAGE = ''
+    DMEL_CURRENTVERSION = ''
     DMEL_LATESTVERSION = ''
     DMEL_CACHESTATUS = ''
     DMEL_CACHEERRORCODE = ''
@@ -88,7 +89,7 @@ function Emit-ResultPairs {
     }
 
     Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value $script:LogPath
-    foreach ($key in @('DMEL_STATUS', 'DMEL_SOURCEPATH', 'DMEL_BACKUPPATH', 'DMEL_LOGPATH', 'DMEL_MESSAGE', 'DMEL_LATESTVERSION', 'DMEL_CACHESTATUS', 'DMEL_CACHEERRORCODE', 'DMEL_CACHEFAILUREHINT', 'DMEL_CACHELASTCHECKEDATUTC')) {
+    foreach ($key in @('DMEL_STATUS', 'DMEL_SOURCEPATH', 'DMEL_BACKUPPATH', 'DMEL_LOGPATH', 'DMEL_MESSAGE', 'DMEL_CURRENTVERSION', 'DMEL_LATESTVERSION', 'DMEL_CACHESTATUS', 'DMEL_CACHEERRORCODE', 'DMEL_CACHEFAILUREHINT', 'DMEL_CACHELASTCHECKEDATUTC')) {
         Write-OutputPair -Key $key -Value $script:ResultPairs[$key]
     }
 }
@@ -717,6 +718,7 @@ function Get-VersionReleaseCatalog {
     if (-not (Test-SkinRoot -Root $resolvedRoot)) {
         throw "CurrentTargetRoot is not a valid Block HUD root: $resolvedRoot"
     }
+    Set-ResultPairValue -Key 'DMEL_CURRENTVERSION' -Value (Get-SkinMetadataVersion -Root $resolvedRoot)
 
     $config = Get-UpdateConfiguration -Root $resolvedRoot
     if (-not [string]::Equals([string]$config.Provider, 'github', [System.StringComparison]::OrdinalIgnoreCase)) {

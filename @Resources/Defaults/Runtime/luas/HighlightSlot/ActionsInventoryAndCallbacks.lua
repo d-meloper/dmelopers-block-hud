@@ -409,6 +409,8 @@ function ResumeInventoryResident()
     SKIN:Bang('!UpdateMeasure', 'MeasureAnimation')
     SKIN:Bang('!UpdateMeter', 'MeterPlayerDefault')
     SKIN:Bang('!UpdateMeter', 'MeterPlayerCustom')
+    ApplyInventoryStaticLocalizationTextFits()
+    SKIN:Bang('!UpdateMeter', 'MeterEditorModeBadgeLabel')
     SKIN:Bang('!CommandMeasure', 'MeasureItemInfoInitializer', 'InitInfos()')
     SKIN:Bang('!Redraw')
 end
@@ -434,45 +436,37 @@ function SuspendInventoryResident()
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
     SKIN:Bang('!Redraw')
 end
-function ResumeInventoryBackgroundResident()
+function RestoreInventoryBackgroundActiveConfig()
     LoadEssentials()
-    ResidentUpdateController.ResumeSurface('InventoryBG')
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'ApplyLayout()')
     SKIN:Bang('!Draggable', '0')
     SKIN:Bang('!Redraw')
 end
-function RestoreInventoryBackgroundResidentOnRefresh()
+function RestoreInventoryBackgroundActiveConfigOnRefresh()
     LoadEssentials()
     local wasVisible = IsInventoryVisibleStateEnabled()
     if not wasVisible then
         SKIN:Bang('!UpdateMeasure', 'MeasureInventoryBGEnableGuard')
-        SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'ApplyLayout()')
-        SuspendInventoryBackgroundResident()
+        SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
+        SKIN:Bang('!DeactivateConfig')
         return
     end
-    ResumeInventoryBackgroundResident()
+    RestoreInventoryBackgroundActiveConfig()
 end
 function DeactivateClosedInventoryBackgroundOnRefresh()
     LoadEssentials()
     if IsInventoryVisibleStateEnabled() then
-        ResumeInventoryBackgroundResident()
+        RestoreInventoryBackgroundActiveConfig()
         return
     end
 
-    local bootstrapActive = trimText(SKIN:GetVariable('BlockHudZPosBootstrapActive', '0')) ~= '0'
-    if bootstrapActive then
-        SuspendInventoryBackgroundResident()
-        return
-    end
-
-    SuspendInventoryBackgroundResident()
+    SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
     SKIN:Bang('!DeactivateConfig')
 end
-function SuspendInventoryBackgroundResident()
+function DeactivateInventoryBackgroundActiveConfig()
     LoadEssentials()
-    ResidentUpdateController.SuspendSurface('InventoryBG')
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
-    SKIN:Bang('!Redraw')
+    SKIN:Bang('!DeactivateConfig')
 end
 local function prepareInventoryOpenPosition(inventoryActive, inventoryConfig)
     if inventoryActive then
@@ -574,8 +568,8 @@ function ActivateAllInventory()
         end
     end
     if inventoryBgActive then
-        showResidentConfigAfterLayout(inventoryBgConfig)
-        HighlightCommandMeasureForActiveConfig('MeasureHighlight', 'ResumeInventoryBackgroundResident()', inventoryBgConfig)
+        HighlightCommandMeasureForActiveConfig('MeasureResponsiveLayout', 'ApplyLayout()', inventoryBgConfig)
+        HighlightCommandMeasureForActiveConfig('MeasureHighlight', 'RestoreInventoryBackgroundActiveConfig()', inventoryBgConfig)
     end
     if inventoryActive then
         showResidentConfigAfterLayout(inventoryConfig)

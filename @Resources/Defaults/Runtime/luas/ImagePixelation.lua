@@ -27,6 +27,44 @@ local function quotePowerShellArgument(value)
     return '"' .. value .. '"'
 end
 
+local base64Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+
+local function base64Encode(value)
+    value = tostring(value or '')
+    local result = {}
+    for index = 1, #value, 3 do
+        local byte1 = value:byte(index) or 0
+        local byte2 = value:byte(index + 1) or 0
+        local byte3 = value:byte(index + 2) or 0
+        local triple = (byte1 * 65536) + (byte2 * 256) + byte3
+        local remaining = #value - index + 1
+        local char1 = math.floor(triple / 262144) % 64
+        local char2 = math.floor(triple / 4096) % 64
+        local char3 = math.floor(triple / 64) % 64
+        local char4 = triple % 64
+        result[#result + 1] = base64Alphabet:sub(char1 + 1, char1 + 1)
+        result[#result + 1] = base64Alphabet:sub(char2 + 1, char2 + 1)
+        result[#result + 1] = remaining >= 2 and base64Alphabet:sub(char3 + 1, char3 + 1) or '='
+        result[#result + 1] = remaining >= 3 and base64Alphabet:sub(char4 + 1, char4 + 1) or '='
+    end
+    return table.concat(result)
+end
+
+local function jsonString(value)
+    value = tostring(value or '')
+    value = value:gsub('\\', '\\\\')
+    value = value:gsub('"', '\\"')
+    value = value:gsub('\b', '\\b')
+    value = value:gsub('\f', '\\f')
+    value = value:gsub('\n', '\\n')
+    value = value:gsub('\r', '\\r')
+    value = value:gsub('\t', '\\t')
+    value = value:gsub('[%z\1-\31]', function(char)
+        return string.format('\\u%04x', char:byte())
+    end)
+    return '"' .. value .. '"'
+end
+
 local function rollingHash(value)
     value = tostring(value or '')
     local hash = 5381
@@ -67,6 +105,24 @@ local function parsePairs(output)
     return pairs
 end
 
+local function outputPreview(output, limit)
+    output = tostring(output or '')
+    limit = tonumber(limit) or 240
+    output = output:gsub('[\r\n]+', ' | ')
+    if #output > limit then
+        return output:sub(1, limit) .. '...'
+    end
+    return output
+end
+
+local function describeValue(value, fallback)
+    value = trim(value)
+    if value == '' then
+        return fallback or '<empty>'
+    end
+    return value
+end
+
 local function outputFileName(signature, width, height, blockSize, fitMode, sampleMode)
     local key = table.concat({
         tostring(signature or ''),
@@ -94,6 +150,10 @@ function Pixelator:buildRequest(params)
     local blockSize = safeInt(params.blockSize, self.defaultBlockSize, 1)
     local fitMode = normalizedChoice(params.fitMode or self.fitMode, { 'Cover', 'Contain', 'Stretch' }, 'Cover')
     local sampleMode = normalizedChoice(params.sampleMode or self.sampleMode, { 'Average', 'Nearest' }, 'Average')
+    local preserveSourceSize = params.preserveSourceSize == true
+        or trim(params.preserveSourceSize):lower() == 'true'
+        or trim(params.preserveSourceSize) == '1'
+    local itemImageDirectory = trim(params.itemImageDirectory)
     local cacheRoot = trim(params.cacheRoot or self.cacheRoot)
     local cacheNamespace = trim(params.cacheNamespace or self.cacheNamespace)
     if cacheNamespace == '' then
@@ -101,12 +161,12 @@ function Pixelator:buildRequest(params)
     end
     local signature = trim(params.signature)
     if signature == '' then
-        signature = table.concat({ sourcePath, width, height, blockSize, fitMode, sampleMode }, '|')
+        signature = table.concat({ sourcePath, width, height, blockSize, fitMode, sampleMode, tostring(preserveSourceSize), itemImageDirectory }, '|')
     end
 
     local outputName = outputFileName(signature, width, height, blockSize, fitMode, sampleMode)
-    local outputPath = ''
-    if cacheRoot ~= '' then
+    local outputPath = trim(params.outputPath)
+    if outputPath == '' and cacheRoot ~= '' then
         outputPath = joinPath(cacheRoot, outputName)
     end
     local tokenSeed = table.concat({ signature, tostring(os.time()), tostring(self.sequence + 1) }, '|')
@@ -120,10 +180,43 @@ function Pixelator:buildRequest(params)
         blockSize = blockSize,
         fitMode = fitMode,
         sampleMode = sampleMode,
+        preserveSourceSize = preserveSourceSize,
+        itemImageDirectory = itemImageDirectory,
         signature = signature,
         token = rollingHash(tokenSeed),
         fallbackPath = trim(params.fallbackPath),
     }
+end
+
+function Pixelator:buildRequestPayload(request)
+    local pairs = {
+        { 'SourcePath', request.sourcePath },
+        { 'OutputPath', request.outputPath },
+        { 'CacheRoot', self.cacheRoot },
+        { 'CacheNamespace', request.cacheNamespace },
+        { 'OutputName', request.outputName },
+        { 'Width', request.width },
+        { 'Height', request.height },
+        { 'BlockSize', request.blockSize },
+        { 'FitMode', request.fitMode },
+        { 'SampleMode', request.sampleMode },
+        { 'PreserveSourceSize', request.preserveSourceSize and true or false },
+        { 'ItemImageDirectory', request.itemImageDirectory },
+        { 'Token', request.token },
+    }
+    local json = {}
+    for _, pair in ipairs(pairs) do
+        local key = pair[1]
+        local value = pair[2]
+        if type(value) == 'number' then
+            json[#json + 1] = jsonString(key) .. ':' .. tostring(value)
+        elseif type(value) == 'boolean' then
+            json[#json + 1] = jsonString(key) .. ':' .. (value and 'true' or 'false')
+        else
+            json[#json + 1] = jsonString(key) .. ':' .. jsonString(value)
+        end
+    end
+    return base64Encode('{' .. table.concat(json, ',') .. '}')
 end
 
 function Pixelator:buildArgs(request)
@@ -132,29 +225,8 @@ function Pixelator:buildArgs(request)
         '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quotePowerShellArgument(self.helperPath),
-        '-SourcePath', quotePowerShellArgument(request.sourcePath),
+        '-RequestJsonBase64', quotePowerShellArgument(self:buildRequestPayload(request)),
     }
-    if trim(request.outputPath) ~= '' then
-        args[#args + 1] = '-OutputPath'
-        args[#args + 1] = quotePowerShellArgument(request.outputPath)
-    else
-        args[#args + 1] = '-CacheNamespace'
-        args[#args + 1] = quotePowerShellArgument(request.cacheNamespace)
-        args[#args + 1] = '-OutputName'
-        args[#args + 1] = quotePowerShellArgument(request.outputName)
-    end
-    args[#args + 1] = '-Width'
-    args[#args + 1] = tostring(request.width)
-    args[#args + 1] = '-Height'
-    args[#args + 1] = tostring(request.height)
-    args[#args + 1] = '-BlockSize'
-    args[#args + 1] = tostring(request.blockSize)
-    args[#args + 1] = '-FitMode'
-    args[#args + 1] = quotePowerShellArgument(request.fitMode)
-    args[#args + 1] = '-SampleMode'
-    args[#args + 1] = quotePowerShellArgument(request.sampleMode)
-    args[#args + 1] = '-Token'
-    args[#args + 1] = quotePowerShellArgument(request.token)
     return table.concat(args, ' ')
 end
 
@@ -293,9 +365,27 @@ end
 function Pixelator:handleComplete(output)
     local values = parsePairs(output)
     local token = trim(values.DMEL_TOKEN)
+    local expectedToken = self.pendingToken
     if token == '' or token ~= self.pendingToken then
         local sourcePath = self.pendingSourcePath
         local outputPath = self.pendingOutputPath
+        local status = upper(values.DMEL_STATUS)
+        local message = trim(values.DMEL_MESSAGE)
+        local errorCode = trim(values.DMEL_ERROR_CODE)
+        local errorDetail = trim(values.DMEL_ERROR_DETAIL)
+        local detail = table.concat({
+            'Pixelation helper returned a stale or missing token.',
+            'expected=' .. describeValue(expectedToken),
+            'received=' .. describeValue(token),
+            'status=' .. describeValue(status),
+            'message=' .. describeValue(message),
+            'errorCode=' .. describeValue(errorCode),
+            'errorDetail=' .. describeValue(errorDetail),
+            'source=' .. describeValue(sourcePath),
+            'output=' .. describeValue(outputPath),
+            'outputChars=' .. tostring(#tostring(output or '')),
+            'outputPreview=' .. describeValue(outputPreview(output)),
+        }, ' ')
         self.pendingToken = ''
         self.pendingSignature = ''
         self.pendingOutputPath = ''
@@ -305,7 +395,13 @@ function Pixelator:handleComplete(output)
             accepted = false,
             ok = false,
             phase = 'complete-token',
-            message = 'Pixelation helper returned a stale or missing token.',
+            message = detail,
+            helperStatus = status,
+            errorCode = errorCode,
+            errorDetail = errorDetail,
+            receivedToken = token,
+            expectedToken = expectedToken,
+            outputPreview = outputPreview(output),
             sourcePath = sourcePath,
             outputPath = outputPath,
             queued = queued,
@@ -323,6 +419,7 @@ function Pixelator:handleComplete(output)
     local sourceLength = trim(values.DMEL_SOURCE_LENGTH)
     local sourceFormat = trim(values.DMEL_SOURCE_FORMAT)
     local decodeMethod = trim(values.DMEL_DECODE_METHOD)
+    local itemImageAssets = trim(values.DMEL_ITEMIMAGEASSETS)
 
     self.pendingToken = ''
     self.pendingSignature = ''
@@ -348,6 +445,7 @@ function Pixelator:handleComplete(output)
             sourceLength = sourceLength,
             sourceFormat = sourceFormat,
             decodeMethod = decodeMethod,
+            itemImageAssets = itemImageAssets,
             queued = self:startQueued(),
         }
     end
@@ -368,6 +466,7 @@ function Pixelator:handleComplete(output)
         sourceLength = sourceLength,
         sourceFormat = sourceFormat,
         decodeMethod = decodeMethod,
+        itemImageAssets = itemImageAssets,
         queued = self:startQueued(),
     }
 end
@@ -401,5 +500,8 @@ end
 
 M.parsePairs = parsePairs
 M.hash = rollingHash
+M.base64Encode = base64Encode
+M.jsonString = jsonString
+M.quotePowerShellArgument = quotePowerShellArgument
 
 return M

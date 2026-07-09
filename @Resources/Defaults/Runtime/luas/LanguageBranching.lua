@@ -32,7 +32,7 @@ function LanguageBranching.SelectKoreanElseGlobal(raw, koreanValue, globalValue)
 end
 
 function LanguageBranching.CurrentSkinLanguageCode(skin, fallback)
-    local resolvedFallback = fallback or 'ko-KR'
+    local resolvedFallback = fallback or 'en-US'
     if skin and skin.GetVariable then
         return LanguageBranching.NormalizeLanguageCode(skin:GetVariable('LanguageCode', resolvedFallback), resolvedFallback)
     end

@@ -102,8 +102,8 @@ function Show-AppDialog([System.Windows.Forms.IWin32Window]$Owner) {
 
     $appTitle = Get-LocText 'Helper_PickPath_AppTitle' 'Choose a program'
     $searchLabelText = Get-LocText 'Helper_PickPath_AppSearch' 'Search'
-    $okText = Get-LocText 'Helper_PickPath_AppSelect' 'Select'
-    $closeText = Get-LocText 'Helper_PickPath_DialogClose' 'Close'
+    $okText = Get-LocText 'Common_Select' 'Select'
+    $closeText = Get-LocText 'Common_Close' 'Close'
     $loadingAppsText = Get-LocText 'Helper_PickPath_AppLoading' 'Loading program list...'
     $noAppsText = Get-LocText 'Helper_PickPath_AppNoItems' 'Could not load the installed Start program list.'
     $nameHeader = Get-LocText 'Helper_PickPath_AppNameHeader' 'Program name'

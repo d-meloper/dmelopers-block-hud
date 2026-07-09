@@ -7,6 +7,16 @@ function Start-VersionManager {
     if (-not (Test-SkinRoot -Root $root)) {
         throw 'TargetRoot is not a valid Block HUD skin root.'
     }
+    $normalizedInitialAction = [string]$InitialAction
+    if ([string]::IsNullOrWhiteSpace($normalizedInitialAction)) {
+        $normalizedInitialAction = ''
+    }
+    elseif ([string]::Equals($normalizedInitialAction, 'InstallLatest', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $normalizedInitialAction = 'InstallLatest'
+    }
+    else {
+        throw "Unsupported InitialAction '$normalizedInitialAction'."
+    }
 
     $script:LogPath = Get-BlockHudCanonicalLogPath -Root $root -ScriptRoot (Get-VersionManagerToolsRoot)
     Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value $script:LogPath
@@ -68,6 +78,8 @@ function Start-VersionManager {
     $ui.BusyOverlayVisible = $false
     $ui.BusyOverlayControlStates = @()
     $ui.HasSessionUpdateStatus = $false
+    $ui.InitialAction = $normalizedInitialAction
+    $ui.InitialActionStarted = $false
     $ui.SettingsLogHasContent = $false
     $ui.CloseAfterSwitch = $false
     $ui.InitialHydrationStageIndex = 0
@@ -242,7 +254,7 @@ function Start-VersionManager {
     }
 
     $footerRefresh = New-Object System.Windows.Forms.Button
-    $footerRefresh.Text = T 'Helper_VersionManager_Action_Refresh' 'Refresh'
+    $footerRefresh.Text = T 'Common_Refresh' 'Refresh'
     $footerRefresh.Bounds = New-Object System.Drawing.Rectangle(12, 353, 88, 28)
     $footerOpenDownloadPage = New-Object System.Windows.Forms.Button
     $footerOpenDownloadPage.Text = T 'Helper_VersionManager_Action_OpenReleasePage' 'Download page'
@@ -251,7 +263,7 @@ function Start-VersionManager {
     $footerOpenRepositoryPage.Text = T 'Helper_VersionManager_Action_OpenRepositoryPage' 'GitHub page'
     $footerOpenRepositoryPage.Bounds = New-Object System.Drawing.Rectangle(264, 353, 148, 28)
     $footerClose = New-Object System.Windows.Forms.Button
-    $footerClose.Text = T 'Helper_VersionManager_Common_Close' 'Close'
+    $footerClose.Text = T 'Common_Close' 'Close'
     $footerClose.Bounds = New-Object System.Drawing.Rectangle(660, 353, 112, 28)
     $footerClose.DialogResult = [System.Windows.Forms.DialogResult]::OK
     $footerClose.Add_Click({
@@ -753,13 +765,13 @@ function Start-VersionManager {
         }
 
         if ($null -eq $latestEntry) {
-            throw (T 'Helper_VersionManager_Update_NoStableRelease' 'The latest release is not a stable published release.')
+            throw (New-UpdateOperationException -ErrorCode 'update-no-stable-release' -Message (T 'Helper_VersionManager_Update_NoStableRelease' 'The latest release is not a stable published release.'))
         }
 
         if (-not (& $testVersionCatalogEntryActionable $latestEntry)) {
-            throw (T 'Helper_VersionManager_Update_LatestCatalogInstallUnavailable' 'The latest version is not available for selected-version installation.')
+            $detail = Get-VersionCatalogInstallUnavailableDetail -Entry $latestEntry -TargetVersion ([string]$ui.TargetVersion) -TargetRoot ([string]$ui.Root) -OperationInProgress:$ui.VersionCatalogOperationInProgress -IsCurrent:(& $testVersionCatalogEntryCurrent $latestEntry)
+            throw (New-UpdateOperationException -ErrorCode 'update-latest-catalog-install-unavailable' -Message $detail)
         }
-
         return $latestEntry
     }
 
@@ -911,7 +923,7 @@ function Start-VersionManager {
         try {
             $config = Get-UpdateConfiguration -Root $ui.Root
             if (-not (Test-UpdateConfigured -Config $config)) {
-                throw (T 'Helper_VersionManager_Update_SourceUnconfigured' 'The update source is not configured yet.')
+                throw (New-UpdateOperationException -ErrorCode 'update-source-unconfigured' -Message (T 'Helper_VersionManager_Update_SourceUnconfigured' 'The update source is not configured yet.'))
             }
 
             $latestEntry = & $getLatestVersionCatalogEntryForInstall
@@ -935,6 +947,23 @@ function Start-VersionManager {
             $dialogMessage = Get-UpdateFriendlyMessage -ErrorCode $errorCode -DefaultMessage ([string]$_.Exception.Message) -Surface 'dialog'
             Show-VersionManagerMessageBox -Owner $form -Message $dialogMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
+    }
+
+    $runInitialAction = {
+        $action = [string]$ui.InitialAction
+        if ([string]::IsNullOrWhiteSpace($action) -or $ui.InitialActionStarted) {
+            return $false
+        }
+
+        $ui.InitialActionStarted = $true
+        Write-Log ("Running initial Skin manager action: {0}" -f $action) 'INFO'
+        if ([string]::Equals($action, 'InstallLatest', [System.StringComparison]::OrdinalIgnoreCase)) {
+            & $installLatestVersion
+            return $true
+        }
+
+        Write-Log ("Unsupported initial Skin manager action skipped: {0}" -f $action) 'ERROR'
+        return $false
     }
 
     $otherInstallList.Add_SelectedIndexChanged({
@@ -990,7 +1019,6 @@ function Start-VersionManager {
                     Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value $result.LogPath
                 }
                 & $setVersionManagerTabsDirtyForGlobalMutation
-                [void](Start-VersionManagerLauncherForSupportedRoot -ResolvedTargetRoot ([string]$result.SourcePath))
                 Set-ResultPairValue -Key 'DMEL_STATUS' -Value ([string]$result.Status)
                 $ui.CloseAfterSwitch = $true
                 $form.Close()
@@ -1124,7 +1152,6 @@ function Start-VersionManager {
                     Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value $result.LogPath
                 }
                 & $setVersionManagerTabsDirtyForGlobalMutation
-                [void](Start-VersionManagerLauncherForSupportedRoot -ResolvedTargetRoot ([string]$result.SourcePath))
                 Set-ResultPairValue -Key 'DMEL_STATUS' -Value ([string]$result.Status)
                 $ui.CloseAfterSwitch = $true
                 $form.Close()
@@ -1148,7 +1175,9 @@ function Start-VersionManager {
         }
         catch {
             Write-Log ("Version catalog install failed: {0}" -f $_.Exception.ToString()) 'ERROR'
-            Show-VersionManagerMessageBox -Owner $form -Message (T 'Helper_VersionManager_Update_ApplyFailed' 'The update could not be applied. Check the log file for details.') -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            $errorCode = Get-UpdateConfigurationErrorCode -Exception $_.Exception
+            $dialogMessage = Get-UpdateFriendlyMessage -ErrorCode $errorCode -DefaultMessage ([string]$_.Exception.Message) -Surface 'dialog'
+            Show-VersionManagerMessageBox -Owner $form -Message $dialogMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
         finally {
             & $hideBusyOverlay
@@ -1347,7 +1376,9 @@ function Start-VersionManager {
                     $deferredHydrationTimer.Start()
                 }
                 else {
-                    & $startAutoCheck
+                    if (-not (& $runInitialAction)) {
+                        & $startAutoCheck
+                    }
                 }
             }
         }
@@ -1421,7 +1452,9 @@ function Start-VersionManager {
                 $deferredHydrationTimer.Start()
             }
             else {
-                & $startAutoCheck
+                if (-not (& $runInitialAction)) {
+                    & $startAutoCheck
+                }
             }
         }
     })

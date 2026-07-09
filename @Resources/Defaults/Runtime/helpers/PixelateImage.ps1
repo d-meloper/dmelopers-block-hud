@@ -1,6 +1,5 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$SourcePath,
+    [string]$SourcePath = '',
     [string]$OutputPath = '',
     [string]$CacheRoot = '',
     [string]$CacheNamespace = 'default',
@@ -12,7 +11,10 @@ param(
     [string]$FitMode = 'Cover',
     [ValidateSet('Average', 'Nearest')]
     [string]$SampleMode = 'Average',
-    [string]$Token = ''
+    [switch]$PreserveSourceSize,
+    [string]$ItemImageDirectory = '',
+    [string]$Token = '',
+    [string]$RequestJsonBase64 = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,6 +34,9 @@ $script:PixelateErrorDetail = ''
 $script:PixelateSourceLength = ''
 $script:PixelateSourceFormat = ''
 $script:PixelateDecodeMethod = ''
+$script:ItemImageAssets = ''
+$script:CleanupPixelSiblings = $false
+$ItemImageManifestExtensions = @('.png', '.jpg', '.jpeg', '.jpe', '.bmp', '.gif', '.tif', '.tiff', '.ico', '.jxr', '.wdp', '.dds')
 
 function Write-DmelPair {
     param(
@@ -54,7 +59,8 @@ function Write-DmelResult {
         [string]$ErrorDetail = '',
         [string]$SourceLength = '',
         [string]$SourceFormat = '',
-        [string]$DecodeMethod = ''
+        [string]$DecodeMethod = '',
+        [string]$ItemImageAssets = ''
     )
 
     Write-DmelPair -Name 'DMEL_STATUS' -Value $Status
@@ -66,6 +72,65 @@ function Write-DmelResult {
     Write-DmelPair -Name 'DMEL_SOURCE_LENGTH' -Value $SourceLength
     Write-DmelPair -Name 'DMEL_SOURCE_FORMAT' -Value $SourceFormat
     Write-DmelPair -Name 'DMEL_DECODE_METHOD' -Value $DecodeMethod
+    Write-DmelPair -Name 'DMEL_ITEMIMAGEASSETS' -Value $ItemImageAssets
+}
+
+function Get-RequestPropertyValue {
+    param(
+        [object]$Payload,
+        [string]$Name
+    )
+
+    if ($null -eq $Payload) {
+        return $null
+    }
+    $property = $Payload.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
+}
+
+function Apply-RequestPayload {
+    param(
+        [string]$EncodedPayload
+    )
+
+    if ([string]::IsNullOrWhiteSpace($EncodedPayload)) {
+        return
+    }
+
+    $json = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($EncodedPayload))
+    $payload = $json | ConvertFrom-Json
+
+    $value = Get-RequestPropertyValue -Payload $payload -Name 'SourcePath'
+    if ($null -ne $value) { $script:SourcePath = [string]$value }
+    $value = Get-RequestPropertyValue -Payload $payload -Name 'OutputPath'
+    if ($null -ne $value) { $script:OutputPath = [string]$value }
+    $value = Get-RequestPropertyValue -Payload $payload -Name 'CacheRoot'
+    if ($null -ne $value) { $script:CacheRoot = [string]$value }
+    $value = Get-RequestPropertyValue -Payload $payload -Name 'CacheNamespace'
+    if ($null -ne $value) { $script:CacheNamespace = [string]$value }
+    $value = Get-RequestPropertyValue -Payload $payload -Name 'OutputName'
+    if ($null -ne $value) { $script:OutputName = [string]$value }
+    $value = Get-RequestPropertyValue -Payload $payload -Name 'Width'
+    if ($null -ne $value) { $script:Width = [int]$value }
+    $value = Get-RequestPropertyValue -Payload $payload -Name 'Height'
+    if ($null -ne $value) { $script:Height = [int]$value }
+    $value = Get-RequestPropertyValue -Payload $payload -Name 'BlockSize'
+    if ($null -ne $value) { $script:BlockSize = [int]$value }
+    $value = Get-RequestPropertyValue -Payload $payload -Name 'FitMode'
+    if ($null -ne $value) { $script:FitMode = [string]$value }
+    $value = Get-RequestPropertyValue -Payload $payload -Name 'SampleMode'
+    if ($null -ne $value) { $script:SampleMode = [string]$value }
+    $value = Get-RequestPropertyValue -Payload $payload -Name 'PreserveSourceSize'
+    if ($null -ne $value) { $script:PreserveSourceSize = [bool]$value }
+    $value = Get-RequestPropertyValue -Payload $payload -Name 'ItemImageDirectory'
+    if ($null -ne $value) { $script:ItemImageDirectory = [string]$value }
+    $value = Get-RequestPropertyValue -Payload $payload -Name 'Token'
+    if ($null -ne $value) { $script:Token = [string]$value }
+    $value = Get-RequestPropertyValue -Payload $payload -Name 'CleanupPixelSiblings'
+    if ($null -ne $value) { $script:CleanupPixelSiblings = [bool]$value }
 }
 
 function Get-ImageFormatName {
@@ -187,6 +252,238 @@ function Resolve-OutputPath {
     }
 
     return [System.IO.Path]::Combine([System.IO.Path]::GetFullPath($root), $namespace, $name)
+}
+
+function Test-IsChildPath {
+    param(
+        [string]$ParentPath,
+        [string]$ChildPath
+    )
+
+    $parent = [System.IO.Path]::GetFullPath($ParentPath).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    $child = [System.IO.Path]::GetFullPath($ChildPath)
+    return $child.StartsWith($parent, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-ItemImageManifestPath {
+    param(
+        [string]$Directory
+    )
+
+    $current = [System.IO.DirectoryInfo]::new([System.IO.Path]::GetFullPath($Directory))
+    while ($null -ne $current -and -not ($current.Name -eq '@Resources')) {
+        $current = $current.Parent
+    }
+    if ($null -eq $current) {
+        return ''
+    }
+    return [System.IO.Path]::Combine($current.FullName, 'Customs', 'Data', 'ItemImages.inc')
+}
+
+function Update-ItemImageManifest {
+    param(
+        [string]$Directory,
+        [string]$OutputPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Directory)) {
+        return ''
+    }
+    if ($Directory.Contains([string][char]0xFFFD)) {
+        throw 'Item image directory contains Unicode replacement characters.'
+    }
+
+    $root = [System.IO.Path]::GetFullPath($Directory)
+    if (-not (Test-IsChildPath -ParentPath $root -ChildPath $OutputPath)) {
+        return ''
+    }
+
+    [System.IO.Directory]::CreateDirectory($root) | Out-Null
+    $files = Get-ChildItem -LiteralPath $root -File -ErrorAction Stop |
+        Where-Object { $ItemImageManifestExtensions -contains $_.Extension.ToLowerInvariant() -and $_.Name -ne 'more.png' } |
+        Sort-Object Name
+
+    $names = @($files | ForEach-Object { $_.Name })
+    $manifestPath = Get-ItemImageManifestPath -Directory $root
+    if (-not [string]::IsNullOrWhiteSpace($manifestPath)) {
+        $manifestDirectory = [System.IO.Path]::GetDirectoryName($manifestPath)
+        [System.IO.Directory]::CreateDirectory($manifestDirectory) | Out-Null
+        $content = "[Variables]`r`nItemImageAssets=$($names -join '|')`r`n"
+        $unicode = New-Object System.Text.UnicodeEncoding($false, $true)
+        [System.IO.File]::WriteAllText($manifestPath, $content, $unicode)
+    }
+    return ($names -join '|')
+}
+
+function Test-SafeItemImageName {
+    param(
+        [string]$Name
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return $false
+    }
+    if ($Name -ne [System.IO.Path]::GetFileName($Name)) {
+        return $false
+    }
+    if ($Name.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+        return $false
+    }
+    if ($Name.Contains([string][char]0xFFFD)) {
+        return $false
+    }
+    $extension = [System.IO.Path]::GetExtension($Name).ToLowerInvariant()
+    return $ItemImageManifestExtensions -contains $extension
+}
+
+function Test-PixelatedItemImageName {
+    param(
+        [string]$Name
+    )
+
+    if (-not (Test-SafeItemImageName -Name $Name)) {
+        return $false
+    }
+
+    $stem = [System.IO.Path]::GetFileNameWithoutExtension($Name)
+    $extension = [System.IO.Path]::GetExtension($Name)
+    return $extension.Equals('.png', [System.StringComparison]::OrdinalIgnoreCase) -and $stem -match '^.+_p[123]$'
+}
+
+function Get-ResourcesRootFromItemImageDirectory {
+    param(
+        [string]$Directory
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Directory)) {
+        return ''
+    }
+
+    $current = [System.IO.DirectoryInfo]::new([System.IO.Path]::GetFullPath($Directory))
+    while ($null -ne $current -and -not ($current.Name -eq '@Resources')) {
+        $current = $current.Parent
+    }
+    if ($null -eq $current) {
+        return ''
+    }
+    return $current.FullName
+}
+
+function Add-CurrentItemImageKeys {
+    param(
+        [System.Collections.Generic.HashSet[string]]$Keep,
+        [string]$Directory
+    )
+
+    $resourcesRoot = Get-ResourcesRootFromItemImageDirectory -Directory $Directory
+    if ([string]::IsNullOrWhiteSpace($resourcesRoot)) {
+        return
+    }
+
+    $dataRoot = [System.IO.Path]::Combine($resourcesRoot, 'Customs', 'Data')
+    $unicode = New-Object System.Text.UnicodeEncoding($false, $true)
+    foreach ($fileName in @('HotbarItems.inc', 'InventoryItems.inc')) {
+        $path = [System.IO.Path]::Combine($dataRoot, $fileName)
+        if (-not [System.IO.File]::Exists($path)) {
+            continue
+        }
+        $content = [System.IO.File]::ReadAllText($path, $unicode)
+        foreach ($line in ($content -split "\r?\n")) {
+            if ($line -match '^\s*(?:HotbarItem|InventoryItem)_.+_Image=(.*)$') {
+                $key = ([string]$Matches[1]).Trim()
+                if (Test-SafeItemImageName -Name $key) {
+                    [void]$Keep.Add($key)
+                }
+            }
+        }
+    }
+}
+
+function Invoke-PixelSiblingCleanup {
+    if ([string]::IsNullOrWhiteSpace($ItemImageDirectory)) {
+        Write-DmelPair -Name 'DMEL_STATUS' -Value 'OK'
+        Write-DmelPair -Name 'DMEL_OUTPUTPATH' -Value ''
+        Write-DmelPair -Name 'DMEL_TOKEN' -Value $Token
+        Write-DmelPair -Name 'DMEL_MESSAGE' -Value 'No item image directory was provided for cleanup.'
+        Write-DmelPair -Name 'DMEL_DELETED' -Value ''
+        Write-DmelPair -Name 'DMEL_ERROR_CODE' -Value ''
+        Write-DmelPair -Name 'DMEL_ERROR_DETAIL' -Value ''
+        Write-DmelPair -Name 'DMEL_ITEMIMAGEASSETS' -Value ''
+        return
+    }
+    if ($ItemImageDirectory.Contains([string][char]0xFFFD)) {
+        throw 'Item image directory contains Unicode replacement characters.'
+    }
+
+    $root = [System.IO.Path]::GetFullPath($ItemImageDirectory)
+    if (-not [System.IO.Directory]::Exists($root)) {
+        Write-DmelPair -Name 'DMEL_STATUS' -Value 'OK'
+        Write-DmelPair -Name 'DMEL_OUTPUTPATH' -Value ''
+        Write-DmelPair -Name 'DMEL_TOKEN' -Value $Token
+        Write-DmelPair -Name 'DMEL_MESSAGE' -Value 'Item image directory does not exist; cleanup skipped.'
+        Write-DmelPair -Name 'DMEL_DELETED' -Value ''
+        Write-DmelPair -Name 'DMEL_ERROR_CODE' -Value ''
+        Write-DmelPair -Name 'DMEL_ERROR_DETAIL' -Value ''
+        Write-DmelPair -Name 'DMEL_ITEMIMAGEASSETS' -Value ''
+        return
+    }
+
+    $keep = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    Add-CurrentItemImageKeys -Keep $keep -Directory $root
+
+    $deleted = New-Object System.Collections.Generic.List[string]
+    $errors = New-Object System.Collections.Generic.List[string]
+    foreach ($file in Get-ChildItem -LiteralPath $root -File -ErrorAction Stop) {
+        $candidate = $file.Name
+        if (-not (Test-PixelatedItemImageName -Name $candidate)) {
+            continue
+        }
+        if ($keep.Contains($candidate)) {
+            continue
+        }
+        if (-not (Test-IsChildPath -ParentPath $root -ChildPath $file.FullName)) {
+            $errors.Add(('unsafe-candidate:{0}' -f $candidate))
+            continue
+        }
+        try {
+            Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
+            $deleted.Add($candidate)
+        }
+        catch {
+            $errors.Add(('{0}:{1}' -f $candidate, $_.Exception.Message))
+        }
+    }
+
+    $status = 'OK'
+    $message = if ($deleted.Count -gt 0) { 'Unused pixelated item images removed.' } else { 'No unused pixelated item images needed cleanup.' }
+    if ($errors.Count -gt 0) {
+        $status = 'WARN'
+        $message = 'Pixelated item image cleanup completed with warnings.'
+    }
+
+    $assets = ''
+    try {
+        $assets = Update-ItemImageManifest -Directory $root -OutputPath ([System.IO.Path]::Combine($root, '__manifest_refresh__.png'))
+    }
+    catch {
+        $status = 'WARN'
+        if ($errors.Count -gt 0) {
+            $message += ' Manifest update also failed.'
+        }
+        else {
+            $message = 'Pixelated item image cleanup completed, but manifest update failed.'
+        }
+        $errors.Add(('manifest:{0}' -f $_.Exception.Message))
+    }
+
+    Write-DmelPair -Name 'DMEL_STATUS' -Value $status
+    Write-DmelPair -Name 'DMEL_OUTPUTPATH' -Value ''
+    Write-DmelPair -Name 'DMEL_TOKEN' -Value $Token
+    Write-DmelPair -Name 'DMEL_MESSAGE' -Value $message
+    Write-DmelPair -Name 'DMEL_DELETED' -Value ($deleted -join '|')
+    Write-DmelPair -Name 'DMEL_ERROR_CODE' -Value $(if ($errors.Count -gt 0) { 'PIXEL_CLEANUP_WARN' } else { '' })
+    Write-DmelPair -Name 'DMEL_ERROR_DETAIL' -Value ($errors -join ' | ')
+    Write-DmelPair -Name 'DMEL_ITEMIMAGEASSETS' -Value $assets
 }
 
 function Get-SourceImageFormat {
@@ -456,16 +753,17 @@ $tempOutputPath = ''
 $resolvedOutputPath = ''
 
 try {
+    Apply-RequestPayload -EncodedPayload $RequestJsonBase64
+    if ($script:CleanupPixelSiblings) {
+        Invoke-PixelSiblingCleanup
+        exit 0
+    }
+
     Add-Type -AssemblyName System.Drawing
 
     $Width = [Math]::Max(1, [int]$Width)
     $Height = [Math]::Max(1, [int]$Height)
     $BlockSize = [Math]::Max(1, [int]$BlockSize)
-    if ($Width -gt $MaxTargetDimension -or $Height -gt $MaxTargetDimension) {
-        $script:PixelateErrorCode = 'TARGET_TOO_LARGE'
-        $script:PixelateErrorDetail = 'width={0}; height={1}; maxDimension={2}' -f $Width, $Height, $MaxTargetDimension
-        throw 'Target image dimensions are too large.'
-    }
 
     $sourceFullPath = [System.IO.Path]::GetFullPath($SourcePath)
     if (-not [System.IO.File]::Exists($sourceFullPath)) {
@@ -481,6 +779,15 @@ try {
 
     $sourceImage = Open-SourceImageWithRetry -Path $sourceFullPath
     Assert-SourceImageBounds -Width $sourceImage.Width -Height $sourceImage.Height -Format $script:PixelateSourceFormat
+    if ($PreserveSourceSize) {
+        $Width = [Math]::Max(1, [int]$sourceImage.Width)
+        $Height = [Math]::Max(1, [int]$sourceImage.Height)
+    }
+    if ($Width -gt $MaxTargetDimension -or $Height -gt $MaxTargetDimension) {
+        $script:PixelateErrorCode = 'TARGET_TOO_LARGE'
+        $script:PixelateErrorDetail = 'width={0}; height={1}; maxDimension={2}' -f $Width, $Height, $MaxTargetDimension
+        throw 'Target image dimensions are too large.'
+    }
 
     $lowWidth = [Math]::Max(1, [int][Math]::Ceiling([double]$Width / [double]$BlockSize))
     $lowHeight = [Math]::Max(1, [int][Math]::Ceiling([double]$Height / [double]$BlockSize))
@@ -529,8 +836,19 @@ try {
         $script:PixelateErrorDetail = 'outputPath={0}' -f $resolvedOutputPath
         throw 'Pixelated image output is empty.'
     }
+    $status = 'OK'
+    $message = 'Pixelated image written.'
+    if (-not [string]::IsNullOrWhiteSpace($ItemImageDirectory)) {
+        try {
+            $script:ItemImageAssets = Update-ItemImageManifest -Directory $ItemImageDirectory -OutputPath $resolvedOutputPath
+        }
+        catch {
+            $status = 'WARN'
+            $message = 'Pixelated image written, but item image manifest update failed: ' + [string]$_.Exception.Message
+        }
+    }
 
-    Write-DmelResult -Status 'OK' -Message 'Pixelated image written.' -ResolvedOutputPath $resolvedOutputPath -SourceLength $script:PixelateSourceLength -SourceFormat $script:PixelateSourceFormat -DecodeMethod $script:PixelateDecodeMethod
+    Write-DmelResult -Status $status -Message $message -ResolvedOutputPath $resolvedOutputPath -SourceLength $script:PixelateSourceLength -SourceFormat $script:PixelateSourceFormat -DecodeMethod $script:PixelateDecodeMethod -ItemImageAssets $script:ItemImageAssets
     exit 0
 }
 catch {
@@ -543,7 +861,7 @@ catch {
     if ([string]::IsNullOrWhiteSpace($sourceLength) -and -not [string]::IsNullOrWhiteSpace($sourceFullPath) -and [System.IO.File]::Exists($sourceFullPath)) {
         $sourceLength = [string]((Get-Item -LiteralPath $sourceFullPath -ErrorAction SilentlyContinue).Length)
     }
-    Write-DmelResult -Status 'ERROR' -Message ([string]$_.Exception.Message) -ResolvedOutputPath $resolvedOutputPath -ErrorCode $errorCode -ErrorDetail $errorDetail -SourceLength $sourceLength -SourceFormat $script:PixelateSourceFormat -DecodeMethod $script:PixelateDecodeMethod
+    Write-DmelResult -Status 'ERROR' -Message ([string]$_.Exception.Message) -ResolvedOutputPath $resolvedOutputPath -ErrorCode $errorCode -ErrorDetail $errorDetail -SourceLength $sourceLength -SourceFormat $script:PixelateSourceFormat -DecodeMethod $script:PixelateDecodeMethod -ItemImageAssets $script:ItemImageAssets
     exit 1
 }
 finally {

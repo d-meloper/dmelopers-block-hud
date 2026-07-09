@@ -738,11 +738,11 @@ local function externalShuffleTooltipLabel()
 end
 
 local function openFolderTooltipText()
-    return localizedControlText('Loc_JukeboxDiscSlot_OpenFolder', 'Open folder')
+    return localizedControlText('Loc_Common_OpenFolder', 'Open folder')
 end
 
 local function closeTooltipText()
-    return localizedControlText('Loc_JukeboxDiscSlot_Close', 'Close')
+    return localizedControlText('Loc_Common_Close', 'Close')
 end
 
 local function minimizeTooltipText()

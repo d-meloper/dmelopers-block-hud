@@ -132,7 +132,7 @@ function Show-FavoriteEditDialog(
     $nameLabelText = Get-LocText 'Helper_PickPath_FavoriteNameLabel' 'Display name'
     $pathLabelText = Get-LocText 'Helper_PickPath_FavoritePathLabel' 'Run path'
     $useCurrentActionText = Get-LocText 'Helper_PickPath_FavoriteUseCurrentAction' 'Use the current item run path'
-    $saveText = Get-LocText 'Helper_PickPath_FavoriteSave' 'Save'
+    $saveText = Get-LocText 'Common_Save' 'Save'
     $cancelText = Get-LocText 'Common_Cancel' 'Cancel'
     $emptyNameText = Get-LocText 'Helper_PickPath_FavoriteEmptyName' 'Enter a display name.'
     $emptyPathText = Get-LocText 'Helper_PickPath_FavoriteEmptyPath' 'Enter a run path.'
@@ -263,11 +263,11 @@ function Show-FavoriteEditDialog(
 
 function Show-FavoriteDialog([System.Windows.Forms.IWin32Window]$Owner) {
     $favoriteTitle = Get-LocText 'Helper_PickPath_FavoritesTitle' 'Choose a favorite'
-    $addText = Get-LocText 'Helper_PickPath_FavoritesAdd' 'Add'
+    $addText = Get-LocText 'Common_Add' 'Add'
     $editText = Get-LocText 'Helper_PickPath_FavoritesEdit' 'Edit'
     $deleteText = Get-LocText 'Helper_PickPath_FavoritesDelete' 'Delete'
-    $okText = Get-LocText 'Helper_PickPath_FavoritesSelect' 'Select'
-    $closeText = Get-LocText 'Helper_PickPath_DialogClose' 'Close'
+    $okText = Get-LocText 'Common_Select' 'Select'
+    $closeText = Get-LocText 'Common_Close' 'Close'
     $readOnlyText = Get-LocText 'Helper_PickPath_FavoritesReadOnly' 'Built-in favorites cannot be edited or deleted.'
     $addTitle = Get-LocText 'Helper_PickPath_FavoritesAddTitle' 'Add favorite'
     $editTitle = Get-LocText 'Helper_PickPath_FavoritesEditTitle' 'Edit favorite'

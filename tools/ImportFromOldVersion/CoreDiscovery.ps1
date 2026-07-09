@@ -520,7 +520,7 @@ function Assert-MigrationTargetImportState {
         Test-ReadableSourceFile -Path $path
     }
 
-    $resolvedLanguageCode = Normalize-LanguageCode -Value $ImportedLanguageCode -Fallback 'ko-KR'
+    $resolvedLanguageCode = Normalize-LanguageCode -Value $ImportedLanguageCode -Fallback 'en-US' -SkinRoot $Root
     $localeRelativePath = "@Resources\Localization\Languages\{0}.inc" -f $resolvedLanguageCode
     $localePath = Join-RootPath -Root $Root -RelativePath $localeRelativePath
     if (-not (Test-Path -LiteralPath $localePath -PathType Leaf)) {

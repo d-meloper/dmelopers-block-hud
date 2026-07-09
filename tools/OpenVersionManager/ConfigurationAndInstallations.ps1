@@ -151,6 +151,63 @@ function Get-UpdateConfigurationErrorCode {
     return 'update-unexpected'
 }
 
+function New-UpdateOperationException {
+    param(
+        [Parameter(Mandatory = $true)][string]$ErrorCode,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    $messageText = [string]$Message
+    if (-not [string]::IsNullOrWhiteSpace($ErrorCode) -and $messageText -notmatch '(?m)^Diagnostic:\s*code=') {
+        $messageText = [string]::Join("`r`n", @(
+            $messageText,
+            '',
+            ('Diagnostic: code=' + $ErrorCode)
+        ))
+    }
+
+    $exception = New-Object System.InvalidOperationException($messageText)
+    $exception.Data['DMEL_ERROR_CODE'] = $ErrorCode
+    return $exception
+}
+
+function Get-VersionCatalogInstallUnavailableDetail {
+    param(
+        [AllowNull()]$Entry,
+        [AllowNull()][string]$TargetVersion,
+        [AllowNull()][string]$TargetRoot,
+        [switch]$OperationInProgress,
+        [switch]$IsCurrent
+    )
+
+    $reason = if ($OperationInProgress) { 'catalog-operation-in-progress' } elseif ($null -eq $Entry) { 'latest-entry-missing' } elseif ($IsCurrent) { 'latest-entry-is-current-target' } else { 'latest-entry-not-actionable' }
+    $entryVersion = [string](Get-ObjectPropertyValue -Object $Entry -Name 'version' -DefaultValue '')
+    $entryTag = [string](Get-ObjectPropertyValue -Object $Entry -Name 'tag' -DefaultValue '')
+    $entryVariant = [string](Get-ObjectPropertyValue -Object $Entry -Name 'release_variant' -DefaultValue '')
+    $status = [string](Get-ObjectPropertyValue -Object $Entry -Name 'status' -DefaultValue '')
+    $assetUrl = [string](Get-ObjectPropertyValue -Object $Entry -Name 'asset_url' -DefaultValue '')
+    $installedPath = [string](Get-ObjectPropertyValue -Object $Entry -Name 'installed_path' -DefaultValue '')
+    $installedPathMatchesCurrent = $false
+    if (-not [string]::IsNullOrWhiteSpace($installedPath) -and -not [string]::IsNullOrWhiteSpace($TargetRoot)) {
+        $installedPathMatchesCurrent = [string]::Equals((Resolve-FullPath -Path $installedPath -AllowMissing), (Resolve-FullPath -Path $TargetRoot), [System.StringComparison]::OrdinalIgnoreCase)
+    }
+
+    [string]::Join("`r`n", @(
+        (T 'Helper_VersionManager_Update_LatestCatalogInstallUnavailable' 'The latest version is not available for selected-version installation. Refresh the version list and try again.'), '',
+        'Diagnostic: code=update-latest-catalog-install-unavailable',
+        ('reason=' + $reason),
+        ('entry_version=' + $entryVersion),
+        ('entry_tag=' + $entryTag),
+        ('entry_variant=' + $entryVariant),
+        ('entry_status=' + $status),
+        ('target_version=' + [string]$TargetVersion),
+        ('target_root=' + [string]$TargetRoot),
+        ('installed_path=' + $installedPath),
+        ('installed_path_matches_current=' + [string]$installedPathMatchesCurrent),
+        ('asset_url_present=' + [string](-not [string]::IsNullOrWhiteSpace($assetUrl)))
+    ))
+}
+
 function Get-UpdateFriendlyMessage {
     param(
         [AllowNull()][string]$ErrorCode,
@@ -169,6 +226,7 @@ function Get-UpdateFriendlyMessage {
             'update-asset-url-missing' { return (TF 'Helper_VersionManager_Summary_UpdateErrorFormat' @((T 'Helper_VersionManager_Update_ErrorShort_AssetUrlMissing' 'release asset URL is missing')) 'Update status: %1') }
             'update-zip-missing' { return (TF 'Helper_VersionManager_Summary_UpdateErrorFormat' @((T 'Helper_VersionManager_Update_ErrorShort_ZipMissing' 'downloaded package is missing')) 'Update status: %1') }
             'update-helper-missing' { return (TF 'Helper_VersionManager_Summary_UpdateErrorFormat' @((T 'Helper_VersionManager_Update_ErrorShort_HelperMissing' 'update helper is missing')) 'Update status: %1') }
+            'update-latest-catalog-install-unavailable' { return (TF 'Helper_VersionManager_Summary_UpdateErrorFormat' @((T 'Helper_VersionManager_Update_ErrorShort_LatestCatalogInstallUnavailable' 'latest catalog row cannot be installed')) 'Update status: %1') }
             'update-network-offline' { return (TF 'Helper_VersionManager_Summary_UpdateErrorFormat' @((T 'Helper_VersionManager_Update_ErrorShort_Offline' 'internet connection unavailable')) 'Update status: %1') }
             'update-network-dns' { return (TF 'Helper_VersionManager_Summary_UpdateErrorFormat' @((T 'Helper_VersionManager_Update_ErrorShort_Dns' 'GitHub address could not be resolved')) 'Update status: %1') }
             'update-network-timeout' { return (TF 'Helper_VersionManager_Summary_UpdateErrorFormat' @((T 'Helper_VersionManager_Update_ErrorShort_Timeout' 'request timed out')) 'Update status: %1') }
@@ -213,6 +271,12 @@ function Get-UpdateFriendlyMessage {
                 return $resolvedDefault
             }
             return (T 'Helper_VersionManager_Update_ZipMissing' 'The downloaded update ZIP was not found.')
+        }
+        'update-latest-catalog-install-unavailable' {
+            if (-not [string]::IsNullOrWhiteSpace($resolvedDefault)) {
+                return $resolvedDefault
+            }
+            return (T 'Helper_VersionManager_Update_LatestCatalogInstallUnavailable' 'The latest version is not available for selected-version installation. Refresh the version list and try again.')
         }
         'update-helper-missing' { return (T 'Helper_VersionManager_Update_HelperMissing' 'The update helper file is missing. Reinstall or repair the skin files and try again.') }
         'update-network-offline' { return (T 'Helper_VersionManager_Update_Error_Offline' 'The internet connection is unavailable. Check the connection and try again.') }
