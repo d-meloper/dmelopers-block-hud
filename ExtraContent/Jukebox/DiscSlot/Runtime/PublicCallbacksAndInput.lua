@@ -14,7 +14,7 @@ end
 function ResumeDiscSlotResident()
     EnsureJukeboxDiscSlotResidentUpdateController().ResumeSurface('JukeboxDiscSlot')
     SKIN:Bang('!UpdateMeasure', 'MeasureResponsiveLayout')
-    SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'ApplyLayout()')
+    EnsureJukeboxDiscSlotResidentSurface():CommandIfActive('MeasureResponsiveLayout', 'ApplyLayout()')
     SyncVisualState()
     return true
 end
@@ -22,7 +22,7 @@ end
 function SuspendDiscSlotResident()
     EnsureJukeboxDiscSlotResidentUpdateController().SuspendSurface('JukeboxDiscSlot')
     resetInteractionState()
-    SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
+    EnsureJukeboxDiscSlotResidentSurface():CommandIfActive('MeasureResponsiveLayout', 'DeactivateLiveState()')
     return true
 end
 

@@ -146,11 +146,12 @@ function hideDiscSlotForJukeboxFormSwitch()
     else
         local configName = discSlotConfigName()
         if isRainmeterConfigActive(configName) then
+            local surface = JukeboxDiscSlotLifecycleSurface()
             resetDiscSlotRenderStateForClose(configName)
             setDiscSlotHidden(true)
             syncDiscSlotVisualState(configName)
-            SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlot', 'SuspendDiscSlotResident()', configName)
-            SKIN:Bang('!Hide', configName)
+            surface:CommandIfActive('MeasureJukeboxDiscSlot', 'SuspendDiscSlotResident()')
+            surface:HideIfActive()
         end
         discSlotVisible = false
     end
@@ -392,10 +393,11 @@ function HideDiscSlot()
         discSlotPendingShowSkipRefresh = false
         local configName = discSlotConfigName()
         if isRainmeterConfigActive(configName) then
+            local surface = JukeboxDiscSlotLifecycleSurface()
             resetDiscSlotRenderStateForClose(configName)
             setDiscSlotHidden(true)
             syncDiscSlotVisualState(configName)
-            SKIN:Bang('!Hide', configName)
+            surface:HideIfActive()
         end
         setJukeboxDraggable(true)
         discSlotVisible = false
@@ -531,6 +533,24 @@ end
 function CleanupDiscSlot()
     return safeCall(function()
         return deactivateDiscSlotSkin()
+    end)
+end
+
+function HandleDiscSlotManualDeactivate()
+    return safeCall(function()
+        local configName = discSlotConfigName()
+        discSlotPendingShow = false
+        discSlotPendingShowSkipRefresh = false
+        discSlotActivationRequested = false
+        discSlotRefreshRecoveryRequested = false
+        discSlotDeferredAttempts = 0
+        discSlotLoaded = false
+        discSlotVisible = false
+        setJukeboxDraggable(true)
+        jukeboxConfigState().Unregister(SKIN, configName)
+        ensureResidentUpdateController().SetDriver('JukeboxDiscSlot', 'runtime', false, true)
+        SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlotDeferredSyncTimer', 'Stop 1')
+        return true
     end)
 end
 
@@ -886,7 +906,10 @@ function SyncExternalPlaybackState()
         if not externalPlaybackState.pluginLoadFailed then
             externalPlaybackState.bridgeFailureAlertShown = false
         end
-        externalPlaybackState.bridgeActive = not externalPlaybackState.pluginLoadFailed and trim(SKIN:GetVariable('JukeboxExternalBridgeActive', '0')) == '1'
+        local bridgeConfigActive = isRainmeterConfigActive(webNowPlayingBridgeConfigName())
+        externalPlaybackState.bridgeActive = not externalPlaybackState.pluginLoadFailed
+            and bridgeConfigActive
+            and trim(SKIN:GetVariable('JukeboxExternalBridgeActive', '0')) == '1'
         externalPlaybackState.bridgeActivationRequested = false
         externalPlaybackState.status = trim(SKIN:GetVariable('JukeboxExternalStatus', '0'))
         externalPlaybackState.player = trim(SKIN:GetVariable('JukeboxExternalPlayer', ''))

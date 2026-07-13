@@ -18,6 +18,7 @@ local commandRunning = {
 local pollSuspendedAfterError = false
 local safeCall = nil
 local residentUpdateController = nil
+local residentSurfaceLifecycle = nil
 local syncJukeboxRuntimeDriver = nil
 local syncJukeboxAnimationDriver = nil
 local jukeboxAnimatorPhase = 'hidden'
@@ -36,6 +37,13 @@ local function ensureResidentUpdateController()
         residentUpdateController = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\ResidentUpdateController.lua')
     end
     return residentUpdateController
+end
+
+local function ensureResidentSurfaceLifecycle()
+    if residentSurfaceLifecycle == nil then
+        residentSurfaceLifecycle = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\ResidentSurfaceLifecycle.lua')
+    end
+    return residentSurfaceLifecycle
 end
 
 syncJukeboxRuntimeDriver = function()
@@ -327,18 +335,7 @@ local function quotePowerShellArgument(value)
 end
 
 local function resolvePowerShellProgramPath()
-    local systemRoot = os.getenv('SystemRoot') or os.getenv('WINDIR') or 'C:\\Windows'
-    local primary = systemRoot .. '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-    if fileExists(primary) then
-        return primary
-    end
-
-    local sysnative = systemRoot .. '\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe'
-    if fileExists(sysnative) then
-        return sysnative
-    end
-
-    return 'powershell'
+    return '"' .. trim(SKIN:GetVariable('@', '')) .. 'Defaults\\Runtime\\helpers\\BlockHudPowerShellHost.exe"'
 end
 
 local function rollingHash(text)
@@ -443,7 +440,7 @@ local function buildOpenLogFolderArgs()
     if rootPath == '' then
         return ''
     end
-    local helperPath = joinPath(rootPath, 'tools\\OpenSettingsLogFolder.ps1')
+    local helperPath = joinPath(rootPath, 'Utilities\\tools\\OpenSettingsLogFolder.ps1')
     return table.concat({
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
@@ -591,9 +588,9 @@ end
 local function diagnosticsConfigName()
     local root = rootConfigName()
     if root == '' then
-        return 'Diagnostics'
+        return 'Utilities\\Diagnostics'
     end
-    return root .. '\\Diagnostics'
+    return root .. '\\Utilities\\Diagnostics'
 end
 
 local function round(value)
@@ -680,13 +677,47 @@ local function jukeboxConfigState()
     return JukeboxConfigState
 end
 
+local function createResidentSurface(surfaceId, configPath, entryFile, measureName)
+    return ensureResidentSurfaceLifecycle().CreateSurface({
+        skin = SKIN,
+        surfaceId = surfaceId,
+        configPath = configPath,
+        entryFile = entryFile,
+        measureName = measureName,
+    })
+end
+
+function JukeboxLifecycleSurface()
+    return createResidentSurface('Jukebox', jukeboxConfigName(), 'Jukebox.ini', 'MeasureJukebox')
+end
+
+function JukeboxDiscSlotLifecycleSurface()
+    return createResidentSurface('JukeboxDiscSlot', discSlotConfigName(), 'JukeboxDiscSlot.ini', 'MeasureJukeboxDiscSlot')
+end
+
 function isRainmeterConfigActive(configName)
+    configName = trim(configName)
+    if configName == jukeboxConfigName() then
+        return JukeboxLifecycleSurface():IsActive()
+    end
+    if configName == discSlotConfigName() then
+        return JukeboxDiscSlotLifecycleSurface():IsActive()
+    end
     return jukeboxConfigState().IsActive(SKIN, configName)
 end
 
 function setVariableForActiveConfig(name, value, configName)
     configName = trim(configName)
-    if configName == '' or not isRainmeterConfigActive(configName) then
+    if configName == '' then
+        return false
+    end
+    if configName == discSlotConfigName() then
+        return JukeboxDiscSlotLifecycleSurface():SetVariableIfActive(name, value)
+    end
+    if configName == jukeboxConfigName() then
+        return JukeboxLifecycleSurface():SetVariableIfActive(name, value)
+    end
+    if not isRainmeterConfigActive(configName) then
         return false
     end
     SKIN:Bang('!SetVariable', tostring(name or ''), tostring(value or ''), configName)
@@ -695,7 +726,16 @@ end
 
 function commandMeasureForActiveConfig(measureName, command, configName)
     configName = trim(configName)
-    if configName == '' or not isRainmeterConfigActive(configName) then
+    if configName == '' then
+        return false
+    end
+    if configName == discSlotConfigName() then
+        return JukeboxDiscSlotLifecycleSurface():CommandIfActive(measureName, command)
+    end
+    if configName == jukeboxConfigName() then
+        return JukeboxLifecycleSurface():CommandIfActive(measureName, command)
+    end
+    if not isRainmeterConfigActive(configName) then
         return false
     end
     SKIN:Bang('!CommandMeasure', measureName, command, configName)
@@ -1191,6 +1231,10 @@ local function isExternalBridgeActive()
     if externalPlaybackState.pluginLoadFailed or trim(SKIN:GetVariable('JukeboxExternalBridgePluginFailed', '0')) == '1' then
         return false
     end
+    local configName = webNowPlayingBridgeConfigName()
+    if configName == '' or not isRainmeterConfigActive(configName) then
+        return false
+    end
     return externalPlaybackState.bridgeActive or trim(SKIN:GetVariable('JukeboxExternalBridgeActive', '0')) == '1'
 end
 
@@ -1198,12 +1242,12 @@ local function activateExternalBridge()
     if externalPlaybackState.pluginLoadFailed or trim(SKIN:GetVariable('JukeboxExternalBridgePluginFailed', '0')) == '1' then
         return false
     end
-    if isExternalBridgeActive() then
-        return true
-    end
     local configName = webNowPlayingBridgeConfigName()
     if configName == '' or not configName:find('[\\/]') then
         return false
+    end
+    if isExternalBridgeActive() then
+        return true
     end
     if isRainmeterConfigActive(configName) then
         externalPlaybackState.bridgeActivationRequested = true
@@ -1306,7 +1350,7 @@ end
 local function syncSettingsPlaybackSourceMode()
     local mode = currentPlaybackSourceMode()
     local root = rootConfigName()
-    local configName = root == '' and 'Settings' or root .. '\\Settings'
+    local configName = root == '' and 'HUD\\Settings' or root .. '\\HUD\\Settings'
     if isRainmeterConfigActive(configName) then
         SKIN:Bang('!SetVariable', 'JukeboxPlaybackSourceMode', mode, configName)
         SKIN:Bang('!CommandMeasure', 'MeasureSettingsCommit', 'SyncJukeboxPlaybackSourceMode()', configName)
@@ -1602,7 +1646,7 @@ local function setDiscSlotHidden(hidden)
     if setVariableForActiveConfig('JukeboxDiscSlotHidden', hidden and '1' or '0', configName) then
         updateDiscSlotMeters(configName)
         if hidden then
-            SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlot', 'SuspendDiscSlotResident()', configName)
+            JukeboxDiscSlotLifecycleSurface():CommandIfActive('MeasureJukeboxDiscSlot', 'SuspendDiscSlotResident()')
         end
     end
     return configName
@@ -1612,11 +1656,12 @@ local function deactivateDiscSlotSkin()
     discSlotPendingShow = false
     discSlotPendingShowSkipRefresh = false
     local configName = discSlotConfigName()
+    local surface = JukeboxDiscSlotLifecycleSurface()
     if isRainmeterConfigActive(configName) then
         resetDiscSlotRenderStateForClose(configName)
         setDiscSlotHidden(true)
         syncDiscSlotVisualState(configName)
-        SKIN:Bang('!Hide', configName)
+        surface:HideIfActive()
         discSlotLoaded = true
     else
         discSlotLoaded = false
@@ -1638,7 +1683,7 @@ local function activateDiscSlot()
         return configName, true
     end
     discSlotLoaded = false
-    SKIN:Bang('!ActivateConfig', configName, 'JukeboxDiscSlot.ini')
+    JukeboxDiscSlotLifecycleSurface():ActivateIfInactive()
     discSlotActivationRequested = true
     discSlotLoaded = true
     return configName, true
@@ -1661,14 +1706,15 @@ end
 
 showDiscSlotNow = function(configName, skipRefresh)
     configName = configName or discSlotConfigName()
-    if not setVariableForActiveConfig('JukeboxDiscSlotHidden', '0', configName) then
+    local surface = JukeboxDiscSlotLifecycleSurface()
+    if not surface:SetVariableIfActive('JukeboxDiscSlotHidden', '0') then
         discSlotLoaded = false
         discSlotActivationRequested = false
         discSlotRefreshRecoveryRequested = false
         return false
     end
-    SKIN:Bang('!Show', configName)
-    SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlot', 'ResumeDiscSlotResident()', configName)
+    surface:ShowIfActive()
+    surface:CommandIfActive('MeasureJukeboxDiscSlot', 'ResumeDiscSlotResident()')
     syncJukeboxLiveStateToDiscSlot(configName)
     applyDiscSlotLayout(configName)
     syncDiscSlotPlaybackModeControls(configName)
@@ -1765,9 +1811,9 @@ end
 function webNowPlayingInstallState.modalConfigName()
     local root = rootConfigName()
     if root == '' then
-        return 'Modal'
+        return 'Utilities\\Modal'
     end
-    return root .. '\\Modal'
+    return root .. '\\Utilities\\Modal'
 end
 
 function webNowPlayingInstallState.nextToken()
@@ -1907,7 +1953,7 @@ local function hotbarConfigName()
     if root == '' then
         return ''
     end
-    return root .. '\\Hotbar'
+    return root .. '\\HUD\\Hotbar'
 end
 
 local function currentPlaybackHotbarText(trackName)
@@ -1963,8 +2009,8 @@ local function externalPlaybackConnected()
     if externalPlaybackState.pluginLoadFailed or not externalPlaybackState.bridgeActive then
         return false
     end
+    -- WebNowPlaying Status is the connection signal; Player is display metadata and may be blank for some native/desktop sources.
     return trim(externalPlaybackState.status) == '1'
-        and trim(externalPlaybackState.player) ~= ''
 end
 
 function externalCommandSupportFlag(command)
@@ -2087,11 +2133,17 @@ function requestExternalBridgeReconnect(command, valueText)
         return false
     end
     local configName = webNowPlayingBridgeConfigName()
-    if configName == '' or not isRainmeterConfigActive(configName) then
+    if configName == '' or not configName:find('[\\/]') then
         return false
     end
-    local sent = commandMeasureForActiveConfig('MeasureWebNowPlayingBridge', 'Reconnect()', configName)
-    if not sent then
+    local requested = false
+    if isRainmeterConfigActive(configName) then
+        requested = commandMeasureForActiveConfig('MeasureWebNowPlayingBridge', 'Reconnect()', configName)
+    else
+        externalPlaybackState.bridgeActivationRequested = false
+        requested = activateExternalBridge()
+    end
+    if not requested then
         return false
     end
     externalPlaybackState.bridgeReconnectRequested = true
@@ -2133,8 +2185,8 @@ function tickExternalCommandWatchdog()
         return true
     end
     logExternalCommandThrottled(externalCommandLogKey('no-state-change', command, externalPlaybackState.commandWatch.beforePlayer), message, 'Warning')
-    resetExternalPlaybackState()
-    setJukeboxAnimatorPlaybackActive(false)
+    resetExternalCommandWatch()
+    setJukeboxAnimatorPlaybackActive(externalPlaybackConnected() and trim(externalPlaybackState.state) == '1')
     syncDiscSlotPlaybackModeControls()
     showExternalPlayerUnavailable('no-observable-change', command)
     return false
@@ -3272,11 +3324,12 @@ function hideDiscSlotForJukeboxFormSwitch()
     else
         local configName = discSlotConfigName()
         if isRainmeterConfigActive(configName) then
+            local surface = JukeboxDiscSlotLifecycleSurface()
             resetDiscSlotRenderStateForClose(configName)
             setDiscSlotHidden(true)
             syncDiscSlotVisualState(configName)
-            SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlot', 'SuspendDiscSlotResident()', configName)
-            SKIN:Bang('!Hide', configName)
+            surface:CommandIfActive('MeasureJukeboxDiscSlot', 'SuspendDiscSlotResident()')
+            surface:HideIfActive()
         end
         discSlotVisible = false
     end
@@ -3518,10 +3571,11 @@ function HideDiscSlot()
         discSlotPendingShowSkipRefresh = false
         local configName = discSlotConfigName()
         if isRainmeterConfigActive(configName) then
+            local surface = JukeboxDiscSlotLifecycleSurface()
             resetDiscSlotRenderStateForClose(configName)
             setDiscSlotHidden(true)
             syncDiscSlotVisualState(configName)
-            SKIN:Bang('!Hide', configName)
+            surface:HideIfActive()
         end
         setJukeboxDraggable(true)
         discSlotVisible = false
@@ -3657,6 +3711,24 @@ end
 function CleanupDiscSlot()
     return safeCall(function()
         return deactivateDiscSlotSkin()
+    end)
+end
+
+function HandleDiscSlotManualDeactivate()
+    return safeCall(function()
+        local configName = discSlotConfigName()
+        discSlotPendingShow = false
+        discSlotPendingShowSkipRefresh = false
+        discSlotActivationRequested = false
+        discSlotRefreshRecoveryRequested = false
+        discSlotDeferredAttempts = 0
+        discSlotLoaded = false
+        discSlotVisible = false
+        setJukeboxDraggable(true)
+        jukeboxConfigState().Unregister(SKIN, configName)
+        ensureResidentUpdateController().SetDriver('JukeboxDiscSlot', 'runtime', false, true)
+        SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlotDeferredSyncTimer', 'Stop 1')
+        return true
     end)
 end
 
@@ -4012,7 +4084,10 @@ function SyncExternalPlaybackState()
         if not externalPlaybackState.pluginLoadFailed then
             externalPlaybackState.bridgeFailureAlertShown = false
         end
-        externalPlaybackState.bridgeActive = not externalPlaybackState.pluginLoadFailed and trim(SKIN:GetVariable('JukeboxExternalBridgeActive', '0')) == '1'
+        local bridgeConfigActive = isRainmeterConfigActive(webNowPlayingBridgeConfigName())
+        externalPlaybackState.bridgeActive = not externalPlaybackState.pluginLoadFailed
+            and bridgeConfigActive
+            and trim(SKIN:GetVariable('JukeboxExternalBridgeActive', '0')) == '1'
         externalPlaybackState.bridgeActivationRequested = false
         externalPlaybackState.status = trim(SKIN:GetVariable('JukeboxExternalStatus', '0'))
         externalPlaybackState.player = trim(SKIN:GetVariable('JukeboxExternalPlayer', ''))

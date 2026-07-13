@@ -493,9 +493,12 @@ function HidePeerEditorDragSurfaceState()
     if rootConfig == '' then
         return
     end
-    local peerConfig = IsHotbar and 'Inventory' or 'Hotbar'
-    SKIN:Bang('!CommandMeasure', 'MeasureHighlight', 'HideEditorDragVisual()', rootConfig .. '\\' .. peerConfig)
-    SKIN:Bang('!CommandMeasure', 'MeasureHighlight', 'HideEditorHighlight()', rootConfig .. '\\' .. peerConfig)
+    local peerConfig = rootConfig .. '\\HUD\\' .. (IsHotbar and 'Inventory' or 'Hotbar')
+    if isRainmeterConfigActive and not isRainmeterConfigActive(peerConfig) then
+        return
+    end
+    SKIN:Bang('!CommandMeasure', 'MeasureHighlight', 'HideEditorDragVisual()', peerConfig)
+    SKIN:Bang('!CommandMeasure', 'MeasureHighlight', 'HideEditorHighlight()', peerConfig)
 end
 local function ensureDragPayload(meta)
     if not meta or not meta.DragActive or not meta.DragSource then
@@ -721,7 +724,7 @@ function RunConfirm.modalConfigPath(rootPath)
     if rootPath == nil or rootPath == '' then
         return ''
     end
-    return rootPath .. '\\Modal'
+    return rootPath .. '\\Utilities\\Modal'
 end
 function RunConfirm.setLock(token)
     local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
@@ -731,7 +734,7 @@ function RunConfirm.setLock(token)
     local value = tostring(token or '')
     local currentConfig = trimText(SKIN:GetVariable('CURRENTCONFIG', ''))
     for _, configName in ipairs({ 'Hotbar', 'Inventory' }) do
-        local targetConfig = rootPath .. '\\' .. configName
+        local targetConfig = rootPath .. '\\HUD\\' .. configName
         if targetConfig ~= currentConfig and isRainmeterConfigActive and isRainmeterConfigActive(targetConfig) then
             SKIN:Bang('!SetVariable', RunConfirm.lockVariable, value, targetConfig)
         end

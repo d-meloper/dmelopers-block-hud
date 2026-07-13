@@ -767,7 +767,9 @@ try {
 
     $sourceFullPath = [System.IO.Path]::GetFullPath($SourcePath)
     if (-not [System.IO.File]::Exists($sourceFullPath)) {
-        throw "Source image does not exist: $sourceFullPath"
+        $script:PixelateErrorCode = 'SOURCE_MISSING'
+        $script:PixelateErrorDetail = 'sourcePath={0}' -f $sourceFullPath
+        throw "Source image file is missing: $sourceFullPath"
     }
 
     $resolvedOutputPath = Resolve-OutputPath -ExplicitOutputPath $OutputPath

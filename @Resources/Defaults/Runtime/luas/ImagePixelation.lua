@@ -123,6 +123,90 @@ local function describeValue(value, fallback)
     return value
 end
 
+local function detailSuffix(parts)
+    local values = {}
+    for _, value in ipairs(parts or {}) do
+        value = trim(value)
+        if value ~= '' then
+            values[#values + 1] = value
+        end
+    end
+    if #values == 0 then
+        return ''
+    end
+    return ' (' .. table.concat(values, '; ') .. ')'
+end
+
+local function pathSuffix(path)
+    path = trim(path)
+    if path == '' then
+        return ''
+    end
+    return ': ' .. path
+end
+
+local function detailPair(name, value)
+    value = trim(value)
+    if value == '' then
+        return ''
+    end
+    return tostring(name or '') .. '=' .. value
+end
+
+local function buildFailureUserMessage(fields)
+    fields = fields or {}
+    local code = upper(fields.errorCode)
+    local message = trim(fields.message)
+    local sourcePath = trim(fields.sourcePath)
+    local outputPath = trim(fields.outputPath)
+    local sourceLength = trim(fields.sourceLength)
+    local sourceFormat = trim(fields.sourceFormat)
+    local decodeMethod = trim(fields.decodeMethod)
+    local errorDetail = trim(fields.errorDetail)
+
+    if code == 'SOURCE_MISSING' then
+        return 'Missing source image file' .. pathSuffix(sourcePath)
+    end
+    if code == 'SOURCE_EMPTY' then
+        return 'Source image file is empty' .. pathSuffix(sourcePath)
+    end
+    if code == 'SOURCE_NOT_IMAGE' then
+        return 'Source file is not an image' .. pathSuffix(sourcePath) .. detailSuffix({ detailPair('format', sourceFormat) })
+    end
+    if code == 'SOURCE_TOO_LARGE' then
+        return 'Source image is too large' .. pathSuffix(sourcePath) .. detailSuffix({ detailPair('bytes', sourceLength), errorDetail })
+    end
+    if code == 'SOURCE_INVALID_DIMENSIONS' then
+        return 'Source image has invalid dimensions' .. pathSuffix(sourcePath) .. detailSuffix({ errorDetail })
+    end
+    if code == 'SOURCE_DECODE_FAILED' then
+        return 'Source image could not be decoded' .. pathSuffix(sourcePath) .. detailSuffix({ detailPair('format', sourceFormat), detailPair('bytes', sourceLength), detailPair('decoder', decodeMethod) })
+    end
+    if code == 'SOURCE_NOT_READY' then
+        return 'Source image is not ready or is locked' .. pathSuffix(sourcePath) .. detailSuffix({ errorDetail })
+    end
+    if code == 'SOURCE_OPEN_FAILED' or code == 'SOURCE_INVALID' then
+        return 'Source image could not be opened' .. pathSuffix(sourcePath) .. detailSuffix({ message, errorDetail })
+    end
+    if code == 'TARGET_TOO_LARGE' then
+        return 'Pixelated output would be too large' .. pathSuffix(outputPath) .. detailSuffix({ errorDetail })
+    end
+    if code == 'OUTPUT_EMPTY' then
+        return 'Pixelated output was empty' .. pathSuffix(outputPath) .. detailSuffix({ errorDetail })
+    end
+
+    if message ~= '' then
+        if sourcePath ~= '' and not message:find(sourcePath, 1, true) then
+            return message .. ' Source: ' .. sourcePath
+        end
+        return message
+    end
+    if sourcePath ~= '' then
+        return 'Image pixelation failed. Source: ' .. sourcePath
+    end
+    return 'Image pixelation failed.'
+end
+
 local function outputFileName(signature, width, height, blockSize, fitMode, sampleMode)
     local key = table.concat({
         tostring(signature or ''),
@@ -386,6 +470,12 @@ function Pixelator:handleComplete(output)
             'outputChars=' .. tostring(#tostring(output or '')),
             'outputPreview=' .. describeValue(outputPreview(output)),
         }, ' ')
+        local userMessage = buildFailureUserMessage({
+            message = 'Pixelation helper response did not match the current request. Try again.',
+            sourcePath = sourcePath,
+            outputPath = outputPath,
+            errorCode = 'STALE_OR_MISSING_TOKEN',
+        })
         self.pendingToken = ''
         self.pendingSignature = ''
         self.pendingOutputPath = ''
@@ -396,6 +486,7 @@ function Pixelator:handleComplete(output)
             ok = false,
             phase = 'complete-token',
             message = detail,
+            userMessage = userMessage,
             helperStatus = status,
             errorCode = errorCode,
             errorDetail = errorDetail,
@@ -451,13 +542,23 @@ function Pixelator:handleComplete(output)
     end
 
     self.failedSignature = signature
-    self.failedMessage = message ~= '' and message or 'Pixelation helper failed.'
+    self.failedMessage = buildFailureUserMessage({
+        message = message ~= '' and message or 'Pixelation helper failed.',
+        sourcePath = sourcePath,
+        outputPath = outputPath ~= '' and outputPath or pendingOutputPath,
+        errorCode = errorCode,
+        errorDetail = errorDetail,
+        sourceLength = sourceLength,
+        sourceFormat = sourceFormat,
+        decodeMethod = decodeMethod,
+    })
     return {
         accepted = true,
         ok = false,
         newFailure = true,
         phase = 'complete',
         message = self.failedMessage,
+        userMessage = self.failedMessage,
         sourcePath = sourcePath,
         outputPath = outputPath ~= '' and outputPath or pendingOutputPath,
         helperStatus = status,

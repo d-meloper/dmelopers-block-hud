@@ -119,7 +119,7 @@ local function isLowSpecHoverTextTooltipDisabled()
     return GetSkinValue('LowSpecDisableHoverTextTooltip') == 1
 end
 local function editorConfigPath()
-    return SKIN:GetVariable('ROOTCONFIG') .. '\\Editor'
+    return SKIN:GetVariable('ROOTCONFIG') .. '\\HUD\\Editor'
 end
 local isPanelActive
 local isEditorOpen
@@ -129,7 +129,7 @@ local isHotbarExecutionMode
 local isHotbarEditingMode
 local isEditorInteractive
 local function settingsConfigPath()
-    return SKIN:GetVariable('ROOTCONFIG') .. '\\Settings'
+    return SKIN:GetVariable('ROOTCONFIG') .. '\\HUD\\Settings'
 end
 local function isSettingsOpen()
     local raw = tostring(SKIN:GetVariable('BlockHudSettingsVisible', '0') or '')
@@ -168,12 +168,12 @@ local function currentEditorMeta()
 end
 local function resetHotbarInteraction(rootPath)
     if rootPath ~= '' then
-        HighlightCommandMeasureForActiveConfig('MeasureHighlight', 'ResetInteractionState()', rootPath .. '\\Hotbar')
+        HighlightCommandMeasureForActiveConfig('MeasureHighlight', 'ResetInteractionState()', rootPath .. '\\HUD\\Hotbar')
     end
 end
 local function refreshHotbarOnly(rootPath)
     if rootPath and rootPath ~= '' then
-        SKIN:Bang('!Refresh', rootPath .. '\\Hotbar', 'Hotbar.ini')
+        SKIN:Bang('!Refresh', rootPath .. '\\HUD\\Hotbar', 'Hotbar.ini')
     end
 end
 local function clearPanelLiveState(panelId)
@@ -209,52 +209,19 @@ local function closeSettingsPanel()
     end
 end
 function SetEditorVisibleState(visible, rootPath)
-    LoadEssentials()
-    local value = visible and '1' or '0'
-    SKIN:Bang('!SetVariable', 'BlockHudEditorVisible', value)
-    if rootPath ~= nil and rootPath ~= '' then
-        for _, configName in ipairs({ 'Hotbar', 'Inventory', 'InventoryBG', 'Editor' }) do
-            local targetConfig = rootPath .. '\\' .. configName
-            if isRainmeterConfigActive(targetConfig) then
-                SKIN:Bang('!SetVariable', 'BlockHudEditorVisible', value, targetConfig)
-            end
-        end
-    end
-    SKIN:Bang('!WriteKeyValue', 'Variables', 'BlockHudEditorVisible', value, R .. 'Defaults\\Runtime\\incs\\InternalState.inc')
+    return PanelLifecycle.CreateEditorSurface(rootPath):SetVisible(visible)
 end
 function IsEditorVisibleStateEnabled()
-    local text = tostring(SKIN:GetVariable('BlockHudEditorVisible', '0') or '')
-    text = text:gsub('^%s+', ''):gsub('%s+$', '')
-    return text ~= '0'
+    return PanelLifecycle.CreateEditorSurface():IsVisibleIntent()
 end
 function SetSettingsVisibleState(visible, rootPath)
-    LoadEssentials()
-    local value = visible and '1' or '0'
-    SKIN:Bang('!SetVariable', 'BlockHudSettingsVisible', value)
-    if rootPath ~= nil and rootPath ~= '' then
-        for _, configName in ipairs({ 'Settings', 'Inventory', 'InventoryBG', 'Hotbar' }) do
-            HighlightSetVariableForActiveConfig('BlockHudSettingsVisible', value, rootPath .. '\\' .. configName)
-        end
-    end
-    SKIN:Bang('!WriteKeyValue', 'Variables', 'BlockHudSettingsVisible', value, R .. 'Defaults\\Runtime\\incs\\InternalState.inc')
+    return PanelLifecycle.CreateSettingsSurface(rootPath):SetVisible(visible)
 end
 function SetInventoryVisibleState(visible, rootPath)
-    local value = visible and '1' or '0'
-    SKIN:Bang('!SetVariable', 'BlockHudInventoryVisible', value)
-    if rootPath ~= nil and rootPath ~= '' then
-        for _, configName in ipairs({ 'Hotbar', 'Inventory', 'InventoryBG' }) do
-            local targetConfig = rootPath .. '\\' .. configName
-            if isRainmeterConfigActive(targetConfig) then
-                SKIN:Bang('!SetVariable', 'BlockHudInventoryVisible', value, targetConfig)
-            end
-        end
-    end
-    SKIN:Bang('!WriteKeyValue', 'Variables', 'BlockHudInventoryVisible', value, R .. 'Defaults\\Runtime\\incs\\InternalState.inc')
+    return InventoryLifecycle.CreateInventorySurface(rootPath):SetVisible(visible)
 end
 function IsInventoryVisibleStateEnabled()
-    local text = tostring(SKIN:GetVariable('BlockHudInventoryVisible', '0') or '')
-    text = text:gsub('^%s+', ''):gsub('%s+$', '')
-    return text ~= '0'
+    return InventoryLifecycle.CreateInventorySurface():IsVisibleIntent()
 end
 local function closeInventoryPanels(rootPath)
     if not rootPath or rootPath == '' then
@@ -263,19 +230,20 @@ local function closeInventoryPanels(rootPath)
     SetInventoryVisibleState(false, rootPath)
     clearPanelLiveState('Inventory')
     clearPanelLiveState('InventoryBG')
-    local inventoryConfig = rootPath .. '\\Inventory'
-    local inventoryBgConfig = rootPath .. '\\InventoryBG'
+    local inventoryConfig = rootPath .. '\\HUD\\Inventory'
+    local inventoryBgConfig = rootPath .. '\\HUD\\InventoryBG'
     local currentConfig = tostring(SKIN:GetVariable('CURRENTCONFIG', '') or ''):gsub('^%s+', ''):gsub('%s+$', ''):lower()
     local inventoryBgConfigKey = inventoryBgConfig:lower()
     local function closeInventory()
-        if isRainmeterConfigActive(inventoryConfig) then
-            SKIN:Bang('!CommandMeasure', 'MeasureHighlight', 'SuspendInventoryResident()', inventoryConfig)
-        end
-        HighlightHideActiveConfig(inventoryConfig)
+        InventoryLifecycle.CreateInventorySurface(rootPath):SuspendIfActiveThenHide()
     end
     local function closeInventoryBackground()
         if isRainmeterConfigActive(inventoryBgConfig) then
-            SKIN:Bang('!DeactivateConfig', inventoryBgConfig)
+            if currentConfig == inventoryBgConfigKey then
+                HideInventoryBackgroundActiveConfig()
+            else
+                HighlightCommandMeasureForActiveConfig('MeasureHighlight', 'HideInventoryBackgroundActiveConfig()', inventoryBgConfig)
+            end
         end
     end
     if currentConfig == inventoryBgConfigKey then
@@ -438,20 +406,7 @@ function HudActionFileExists(path)
 end
 
 function ResolveHudActionPowerShellProgramPath()
-    local slash = string.char(92)
-    local systemRoot = os.getenv('SystemRoot') or os.getenv('WINDIR') or ('C:' .. slash .. 'Windows')
-    local suffix = slash .. 'WindowsPowerShell' .. slash .. 'v1.0' .. slash .. 'powershell.exe'
-    local primary = systemRoot .. slash .. 'System32' .. suffix
-    if HudActionFileExists(primary) then
-        return primary
-    end
-
-    local sysnative = systemRoot .. slash .. 'Sysnative' .. suffix
-    if HudActionFileExists(sysnative) then
-        return sysnative
-    end
-
-    return 'powershell'
+    return '"' .. tostring(SKIN:GetVariable('@', '') or '') .. 'Defaults\\Runtime\\helpers\\BlockHudPowerShellHost.exe"'
 end
 
 function SyncHudActionPowerShellProgramPath()
@@ -470,6 +425,7 @@ local function LoadEssentials()
     ResponsiveLayout = dofile(R .. 'Defaults\\Runtime\\luas\\ResponsiveLayoutCore.lua')
     ModalAlertBridge = dofile(R .. 'Defaults\\Runtime\\luas\\ModalAlertBridge.lua')
     RainmeterConfigState = dofile(R .. 'Defaults\\Runtime\\luas\\RainmeterConfigState.lua')
+    ResidentSurfaceLifecycle = dofile(R .. 'Defaults\\Runtime\\luas\\ResidentSurfaceLifecycle.lua')
     ResidentUpdateController = dofile(R .. 'Defaults\\Runtime\\luas\\ResidentUpdateController.lua')
     LanguageBranching = dofile(R .. 'Defaults\\Runtime\\luas\\LanguageBranching.lua')
     LanguageRegistry = dofile(R .. 'Defaults\\Runtime\\luas\\LanguageRegistry.lua')
@@ -583,6 +539,174 @@ function HighlightHideActiveConfig(configPath)
     end
     return RainmeterConfigState.HideIfActive(SKIN, targetConfig)
 end
+PanelLifecycle = PanelLifecycle or {}
+function PanelLifecycle.InternalStatePath()
+    return R .. 'Defaults\\Runtime\\incs\\InternalState.inc'
+end
+function PanelLifecycle.ResolveRootPath(rootPath)
+    local resolved = trimText(rootPath)
+    if resolved ~= '' then
+        return resolved
+    end
+    return trimText(SKIN:GetVariable('ROOTCONFIG', ''))
+end
+function PanelLifecycle.ConfigPath(rootPath, relativePath)
+    rootPath = PanelLifecycle.ResolveRootPath(rootPath)
+    if rootPath == '' then
+        return ''
+    end
+    return rootPath .. '\\' .. relativePath
+end
+function PanelLifecycle.EditorVisibleMirrorConfigs(rootPath)
+    rootPath = PanelLifecycle.ResolveRootPath(rootPath)
+    if rootPath == '' then
+        return {}
+    end
+    return {
+        rootPath .. '\\HUD\\Hotbar',
+        rootPath .. '\\HUD\\Inventory',
+        rootPath .. '\\HUD\\InventoryBG',
+        rootPath .. '\\HUD\\Editor',
+    }
+end
+function PanelLifecycle.SettingsVisibleMirrorConfigs(rootPath)
+    rootPath = PanelLifecycle.ResolveRootPath(rootPath)
+    if rootPath == '' then
+        return {}
+    end
+    return {
+        rootPath .. '\\HUD\\Settings',
+        rootPath .. '\\HUD\\Inventory',
+        rootPath .. '\\HUD\\InventoryBG',
+        rootPath .. '\\HUD\\Hotbar',
+    }
+end
+function PanelLifecycle.CreateEditorSurface(rootPath)
+    LoadEssentials()
+    return ResidentSurfaceLifecycle.CreateSurface({
+        skin = SKIN,
+        surfaceId = 'Editor',
+        configPath = PanelLifecycle.ConfigPath(rootPath, 'HUD\\Editor'),
+        entryFile = 'Editor.ini',
+        measureName = 'MeasureInputCommit',
+        visibleVariable = 'BlockHudEditorVisible',
+        visibleMirrorConfigs = function()
+            return PanelLifecycle.EditorVisibleMirrorConfigs(rootPath)
+        end,
+        internalStatePath = PanelLifecycle.InternalStatePath,
+        clearVisibleOnRainmeterClose = true,
+        preShowLayoutMeasure = 'MeasureResponsiveLayout',
+        preShowLayoutCommand = 'ApplyLayout()',
+    })
+end
+function PanelLifecycle.CreateSettingsSurface(rootPath)
+    LoadEssentials()
+    return ResidentSurfaceLifecycle.CreateSurface({
+        skin = SKIN,
+        surfaceId = 'Settings',
+        configPath = PanelLifecycle.ConfigPath(rootPath, 'HUD\\Settings'),
+        entryFile = 'Settings.ini',
+        measureName = 'MeasureSettingsCommit',
+        visibleVariable = 'BlockHudSettingsVisible',
+        visibleMirrorConfigs = function()
+            return PanelLifecycle.SettingsVisibleMirrorConfigs(rootPath)
+        end,
+        internalStatePath = PanelLifecycle.InternalStatePath,
+        clearVisibleOnRainmeterClose = true,
+        preShowLayoutMeasure = 'MeasureResponsiveLayout',
+        preShowLayoutCommand = 'ApplyLayout()',
+    })
+end
+InventoryLifecycle = InventoryLifecycle or {}
+function InventoryLifecycle.InternalStatePath()
+    return R .. 'Defaults\\Runtime\\incs\\InternalState.inc'
+end
+function InventoryLifecycle.ResolveRootPath(rootPath)
+    local resolved = trimText(rootPath)
+    if resolved ~= '' then
+        return resolved
+    end
+    return trimText(SKIN:GetVariable('ROOTCONFIG', ''))
+end
+function InventoryLifecycle.InventoryConfigPath(rootPath)
+    rootPath = InventoryLifecycle.ResolveRootPath(rootPath)
+    if rootPath == '' then
+        return ''
+    end
+    return rootPath .. '\\HUD\\Inventory'
+end
+function InventoryLifecycle.InventoryBgConfigPath(rootPath)
+    rootPath = InventoryLifecycle.ResolveRootPath(rootPath)
+    if rootPath == '' then
+        return ''
+    end
+    return rootPath .. '\\HUD\\InventoryBG'
+end
+function InventoryLifecycle.InventoryVisibleMirrorConfigs(rootPath)
+    rootPath = InventoryLifecycle.ResolveRootPath(rootPath)
+    if rootPath == '' then
+        return {}
+    end
+    return {
+        rootPath .. '\\HUD\\Hotbar',
+        rootPath .. '\\HUD\\Inventory',
+        rootPath .. '\\HUD\\InventoryBG',
+        rootPath .. '\\HUD\\Editor',
+    }
+end
+function InventoryLifecycle.IsInventoryFeatureEnabled()
+    return trimText(SKIN:GetVariable('EnableInventorySkin', '1')) ~= '0'
+end
+function InventoryLifecycle.InventoryVisibleMirrorResolver(rootPath)
+    return function()
+        return InventoryLifecycle.InventoryVisibleMirrorConfigs(rootPath)
+    end
+end
+function InventoryLifecycle.CreateInventorySurface(rootPath, configPath, beforeShow)
+    LoadEssentials()
+    return ResidentSurfaceLifecycle.CreateSurface({
+        skin = SKIN,
+        surfaceId = 'Inventory',
+        configPath = configPath or InventoryLifecycle.InventoryConfigPath(rootPath),
+        entryFile = 'Inventory.ini',
+        measureName = 'MeasureHighlight',
+        visibleVariable = 'BlockHudInventoryVisible',
+        visibleMirrorConfigs = InventoryLifecycle.InventoryVisibleMirrorResolver(rootPath),
+        internalStatePath = InventoryLifecycle.InternalStatePath,
+        clearVisibleOnRainmeterClose = true,
+        resumeCommand = 'ResumeInventoryResident()',
+        suspendCommand = 'SuspendInventoryResident()',
+        preShowLayoutMeasure = 'MeasureResponsiveLayout',
+        preShowLayoutCommand = 'ApplyLayout()',
+        featureEnabled = InventoryLifecycle.IsInventoryFeatureEnabled,
+        beforeShow = beforeShow,
+    })
+end
+function InventoryLifecycle.CreateInventoryBgSurface(rootPath)
+    LoadEssentials()
+    return ResidentSurfaceLifecycle.CreateSurface({
+        skin = SKIN,
+        surfaceId = 'InventoryBG',
+        configPath = InventoryLifecycle.InventoryBgConfigPath(rootPath),
+        entryFile = 'InventoryBG.ini',
+        measureName = 'MeasureHighlight',
+        visibleVariable = 'BlockHudInventoryVisible',
+        visibleMirrorConfigs = InventoryLifecycle.InventoryVisibleMirrorResolver(rootPath),
+        internalStatePath = InventoryLifecycle.InternalStatePath,
+        clearVisibleOnRainmeterClose = true,
+        preShowLayoutMeasure = 'MeasureResponsiveLayout',
+        preShowLayoutCommand = '',
+        featureEnabled = InventoryLifecycle.IsInventoryFeatureEnabled,
+        beforeShow = function()
+            SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'ApplyLayout()')
+            SKIN:Bang('!Draggable', '0')
+            ApplyInventoryBackdropOpenZOrder(rootPath)
+        end,
+        beforeSuspend = function()
+            SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
+        end,
+    })
+end
 function EnsureHighlightSlotActionLaunch()
     if HighlightSlotActionLaunch == nil then
         HighlightSlotActionLaunch = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\HighlightSlotActionLaunch.lua')
@@ -626,7 +750,7 @@ local function startHudOpenLogFolderHelper()
     if rootPath == '' then
         return false
     end
-    local helperPath = rootPath .. 'tools\\OpenSettingsLogFolder.ps1'
+    local helperPath = rootPath .. 'Utilities\\tools\\OpenSettingsLogFolder.ps1'
     local parameter = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ' .. PowerShellSingleQuoted(helperPath)
         .. ' -TargetRoot ' .. PowerShellSingleQuoted(rootPath)
     SyncHudActionPowerShellProgramPath()
@@ -669,7 +793,7 @@ local function InventoryUsageGuideUrl()
     )
 end
 local function CreatorProfileUrl()
-    return LanguageBranching.SelectKoreanElseGlobal(CurrentLanguageCode(), 'https://litt.ly/dmeloper', 'https://litt.ly/dmeloper.dev')
+    return LanguageBranching.SelectKoreanElseGlobal(CurrentLanguageCode(), 'https://litt.ly/dmeloper', 'https://linktr.ee/dmeloper.dev')
 end
 local function SyncCreatorProfileLink()
     if IsHotbar then
