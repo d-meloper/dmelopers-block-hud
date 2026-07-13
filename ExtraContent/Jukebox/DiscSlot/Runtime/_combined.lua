@@ -61,6 +61,7 @@ JukeboxDiscSlotExternalCoverFingerprint = {
     refreshInterval = 2,
 }
 JukeboxDiscSlotResidentUpdateController = nil
+JukeboxDiscSlotResidentSurfaceLifecycle = nil
 
 function EnsureJukeboxDiscSlotResidentUpdateController()
     if JukeboxDiscSlotResidentUpdateController == nil then
@@ -69,8 +70,29 @@ function EnsureJukeboxDiscSlotResidentUpdateController()
     return JukeboxDiscSlotResidentUpdateController
 end
 
+function EnsureJukeboxDiscSlotResidentSurfaceLifecycle()
+    if JukeboxDiscSlotResidentSurfaceLifecycle == nil then
+        JukeboxDiscSlotResidentSurfaceLifecycle = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\ResidentSurfaceLifecycle.lua')
+    end
+    return JukeboxDiscSlotResidentSurfaceLifecycle
+end
+
 local function trim(value)
     return tostring(value or ''):match('^%s*(.-)%s*$')
+end
+
+function CreateJukeboxDiscSlotResidentSurface(configPath, surfaceId, entryFile, measureName)
+    return EnsureJukeboxDiscSlotResidentSurfaceLifecycle().CreateSurface({
+        skin = SKIN,
+        surfaceId = surfaceId or 'JukeboxDiscSlot',
+        configPath = trim(configPath) ~= '' and trim(configPath) or trim(SKIN:GetVariable('CURRENTCONFIG', '')),
+        entryFile = entryFile or 'JukeboxDiscSlot.ini',
+        measureName = measureName or 'MeasureJukeboxDiscSlot',
+    })
+end
+
+function EnsureJukeboxDiscSlotResidentSurface()
+    return CreateJukeboxDiscSlotResidentSurface()
 end
 
 local function upper(value)
@@ -282,18 +304,7 @@ local function quoteCommandLineArgument(value)
 end
 
 local function resolvePowerShellProgramPath()
-    local systemRoot = os.getenv('SystemRoot') or os.getenv('WINDIR') or 'C:\\Windows'
-    local primary = systemRoot .. '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-    if fileExists(primary) then
-        return primary
-    end
-
-    local sysnative = systemRoot .. '\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe'
-    if fileExists(sysnative) then
-        return sysnative
-    end
-
-    return 'powershell'
+    return '"' .. trim(SKIN:GetVariable('@', '')) .. 'Defaults\\Runtime\\helpers\\BlockHudPowerShellHost.exe"'
 end
 
 local function pixelationHelperPath()
@@ -2283,17 +2294,12 @@ local function jukeboxConfigName()
     return current
 end
 
-local JukeboxDiscSlotConfigState = nil
-
-local function jukeboxDiscSlotConfigState()
-    if not JukeboxDiscSlotConfigState then
-        JukeboxDiscSlotConfigState = dofile(SKIN:GetVariable('@', '') .. 'Defaults\\Runtime\\luas\\RainmeterConfigState.lua')
-    end
-    return JukeboxDiscSlotConfigState
+local function jukeboxResidentSurface(configName)
+    return CreateJukeboxDiscSlotResidentSurface(configName, 'Jukebox', 'Jukebox.ini', 'MeasureJukebox')
 end
 
 function JukeboxDiscSlotIsRainmeterConfigActive(configName)
-    return jukeboxDiscSlotConfigState().IsActive(SKIN, configName)
+    return jukeboxResidentSurface(configName):IsActive()
 end
 
 local function callJukebox(command)
@@ -2301,11 +2307,7 @@ local function callJukebox(command)
     if config == '' then
         return false
     end
-    if not JukeboxDiscSlotIsRainmeterConfigActive(config) then
-        return false
-    end
-    SKIN:Bang('!CommandMeasure', 'MeasureJukebox', command, config)
-    return true
+    return jukeboxResidentSurface(config):CommandIfActive('MeasureJukebox', command)
 end
 
 requestDiscSlotAlert = function(kind, detail, dedupeByDetail)
@@ -2506,7 +2508,7 @@ end
 function ResumeDiscSlotResident()
     EnsureJukeboxDiscSlotResidentUpdateController().ResumeSurface('JukeboxDiscSlot')
     SKIN:Bang('!UpdateMeasure', 'MeasureResponsiveLayout')
-    SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'ApplyLayout()')
+    EnsureJukeboxDiscSlotResidentSurface():CommandIfActive('MeasureResponsiveLayout', 'ApplyLayout()')
     SyncVisualState()
     return true
 end
@@ -2514,7 +2516,7 @@ end
 function SuspendDiscSlotResident()
     EnsureJukeboxDiscSlotResidentUpdateController().SuspendSurface('JukeboxDiscSlot')
     resetInteractionState()
-    SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
+    EnsureJukeboxDiscSlotResidentSurface():CommandIfActive('MeasureResponsiveLayout', 'DeactivateLiveState()')
     return true
 end
 

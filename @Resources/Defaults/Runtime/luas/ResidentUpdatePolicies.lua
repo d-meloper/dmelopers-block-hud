@@ -3,22 +3,22 @@ return {
         group = 'ResidentUpdateInventory',
         oneShotMeasures = { 'MeasureInventoryEnableGuard', 'MeasurePlayerDefaultHidden', 'MeasurePlayerCustomHidden', 'MeasureEditorModeBadgeVisibility' },
         drivers = {
-            runtime = { config = 'Inventory/RuntimeDriver', file = 'RuntimeDriver.ini', resume = true },
-            animation = { config = 'Inventory/AnimationDriver', file = 'AnimationDriver.ini', resume = false },
+            runtime = { config = 'HUD/Inventory/RuntimeDriver', file = 'RuntimeDriver.ini', resume = true },
+            animation = { config = 'HUD/Inventory/AnimationDriver', file = 'AnimationDriver.ini', resume = false },
         },
     },
     Editor = {
         group = 'ResidentUpdateEditor',
         oneShotMeasures = { 'MeasureViewerPreviewBaseImageX', 'MeasureViewerPreviewBaseImageY', 'MeasureViewerPreviewBaseImageW', 'MeasureViewerPreviewBaseImageH' },
         drivers = {
-            runtime = { config = 'Editor/RuntimeDriver', file = 'RuntimeDriver.ini', resume = true },
+            runtime = { config = 'HUD/Editor/RuntimeDriver', file = 'RuntimeDriver.ini', resume = true },
         },
     },
     Settings = {
         group = 'ResidentUpdateSettings',
         oneShotMeasures = {  },
         drivers = {
-            runtime = { config = 'Settings/RuntimeDriver', file = 'RuntimeDriver.ini', resume = true },
+            runtime = { config = 'HUD/Settings/RuntimeDriver', file = 'RuntimeDriver.ini', resume = true },
         },
     },
     JukeboxDiscSlot = {

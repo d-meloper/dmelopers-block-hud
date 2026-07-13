@@ -17,6 +17,7 @@ local commandRunning = {
 local pollSuspendedAfterError = false
 local safeCall = nil
 local residentUpdateController = nil
+local residentSurfaceLifecycle = nil
 local syncJukeboxRuntimeDriver = nil
 local syncJukeboxAnimationDriver = nil
 local jukeboxAnimatorPhase = 'hidden'
@@ -35,6 +36,13 @@ local function ensureResidentUpdateController()
         residentUpdateController = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\ResidentUpdateController.lua')
     end
     return residentUpdateController
+end
+
+local function ensureResidentSurfaceLifecycle()
+    if residentSurfaceLifecycle == nil then
+        residentSurfaceLifecycle = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\ResidentSurfaceLifecycle.lua')
+    end
+    return residentSurfaceLifecycle
 end
 
 syncJukeboxRuntimeDriver = function()
@@ -326,18 +334,7 @@ local function quotePowerShellArgument(value)
 end
 
 local function resolvePowerShellProgramPath()
-    local systemRoot = os.getenv('SystemRoot') or os.getenv('WINDIR') or 'C:\\Windows'
-    local primary = systemRoot .. '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-    if fileExists(primary) then
-        return primary
-    end
-
-    local sysnative = systemRoot .. '\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe'
-    if fileExists(sysnative) then
-        return sysnative
-    end
-
-    return 'powershell'
+    return '"' .. trim(SKIN:GetVariable('@', '')) .. 'Defaults\\Runtime\\helpers\\BlockHudPowerShellHost.exe"'
 end
 
 local function rollingHash(text)
@@ -442,7 +439,7 @@ local function buildOpenLogFolderArgs()
     if rootPath == '' then
         return ''
     end
-    local helperPath = joinPath(rootPath, 'tools\\OpenSettingsLogFolder.ps1')
+    local helperPath = joinPath(rootPath, 'Utilities\\tools\\OpenSettingsLogFolder.ps1')
     return table.concat({
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
@@ -590,9 +587,9 @@ end
 local function diagnosticsConfigName()
     local root = rootConfigName()
     if root == '' then
-        return 'Diagnostics'
+        return 'Utilities\\Diagnostics'
     end
-    return root .. '\\Diagnostics'
+    return root .. '\\Utilities\\Diagnostics'
 end
 
 local function round(value)
@@ -679,13 +676,47 @@ local function jukeboxConfigState()
     return JukeboxConfigState
 end
 
+local function createResidentSurface(surfaceId, configPath, entryFile, measureName)
+    return ensureResidentSurfaceLifecycle().CreateSurface({
+        skin = SKIN,
+        surfaceId = surfaceId,
+        configPath = configPath,
+        entryFile = entryFile,
+        measureName = measureName,
+    })
+end
+
+function JukeboxLifecycleSurface()
+    return createResidentSurface('Jukebox', jukeboxConfigName(), 'Jukebox.ini', 'MeasureJukebox')
+end
+
+function JukeboxDiscSlotLifecycleSurface()
+    return createResidentSurface('JukeboxDiscSlot', discSlotConfigName(), 'JukeboxDiscSlot.ini', 'MeasureJukeboxDiscSlot')
+end
+
 function isRainmeterConfigActive(configName)
+    configName = trim(configName)
+    if configName == jukeboxConfigName() then
+        return JukeboxLifecycleSurface():IsActive()
+    end
+    if configName == discSlotConfigName() then
+        return JukeboxDiscSlotLifecycleSurface():IsActive()
+    end
     return jukeboxConfigState().IsActive(SKIN, configName)
 end
 
 function setVariableForActiveConfig(name, value, configName)
     configName = trim(configName)
-    if configName == '' or not isRainmeterConfigActive(configName) then
+    if configName == '' then
+        return false
+    end
+    if configName == discSlotConfigName() then
+        return JukeboxDiscSlotLifecycleSurface():SetVariableIfActive(name, value)
+    end
+    if configName == jukeboxConfigName() then
+        return JukeboxLifecycleSurface():SetVariableIfActive(name, value)
+    end
+    if not isRainmeterConfigActive(configName) then
         return false
     end
     SKIN:Bang('!SetVariable', tostring(name or ''), tostring(value or ''), configName)
@@ -694,7 +725,16 @@ end
 
 function commandMeasureForActiveConfig(measureName, command, configName)
     configName = trim(configName)
-    if configName == '' or not isRainmeterConfigActive(configName) then
+    if configName == '' then
+        return false
+    end
+    if configName == discSlotConfigName() then
+        return JukeboxDiscSlotLifecycleSurface():CommandIfActive(measureName, command)
+    end
+    if configName == jukeboxConfigName() then
+        return JukeboxLifecycleSurface():CommandIfActive(measureName, command)
+    end
+    if not isRainmeterConfigActive(configName) then
         return false
     end
     SKIN:Bang('!CommandMeasure', measureName, command, configName)

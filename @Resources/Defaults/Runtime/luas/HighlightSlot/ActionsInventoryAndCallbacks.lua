@@ -363,13 +363,13 @@ local function primeEditorOpenState(rootPath)
         EditorOpen = '1',
         HeartbeatClockMs = tostring(EditorItemService.GetCurrentSessionClockMs()),
     }
-    for _, configName in ipairs({ 'Hotbar', 'Inventory', 'InventoryBG' }) do
+    for _, configName in ipairs({ 'HUD\\Hotbar', 'HUD\\Inventory', 'HUD\\InventoryBG' }) do
         local configPath = rootPath .. '\\' .. configName
         if isRainmeterConfigActive(configPath) then
             syncEditorDraftMetaToConfig(configPath, openOverrides)
         end
     end
-    local inventoryConfig = rootPath .. '\\Inventory'
+    local inventoryConfig = rootPath .. '\\HUD\\Inventory'
     if IsInventoryVisibleStateEnabled() and isRainmeterConfigActive(inventoryConfig) then
         SKIN:Bang('!UpdateMeasure', 'MeasureEditorModeBadgeVisibility', inventoryConfig)
         SKIN:Bang('!Redraw', inventoryConfig)
@@ -436,39 +436,171 @@ function SuspendInventoryResident()
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
     SKIN:Bang('!Redraw')
 end
+local prepareInventoryOpenPosition = nil
+local showResidentConfigAfterLayout = nil
+
+function ApplyInventoryBackdropOpenZOrder(rootPath)
+    rootPath = tostring(rootPath or SKIN:GetVariable('ROOTCONFIG', '') or '')
+    if rootPath == '' then
+        return
+    end
+
+    local inventoryBgConfig = rootPath .. '\\HUD\\InventoryBG'
+    local hudBelowBackdropConfigs = {
+        rootPath .. '\\HUD\\Hotbar',
+        rootPath .. '\\HUD\\Clock',
+        rootPath .. '\\HUD\\ClockSprite',
+        rootPath .. '\\HUD\\Indicators\\Heart',
+        rootPath .. '\\HUD\\Indicators\\Armor',
+        rootPath .. '\\HUD\\Indicators\\Food',
+        rootPath .. '\\HUD\\Indicators\\Air',
+        rootPath .. '\\HUD\\Indicators\\Exp'
+    }
+
+    if isRainmeterConfigActive(inventoryBgConfig) then
+        SKIN:Bang('!ZPos', '-1', inventoryBgConfig)
+    end
+    for _, configPath in ipairs(hudBelowBackdropConfigs) do
+        if isRainmeterConfigActive(configPath) then
+            SKIN:Bang('!ZPos', '-2', configPath)
+        end
+    end
+end
+
 function RestoreInventoryBackgroundActiveConfig()
     LoadEssentials()
-    SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'ApplyLayout()')
-    SKIN:Bang('!Draggable', '0')
+    InventoryLifecycle.CreateInventoryBgSurface():ShowActiveAfterLayout()
     SKIN:Bang('!Redraw')
 end
+
+function HideInventoryBackgroundActiveConfig()
+    InventoryLifecycle.CreateInventoryBgSurface():SuspendIfActiveThenHide()
+    SKIN:Bang('!Redraw')
+end
+
+function UnloadInventoryBackgroundActiveConfig()
+    SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
+    SKIN:Bang('!DeactivateConfig')
+end
+
+function ShouldUnloadInventoryBackground()
+    return trimText(SKIN:GetVariable('EnableInventorySkin', '1')) == '0'
+end
+
+function RestoreInventoryAfterBackgroundReady()
+    local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
+    if rootPath == '' then
+        return
+    end
+    local inventoryConfig = rootPath .. '\\HUD\\Inventory'
+    local inventoryActive = isRainmeterConfigActive(inventoryConfig)
+    prepareInventoryOpenPosition(inventoryActive, inventoryConfig)
+    if not inventoryActive then
+        RequestInventoryActivation(inventoryConfig)
+        return
+    end
+    local editorOpen = isEditorOpen()
+    if editorOpen then
+        syncEditorDraftMetaToConfig(inventoryConfig)
+    end
+    showResidentConfigAfterLayout(inventoryConfig)
+    HighlightCommandMeasureForActiveConfig('MeasureHighlight', 'ResumeInventoryResident()', inventoryConfig)
+    if editorOpen then
+        SKIN:Bang('!UpdateMeasure', 'MeasureEditorModeBadgeVisibility', inventoryConfig)
+        SKIN:Bang('!Redraw', inventoryConfig)
+    end
+    HighlightCommandMeasureForActiveConfig('MeasureHighlight', 'RollHerobrineInventoryReplacement()', inventoryConfig)
+end
+
 function RestoreInventoryBackgroundActiveConfigOnRefresh()
     LoadEssentials()
+    if RainmeterConfigState then
+        RainmeterConfigState.Register(SKIN)
+    end
     local wasVisible = IsInventoryVisibleStateEnabled()
     if not wasVisible then
         SKIN:Bang('!UpdateMeasure', 'MeasureInventoryBGEnableGuard')
-        SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
-        SKIN:Bang('!DeactivateConfig')
+        if ShouldUnloadInventoryBackground() then
+            UnloadInventoryBackgroundActiveConfig()
+        else
+            HideInventoryBackgroundActiveConfig()
+        end
         return
     end
     RestoreInventoryBackgroundActiveConfig()
+    RestoreInventoryAfterBackgroundReady()
 end
 function DeactivateClosedInventoryBackgroundOnRefresh()
     LoadEssentials()
     if IsInventoryVisibleStateEnabled() then
         RestoreInventoryBackgroundActiveConfig()
+        RestoreInventoryAfterBackgroundReady()
         return
     end
 
-    SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
-    SKIN:Bang('!DeactivateConfig')
+    if ShouldUnloadInventoryBackground() then
+        UnloadInventoryBackgroundActiveConfig()
+    else
+        HideInventoryBackgroundActiveConfig()
+    end
 end
 function DeactivateInventoryBackgroundActiveConfig()
     LoadEssentials()
-    SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
-    SKIN:Bang('!DeactivateConfig')
+    if ShouldUnloadInventoryBackground() then
+        UnloadInventoryBackgroundActiveConfig()
+    else
+        HideInventoryBackgroundActiveConfig()
+    end
 end
-local function prepareInventoryOpenPosition(inventoryActive, inventoryConfig)
+function RequestInventoryBackgroundActivation(inventoryBgConfig)
+    local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
+    InventoryLifecycle.CreateInventoryBgSurface(rootPath):ActivateIfInactive()
+    SKIN:Bang('!SetVariable', 'BlockHudInventoryOpenDeferredRestore', '1')
+    SKIN:Bang('!UpdateMeasure', 'MeasureInventoryOpenDeferredRestore')
+end
+function RequestInventoryActivation(inventoryConfig)
+    local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
+    InventoryLifecycle.CreateInventorySurface(rootPath):ActivateIfInactive()
+    SKIN:Bang('!SetVariable', 'BlockHudInventoryPanelOpenDeferredRestore', '1')
+    SKIN:Bang('!UpdateMeasure', 'MeasureInventoryPanelOpenDeferredRestore')
+end
+function RestoreInventoryOpenAfterBackgroundActivation()
+    LoadEssentials()
+    local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
+    if rootPath == '' then
+        return
+    end
+    local inventoryBgConfig = rootPath .. '\\HUD\\InventoryBG'
+    SKIN:Bang('!CommandMeasure', 'MeasureHighlight', 'RestoreInventoryBackgroundActiveConfigOnRefresh()', inventoryBgConfig)
+end
+function RestoreInventoryOpenAfterInventoryActivation()
+    LoadEssentials()
+    local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
+    if rootPath == '' then
+        return
+    end
+    local inventoryConfig = rootPath .. '\\HUD\\Inventory'
+    SKIN:Bang('!CommandMeasure', 'MeasureHighlight', 'RestoreInventoryActiveConfigOnOpen()', inventoryConfig)
+end
+function RestoreInventoryActiveConfigOnOpen()
+    LoadEssentials()
+    if RainmeterConfigState then
+        RainmeterConfigState.Register(SKIN)
+    end
+    if not IsInventoryVisibleStateEnabled() then
+        SuspendInventoryResident()
+        SKIN:Bang('!Hide')
+        return
+    end
+    SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'PrepareInventoryRefreshPosition()')
+    SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'ApplyLayout()')
+    SKIN:Bang('!Show')
+    ResumeInventoryResident()
+    SKIN:Bang('!UpdateMeasure', 'MeasureEditorModeBadgeVisibility')
+    SKIN:Bang('!Redraw')
+    RollHerobrineInventoryReplacement()
+end
+prepareInventoryOpenPosition = function(inventoryActive, inventoryConfig)
     if inventoryActive then
         HighlightCommandMeasureForActiveConfig('MeasureResponsiveLayout', 'PrepareInventoryRefreshPosition()', inventoryConfig)
     else
@@ -476,7 +608,7 @@ local function prepareInventoryOpenPosition(inventoryActive, inventoryConfig)
     end
 end
 
-local function showResidentConfigAfterLayout(configPath)
+showResidentConfigAfterLayout = function(configPath)
     local function roundWindowCoordinate(value)
         local number = tonumber(value)
         if not number then
@@ -511,7 +643,7 @@ local function showResidentConfigAfterLayout(configPath)
     local currentConfig = trimText(SKIN:GetVariable('CURRENTCONFIG', '')):gsub('/', '\\')
     local rootConfig = trimText(SKIN:GetVariable('ROOTCONFIG', '')):gsub('/', '\\')
     local isCurrentInventory = currentConfig ~= ''
-        and ((rootConfig ~= '' and currentConfig:lower() == (rootConfig .. '\\Inventory'):lower())
+        and ((rootConfig ~= '' and currentConfig:lower() == (rootConfig .. '\\HUD\\Inventory'):lower())
             or (rootConfig == '' and (currentConfig:lower():match('\\inventory$') ~= nil or currentConfig:lower() == 'inventory')))
 
     if isCurrentInventory then
@@ -546,18 +678,16 @@ function ActivateAllInventory()
         return
     end
     local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
-    local inventoryBgConfig = rootPath .. '\\InventoryBG'
-    local inventoryConfig = rootPath .. '\\Inventory'
+    local inventoryBgConfig = rootPath .. '\\HUD\\InventoryBG'
+    local inventoryConfig = rootPath .. '\\HUD\\Inventory'
     local editorOpen = isEditorOpen()
     local inventoryBgActive = isRainmeterConfigActive(inventoryBgConfig)
     local inventoryActive = isRainmeterConfigActive(inventoryConfig)
     SetInventoryVisibleState(true, rootPath)
     prepareInventoryOpenPosition(inventoryActive, inventoryConfig)
     if not inventoryBgActive then
-        SKIN:Bang('!ActivateConfig', inventoryBgConfig, 'InventoryBG.ini')
-    end
-    if not inventoryActive then
-        SKIN:Bang('!ActivateConfig', inventoryConfig, 'Inventory.ini')
+        InventoryLifecycle.CreateInventoryBgSurface(rootPath):ActivateIfInactive()
+        return
     end
     if editorOpen then
         if inventoryBgActive then
@@ -574,6 +704,8 @@ function ActivateAllInventory()
     if inventoryActive then
         showResidentConfigAfterLayout(inventoryConfig)
         HighlightCommandMeasureForActiveConfig('MeasureHighlight', 'ResumeInventoryResident()', inventoryConfig)
+    else
+        RequestInventoryActivation(inventoryConfig)
     end
     if editorOpen and inventoryActive then
         SKIN:Bang('!UpdateMeasure', 'MeasureEditorModeBadgeVisibility', inventoryConfig)
@@ -582,6 +714,7 @@ function ActivateAllInventory()
     if inventoryActive then
         HighlightCommandMeasureForActiveConfig('MeasureHighlight', 'RollHerobrineInventoryReplacement()', inventoryConfig)
     end
+    ApplyInventoryBackdropOpenZOrder(rootPath)
 end
 function ResetInteractionState()
     LoadEssentials()
@@ -678,7 +811,7 @@ function HandleInventoryBackgroundMouseMove(x, y)
     local inventoryY = tonumber(SKIN:GetVariable('ResponsiveLayout_Inventory_LiveWindowY', '0')) or 0
     local localX = (tonumber(x) or 0) + currentX - inventoryX
     local localY = (tonumber(y) or 0) + currentY - inventoryY
-    SKIN:Bang('!CommandMeasure', 'MeasureHighlight', string.format('OnMouseMove(%s,%s)', tostring(localX), tostring(localY)), SKIN:GetVariable('ROOTCONFIG') .. '\\Inventory')
+    SKIN:Bang('!CommandMeasure', 'MeasureHighlight', string.format('OnMouseMove(%s,%s)', tostring(localX), tostring(localY)), SKIN:GetVariable('ROOTCONFIG') .. '\\HUD\\Inventory')
 end
 function HandleInventoryBackgroundMouseUp(x, y)
     LoadEssentials()
@@ -692,7 +825,7 @@ function HandleInventoryBackgroundMouseUp(x, y)
     local inventoryY = tonumber(SKIN:GetVariable('ResponsiveLayout_Inventory_LiveWindowY', '0')) or 0
     local localX = (tonumber(x) or 0) + currentX - inventoryX
     local localY = (tonumber(y) or 0) + currentY - inventoryY
-    SKIN:Bang('!CommandMeasure', 'MeasureHighlight', string.format('OnMouseUp(%s,%s)', tostring(localX), tostring(localY)), SKIN:GetVariable('ROOTCONFIG') .. '\\Inventory')
+    SKIN:Bang('!CommandMeasure', 'MeasureHighlight', string.format('OnMouseUp(%s,%s)', tostring(localX), tostring(localY)), SKIN:GetVariable('ROOTCONFIG') .. '\\HUD\\Inventory')
 end
 function HandleInventoryBackgroundClose(source)
     LoadEssentials()
@@ -710,9 +843,10 @@ function HandleInventoryBackgroundClose(source)
     if closeSource == 'button' then
         PlayClickSound()
     end
-    local editorVisible = isEditorPanelActive()
+    local editorVisibleIntent = IsEditorVisibleStateEnabled()
+    local editorVisible = editorVisibleIntent and isEditorPanelActive()
     local editorOpen = isEditorOpen()
-    if editorVisible or editorOpen then
+    if editorVisible or (editorOpen and editorVisibleIntent) then
         local meta = EditorItemService.ReadDraftMetaOnly(R)
         if meta.PickerModalOpen then
             SKIN:Bang('!CommandMeasure', 'MeasureInputCommit', 'SetPickerModalOpen(0)', editorConfigPath())
@@ -720,12 +854,18 @@ function HandleInventoryBackgroundClose(source)
         closeEditorPanel()
         if not isEditorOpen() and rootPath ~= '' then
             SetEditorVisibleState(false, rootPath)
-            HighlightHideActiveConfig(rootPath .. '\\Editor')
+            PanelLifecycle.CreateEditorSurface(rootPath):HideIfActive()
         end
         if closeSource == 'background' then
             return
         end
 
+    elseif editorOpen then
+        closeEditorPanel()
+        if rootPath ~= '' then
+            SetEditorVisibleState(false, rootPath)
+            PanelLifecycle.CreateEditorSurface(rootPath):HideIfActive()
+        end
     end
     if rootPath ~= '' then
         closeInventoryPanels(rootPath)
@@ -744,26 +884,27 @@ function HandleEditButtonClick()
             closeEditorPanel()
             if not isEditorOpen() and rootPath ~= '' then
                 SetEditorVisibleState(false, rootPath)
-                HighlightHideActiveConfig(rootPath .. '\\Editor')
+                PanelLifecycle.CreateEditorSurface(rootPath):HideIfActive()
             end
             refreshHotbarOnly(rootPath)
             return
         end
         if rootPath ~= '' then
             SetEditorVisibleState(false, rootPath)
-            HighlightHideActiveConfig(rootPath .. '\\Editor')
+            PanelLifecycle.CreateEditorSurface(rootPath):HideIfActive()
         end
     end
-    SetEditorVisibleState(true, rootPath)
+    local editorSurface = PanelLifecycle.CreateEditorSurface(rootPath)
+    editorSurface:SetVisible(true)
     primeEditorOpenState(rootPath)
-    local editorConfig = rootPath .. '\\Editor'
+    local editorConfig = rootPath .. '\\HUD\\Editor'
     local editorActive = isRainmeterConfigActive(editorConfig)
     if not editorActive then
-        SKIN:Bang('!ActivateConfig', editorConfig, 'Editor.ini')
+        editorSurface:ActivateIfInactive()
     end
     if editorActive then
-        showResidentConfigAfterLayout(editorConfig)
-        HighlightCommandMeasureForActiveConfig('MeasureInputCommit', 'ResumeEditorResident()', editorConfig)
+        editorSurface:ShowActiveAfterLayout()
+        editorSurface:CommandIfActive('MeasureInputCommit', 'ResumeEditorResident()')
     end
     refreshHotbarOnly(rootPath)
 end
@@ -772,7 +913,7 @@ function HandleSettingsButtonClick()
     ResetInteractionState()
     PlayClickSound()
     local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
-    local settingsConfig = rootPath .. '\\Settings'
+    local settingsConfig = rootPath .. '\\HUD\\Settings'
     local settingsActive = isRainmeterConfigActive(settingsConfig)
     if rootPath ~= '' then
         resetHotbarInteraction(rootPath)
@@ -781,14 +922,14 @@ function HandleSettingsButtonClick()
         closeSettingsPanel()
         return
     end
-    SetSettingsVisibleState(true, rootPath)
     if not settingsActive then
-        SKIN:Bang('!ActivateConfig', settingsConfig, 'Settings.ini')
+        SettingsRouteLauncher.Open(SKIN, 'normal', 'general', '1')
+        return
     end
-    if settingsActive then
-        showResidentConfigAfterLayout(settingsConfig)
-        HighlightCommandMeasureForActiveConfig('MeasureSettingsCommit', 'ResumeSettingsResident()', settingsConfig)
-    end
+    local settingsSurface = PanelLifecycle.CreateSettingsSurface(rootPath)
+    settingsSurface:SetVisible(true)
+    settingsSurface:ShowActiveAfterLayout()
+    settingsSurface:CommandIfActive('MeasureSettingsCommit', "OpenSettingsRoute('normal','general','1')")
 end
 function HandleRefreshButtonClick()
     SKIN:Bang('!RefreshApp')
@@ -802,6 +943,16 @@ function HandleSteveSkinEditButtonClick()
     end
     PlayClickSound()
     SettingsRouteLauncher.Open(SKIN, 'normal', 'inventory', '2')
+end
+function HandleCreatorProfileClick()
+    LoadEssentials()
+    ResetInteractionState()
+    local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
+    if rootPath ~= '' then
+        resetHotbarInteraction(rootPath)
+    end
+    PlayClickSound()
+    SKIN:Bang('["' .. CreatorProfileUrl() .. '"]')
 end
 function HandleOpenWorkProgressClick()
     LoadEssentials()

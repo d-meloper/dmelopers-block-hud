@@ -559,17 +559,12 @@ local function jukeboxConfigName()
     return current
 end
 
-local JukeboxDiscSlotConfigState = nil
-
-local function jukeboxDiscSlotConfigState()
-    if not JukeboxDiscSlotConfigState then
-        JukeboxDiscSlotConfigState = dofile(SKIN:GetVariable('@', '') .. 'Defaults\\Runtime\\luas\\RainmeterConfigState.lua')
-    end
-    return JukeboxDiscSlotConfigState
+local function jukeboxResidentSurface(configName)
+    return CreateJukeboxDiscSlotResidentSurface(configName, 'Jukebox', 'Jukebox.ini', 'MeasureJukebox')
 end
 
 function JukeboxDiscSlotIsRainmeterConfigActive(configName)
-    return jukeboxDiscSlotConfigState().IsActive(SKIN, configName)
+    return jukeboxResidentSurface(configName):IsActive()
 end
 
 local function callJukebox(command)
@@ -577,11 +572,7 @@ local function callJukebox(command)
     if config == '' then
         return false
     end
-    if not JukeboxDiscSlotIsRainmeterConfigActive(config) then
-        return false
-    end
-    SKIN:Bang('!CommandMeasure', 'MeasureJukebox', command, config)
-    return true
+    return jukeboxResidentSurface(config):CommandIfActive('MeasureJukebox', command)
 end
 
 requestDiscSlotAlert = function(kind, detail, dedupeByDetail)

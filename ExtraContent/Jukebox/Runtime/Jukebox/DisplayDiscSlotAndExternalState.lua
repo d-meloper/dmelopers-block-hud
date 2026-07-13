@@ -205,6 +205,10 @@ local function isExternalBridgeActive()
     if externalPlaybackState.pluginLoadFailed or trim(SKIN:GetVariable('JukeboxExternalBridgePluginFailed', '0')) == '1' then
         return false
     end
+    local configName = webNowPlayingBridgeConfigName()
+    if configName == '' or not isRainmeterConfigActive(configName) then
+        return false
+    end
     return externalPlaybackState.bridgeActive or trim(SKIN:GetVariable('JukeboxExternalBridgeActive', '0')) == '1'
 end
 
@@ -212,12 +216,12 @@ local function activateExternalBridge()
     if externalPlaybackState.pluginLoadFailed or trim(SKIN:GetVariable('JukeboxExternalBridgePluginFailed', '0')) == '1' then
         return false
     end
-    if isExternalBridgeActive() then
-        return true
-    end
     local configName = webNowPlayingBridgeConfigName()
     if configName == '' or not configName:find('[\\/]') then
         return false
+    end
+    if isExternalBridgeActive() then
+        return true
     end
     if isRainmeterConfigActive(configName) then
         externalPlaybackState.bridgeActivationRequested = true
@@ -320,7 +324,7 @@ end
 local function syncSettingsPlaybackSourceMode()
     local mode = currentPlaybackSourceMode()
     local root = rootConfigName()
-    local configName = root == '' and 'Settings' or root .. '\\Settings'
+    local configName = root == '' and 'HUD\\Settings' or root .. '\\HUD\\Settings'
     if isRainmeterConfigActive(configName) then
         SKIN:Bang('!SetVariable', 'JukeboxPlaybackSourceMode', mode, configName)
         SKIN:Bang('!CommandMeasure', 'MeasureSettingsCommit', 'SyncJukeboxPlaybackSourceMode()', configName)
@@ -616,7 +620,7 @@ local function setDiscSlotHidden(hidden)
     if setVariableForActiveConfig('JukeboxDiscSlotHidden', hidden and '1' or '0', configName) then
         updateDiscSlotMeters(configName)
         if hidden then
-            SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlot', 'SuspendDiscSlotResident()', configName)
+            JukeboxDiscSlotLifecycleSurface():CommandIfActive('MeasureJukeboxDiscSlot', 'SuspendDiscSlotResident()')
         end
     end
     return configName
@@ -626,11 +630,12 @@ local function deactivateDiscSlotSkin()
     discSlotPendingShow = false
     discSlotPendingShowSkipRefresh = false
     local configName = discSlotConfigName()
+    local surface = JukeboxDiscSlotLifecycleSurface()
     if isRainmeterConfigActive(configName) then
         resetDiscSlotRenderStateForClose(configName)
         setDiscSlotHidden(true)
         syncDiscSlotVisualState(configName)
-        SKIN:Bang('!Hide', configName)
+        surface:HideIfActive()
         discSlotLoaded = true
     else
         discSlotLoaded = false
@@ -652,7 +657,7 @@ local function activateDiscSlot()
         return configName, true
     end
     discSlotLoaded = false
-    SKIN:Bang('!ActivateConfig', configName, 'JukeboxDiscSlot.ini')
+    JukeboxDiscSlotLifecycleSurface():ActivateIfInactive()
     discSlotActivationRequested = true
     discSlotLoaded = true
     return configName, true
@@ -675,14 +680,15 @@ end
 
 showDiscSlotNow = function(configName, skipRefresh)
     configName = configName or discSlotConfigName()
-    if not setVariableForActiveConfig('JukeboxDiscSlotHidden', '0', configName) then
+    local surface = JukeboxDiscSlotLifecycleSurface()
+    if not surface:SetVariableIfActive('JukeboxDiscSlotHidden', '0') then
         discSlotLoaded = false
         discSlotActivationRequested = false
         discSlotRefreshRecoveryRequested = false
         return false
     end
-    SKIN:Bang('!Show', configName)
-    SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlot', 'ResumeDiscSlotResident()', configName)
+    surface:ShowIfActive()
+    surface:CommandIfActive('MeasureJukeboxDiscSlot', 'ResumeDiscSlotResident()')
     syncJukeboxLiveStateToDiscSlot(configName)
     applyDiscSlotLayout(configName)
     syncDiscSlotPlaybackModeControls(configName)
@@ -779,9 +785,9 @@ end
 function webNowPlayingInstallState.modalConfigName()
     local root = rootConfigName()
     if root == '' then
-        return 'Modal'
+        return 'Utilities\\Modal'
     end
-    return root .. '\\Modal'
+    return root .. '\\Utilities\\Modal'
 end
 
 function webNowPlayingInstallState.nextToken()
@@ -921,7 +927,7 @@ local function hotbarConfigName()
     if root == '' then
         return ''
     end
-    return root .. '\\Hotbar'
+    return root .. '\\HUD\\Hotbar'
 end
 
 local function currentPlaybackHotbarText(trackName)
@@ -977,8 +983,8 @@ local function externalPlaybackConnected()
     if externalPlaybackState.pluginLoadFailed or not externalPlaybackState.bridgeActive then
         return false
     end
+    -- WebNowPlaying Status is the connection signal; Player is display metadata and may be blank for some native/desktop sources.
     return trim(externalPlaybackState.status) == '1'
-        and trim(externalPlaybackState.player) ~= ''
 end
 
 function externalCommandSupportFlag(command)
@@ -1101,11 +1107,17 @@ function requestExternalBridgeReconnect(command, valueText)
         return false
     end
     local configName = webNowPlayingBridgeConfigName()
-    if configName == '' or not isRainmeterConfigActive(configName) then
+    if configName == '' or not configName:find('[\\/]') then
         return false
     end
-    local sent = commandMeasureForActiveConfig('MeasureWebNowPlayingBridge', 'Reconnect()', configName)
-    if not sent then
+    local requested = false
+    if isRainmeterConfigActive(configName) then
+        requested = commandMeasureForActiveConfig('MeasureWebNowPlayingBridge', 'Reconnect()', configName)
+    else
+        externalPlaybackState.bridgeActivationRequested = false
+        requested = activateExternalBridge()
+    end
+    if not requested then
         return false
     end
     externalPlaybackState.bridgeReconnectRequested = true
@@ -1147,8 +1159,8 @@ function tickExternalCommandWatchdog()
         return true
     end
     logExternalCommandThrottled(externalCommandLogKey('no-state-change', command, externalPlaybackState.commandWatch.beforePlayer), message, 'Warning')
-    resetExternalPlaybackState()
-    setJukeboxAnimatorPlaybackActive(false)
+    resetExternalCommandWatch()
+    setJukeboxAnimatorPlaybackActive(externalPlaybackConnected() and trim(externalPlaybackState.state) == '1')
     syncDiscSlotPlaybackModeControls()
     showExternalPlayerUnavailable('no-observable-change', command)
     return false

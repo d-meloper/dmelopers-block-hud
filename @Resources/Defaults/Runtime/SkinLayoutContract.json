@@ -1,0 +1,105 @@
+{
+    "layoutContractVersion":  2,
+    "canonicalTopLevelRoots":  [
+                                   "@Resources",
+                                   "HUD",
+                                   "Utilities",
+                                   "ExtraContent"
+                               ],
+    "settingsRelativePath":  "HUD\\Settings",
+    "bootstrapRelativePath":  "Utilities\\Bootstrap",
+    "runtimeToolsRelativePath":  "Utilities\\tools",
+    "configs":  {
+                    "Bootstrap":  "Utilities\\Bootstrap",
+                    "Clock":  "HUD\\Clock",
+                    "ClockSprite":  "HUD\\ClockSprite",
+                    "Diagnostics":  "Utilities\\Diagnostics",
+                    "Editor":  "HUD\\Editor",
+                    "Hotbar":  "HUD\\Hotbar",
+                    "IndicatorHeart":  "HUD\\Indicators\\Heart",
+                    "IndicatorArmor":  "HUD\\Indicators\\Armor",
+                    "IndicatorFood":  "HUD\\Indicators\\Food",
+                    "IndicatorAir":  "HUD\\Indicators\\Air",
+                    "IndicatorExp":  "HUD\\Indicators\\Exp",
+                    "Inventory":  "HUD\\Inventory",
+                    "InventoryBG":  "HUD\\InventoryBG",
+                    "Modal":  "Utilities\\Modal",
+                    "Settings":  "HUD\\Settings",
+                    "Jukebox":  "ExtraContent\\Jukebox",
+                    "JukeboxDiscSlot":  "ExtraContent\\Jukebox\\DiscSlot",
+                    "JukeboxWebNowPlayingBridge":  "ExtraContent\\Jukebox\\WebNowPlayingBridge",
+                    "Herobrine":  "ExtraContent\\Herobrine"
+                },
+    "legacyTransportAdapter":  {
+                                   "manifestRelativePath":  ".dmeloper-legacy-layout-adapter-v2.json",
+                                   "marker":  "DMEL_LEGACY_LAYOUT_ADAPTER_V2",
+                                   "files":  [
+                                                 {
+                                                     "relativePath":  "Clock\\Clock.ini",
+                                                     "kind":  "inactiveConfig"
+                                                 },
+                                                 {
+                                                     "relativePath":  "ClockSprite\\ClockSprite.ini",
+                                                     "kind":  "inactiveConfig"
+                                                 },
+                                                 {
+                                                     "relativePath":  "Editor\\Editor.ini",
+                                                     "kind":  "inactiveConfig"
+                                                 },
+                                                 {
+                                                     "relativePath":  "Hotbar\\Hotbar.ini",
+                                                     "kind":  "bootstrapHandoff",
+                                                     "canonicalConfig":  "Utilities\\Bootstrap"
+                                                 },
+                                                 {
+                                                     "relativePath":  "Indicators\\Heart\\Heart.ini",
+                                                     "kind":  "inactiveConfig"
+                                                 },
+                                                 {
+                                                     "relativePath":  "Indicators\\Armor\\Armor.ini",
+                                                     "kind":  "inactiveConfig"
+                                                 },
+                                                 {
+                                                     "relativePath":  "Indicators\\Food\\Food.ini",
+                                                     "kind":  "inactiveConfig"
+                                                 },
+                                                 {
+                                                     "relativePath":  "Indicators\\Air\\Air.ini",
+                                                     "kind":  "inactiveConfig"
+                                                 },
+                                                 {
+                                                     "relativePath":  "Indicators\\Exp\\Exp.ini",
+                                                     "kind":  "inactiveConfig"
+                                                 },
+                                                 {
+                                                     "relativePath":  "Inventory\\Inventory.ini",
+                                                     "kind":  "inactiveConfig"
+                                                 },
+                                                 {
+                                                     "relativePath":  "InventoryBG\\InventoryBG.ini",
+                                                     "kind":  "inactiveConfig"
+                                                 },
+                                                 {
+                                                     "relativePath":  "Settings\\Settings.ini",
+                                                     "kind":  "settingsAnchor"
+                                                 },
+                                                 {
+                                                     "relativePath":  "Diagnostics\\Diagnostics.ini",
+                                                     "kind":  "inactiveConfig"
+                                                 },
+                                                 {
+                                                     "relativePath":  "Modal\\Modal.ini",
+                                                     "kind":  "inactiveConfig"
+                                                 },
+                                                 {
+                                                     "relativePath":  "Bootstrap\\ZPosBootstrap.ini",
+                                                     "kind":  "bootstrapHandoff",
+                                                     "canonicalConfig":  "Utilities\\Bootstrap"
+                                                 },
+                                                 {
+                                                     "relativePath":  "tools\\ImportFromOldVersion.ps1",
+                                                     "kind":  "importWrapper"
+                                                 }
+                                             ]
+                               }
+}

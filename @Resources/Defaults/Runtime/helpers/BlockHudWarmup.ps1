@@ -97,7 +97,6 @@ function Get-ManagerScriptFiles {
 
     $relativeFiles = @(
         'ImportFromOldVersion.ps1',
-        'ImportFromOldVersionLauncher.ps1',
         'OpenSettingsLogFolder.ps1',
         'OpenVersionManager.ps1',
         'UpdateHelperLocalizationCache.ps1',
@@ -105,6 +104,7 @@ function Get-ManagerScriptFiles {
         'GetVersionReleaseCatalog.ps1',
         'InstallVersionRelease.ps1',
         'SwitchActiveSkinVersion.ps1',
+        'Remove-LegacyLayoutTransportAdapter.ps1',
         'VersionManager.ReleaseCatalog.ps1',
         'VersionManager.UiState.ps1',
         'VersionManager.UpdateCache.ps1',
@@ -112,14 +112,14 @@ function Get-ManagerScriptFiles {
         'Localization.Common.ps1'
     )
     $relativeRoots = @(
-        'tools\ImportFromOldVersion',
-        'tools\OpenVersionManager',
-        'tools\UpdateToLatestVersion'
+        'Utilities\tools\ImportFromOldVersion',
+        'Utilities\tools\OpenVersionManager',
+        'Utilities\tools\UpdateToLatestVersion'
     )
 
     $files = New-Object System.Collections.Generic.List[System.IO.FileInfo]
     foreach ($relativeFile in $relativeFiles) {
-        $path = Join-RootPath -RootPath $RootPath -RelativePath ("tools\{0}" -f $relativeFile)
+        $path = Join-RootPath -RootPath $RootPath -RelativePath ("Utilities\tools\{0}" -f $relativeFile)
         if ([System.IO.File]::Exists($path)) {
             [void]$files.Add([System.IO.FileInfo]::new($path))
         }
@@ -188,8 +188,8 @@ try {
         'core' {
             Invoke-ParseWarmup -Files @(Get-ExistingScriptFiles -RootPath $rootPath -RelativeRoots @(
                 '@Resources\Defaults\Runtime\helpers',
-                'Settings',
-                'Editor'
+                'HUD\Settings',
+                'HUD\Editor'
             ))
         }
         'extras' {
