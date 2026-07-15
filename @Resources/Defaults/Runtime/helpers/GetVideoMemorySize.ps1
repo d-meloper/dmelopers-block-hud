@@ -71,21 +71,6 @@ try {
         $total += [uint64]$value
     }
 
-    if ($total -le 0) {
-        $seen = @{}
-        Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object {
-            $name = [string]($_.PNPDeviceID)
-            if ([string]::IsNullOrWhiteSpace($name)) {
-                $name = [string]($_.Name)
-            }
-            $candidate = Convert-DwordValue $_.AdapterRAM
-            if ($candidate -gt 0 -and -not $seen.ContainsKey($name)) {
-                $seen[$name] = $true
-                $total += [uint64]$candidate
-            }
-        }
-    }
-
     [Console]::Out.WriteLine([string]$total)
 } catch {
     [Console]::Out.WriteLine('0')

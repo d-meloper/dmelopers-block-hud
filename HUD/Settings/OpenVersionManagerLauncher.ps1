@@ -96,6 +96,59 @@ function Emit-LauncherSuccess {
     }
 }
 
+function Read-LaunchStateJsonShared {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 6; $attempt++) {
+        try {
+            $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+            $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
+            try {
+                $reader = New-Object System.IO.StreamReader($stream, $utf8NoBom, $true)
+                try {
+                    $raw = $reader.ReadToEnd()
+                }
+                finally {
+                    $reader.Dispose()
+                    $stream = $null
+                }
+            }
+            finally {
+                if ($null -ne $stream) {
+                    $stream.Dispose()
+                }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($raw)) {
+                return $null
+            }
+            return ($raw | ConvertFrom-Json)
+        }
+        catch [System.IO.IOException] {
+            $lastError = $_
+        }
+        catch [System.UnauthorizedAccessException] {
+            $lastError = $_
+        }
+        catch {
+            $lastError = $_
+            if ($attempt -ge 6) {
+                throw
+            }
+        }
+
+        if ($attempt -lt 6) {
+            Start-Sleep -Milliseconds ([Math]::Min(180, 30 * $attempt))
+        }
+    }
+
+    if ($null -ne $lastError) {
+        throw $lastError
+    }
+    return $null
+}
+
 function Test-LaunchStateShown {
     try {
         $resolvedTargetRoot = [System.IO.Path]::GetFullPath($TargetRoot)
@@ -103,7 +156,10 @@ function Test-LaunchStateShown {
         if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
             return $false
         }
-        $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $state = Read-LaunchStateJsonShared -Path $statePath
+        if ($null -eq $state) {
+            return $false
+        }
         $status = [string]$state.Status
         $token = [string]$state.LaunchToken
         if (-not [string]::Equals($status, 'shown', [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -144,10 +200,51 @@ function Get-HelperParameterSet {
     return ,$result
 }
 
-function ConvertTo-PowerShellSingleQuotedLiteral {
+function ConvertTo-WindowsCommandLineArgument {
     param([AllowNull()][string]$Value)
 
-    return "'" + ([string]$Value).Replace("'", "''") + "'"
+    $text = [string]$Value
+    if ($text.Length -eq 0) {
+        return '""'
+    }
+    if ($text.IndexOfAny([char[]]@(' ', "`t", "`r", "`n", '"')) -lt 0) {
+        return $text
+    }
+
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashes = 0
+    foreach ($character in $text.ToCharArray()) {
+        if ($character -eq '\') {
+            $backslashes++
+            continue
+        }
+        if ($character -eq '"') {
+            [void]$builder.Append(('\' * (($backslashes * 2) + 1)))
+            [void]$builder.Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$builder.Append(('\' * $backslashes))
+            $backslashes = 0
+        }
+        [void]$builder.Append($character)
+    }
+    if ($backslashes -gt 0) {
+        [void]$builder.Append(('\' * ($backslashes * 2)))
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Join-WindowsCommandLineArguments {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    $quoted = foreach ($argument in $Arguments) {
+        ConvertTo-WindowsCommandLineArgument -Value $argument
+    }
+    return ($quoted -join ' ')
 }
 
 function Get-PowerShellExecutablePath {
@@ -156,22 +253,13 @@ function Get-PowerShellExecutablePath {
         return $runtimeHost
     }
 
-    $candidate = Join-Path $PSHOME 'powershell.exe'
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-        return $candidate
+    $skinRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+    $packagedHost = Join-Path $skinRoot '@Resources\Defaults\Runtime\helpers\BlockHudPowerShellHost.exe'
+    if (Test-Path -LiteralPath $packagedHost -PathType Leaf) {
+        return $packagedHost
     }
 
-    $windowsPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    if (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf) {
-        return $windowsPowerShell
-    }
-
-    $command = Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue
-    if ($command -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
-        return $command.Source
-    }
-
-    throw 'powershell.exe could not be located.'
+    throw 'BlockHudPowerShellHost.exe could not be located.'
 }
 
 function Invoke-HelperProcess {
@@ -180,20 +268,19 @@ function Invoke-HelperProcess {
         [Parameter(Mandatory = $true)][hashtable]$Parameters
     )
 
-    $command = '$ProgressPreference = ''SilentlyContinue''; & ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $HelperPath)
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $HelperPath)
     foreach ($name in @('TargetRoot', 'LaunchToken', 'InitialAction')) {
         if ($Parameters.ContainsKey($name)) {
-            $command += ' -' + $name + ' ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value ([string]$Parameters[$name]))
+            $arguments += @('-' + $name, [string]$Parameters[$name])
         }
     }
     if ($Parameters.ContainsKey('EmitResultPairs') -and [bool]$Parameters['EmitResultPairs']) {
-        $command += ' -EmitResultPairs'
+        $arguments += '-EmitResultPairs'
     }
 
-    $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = Get-PowerShellExecutablePath
-    $startInfo.Arguments = '-NoProfile -ExecutionPolicy Bypass -EncodedCommand ' + $encodedCommand
+    $startInfo.Arguments = Join-WindowsCommandLineArguments -Arguments $arguments
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true

@@ -141,6 +141,7 @@ function resetExternalCommandWatch()
     externalPlaybackState.commandWatch.bestEffort = false
     externalPlaybackState.commandWatch.reconnectRetry = false
     externalPlaybackState.commandWatch.waitingForReconnect = false
+    externalPlaybackState.commandWatch.toggleFallbackTried = false
     JukeboxScheduler.externalCommandWatchdog = false
     syncJukeboxRuntimeDriver()
 end
@@ -1047,7 +1048,7 @@ end
 local showCurrentExternalPlaybackHotbarText
 showExternalPlayerUnavailable = nil
 
-function beginExternalCommandWatch(command, valueText, supportFlag, supportValue, bestEffort, reconnectRetry)
+function beginExternalCommandWatch(command, valueText, supportFlag, supportValue, bestEffort, reconnectRetry, toggleFallbackTried)
     externalPlaybackState.commandWatch.active = true
     externalPlaybackState.commandWatch.command = trim(command)
     externalPlaybackState.commandWatch.valueText = trim(valueText)
@@ -1060,6 +1061,7 @@ function beginExternalCommandWatch(command, valueText, supportFlag, supportValue
     externalPlaybackState.commandWatch.bestEffort = bestEffort and true or false
     externalPlaybackState.commandWatch.reconnectRetry = reconnectRetry and true or false
     externalPlaybackState.commandWatch.waitingForReconnect = false
+    externalPlaybackState.commandWatch.toggleFallbackTried = toggleFallbackTried and true or false
     JukeboxScheduler.externalCommandWatchdog = true
     syncJukeboxRuntimeDriver()
 end
@@ -1134,6 +1136,42 @@ function requestExternalBridgeReconnect(command, valueText)
     return true
 end
 
+local function requestExternalPlayPauseFallback(previousCommand)
+    previousCommand = trim(previousCommand)
+    if previousCommand ~= 'Play' and previousCommand ~= 'Pause' then
+        return false
+    end
+    if externalPlaybackState.commandWatch.toggleFallbackTried then
+        return false
+    end
+    if not externalPlaybackConnected() then
+        return false
+    end
+
+    local fallbackCommand = 'PlayPause'
+    local supportFlag, supportValue, supported, bestEffort = externalCommandSupportState(fallbackCommand)
+    if not supported then
+        return false
+    end
+
+    local sent = commandMeasureForActiveConfig('MeasureWebNowPlayingBridge', string.format('SendCommand(%q,%q)', fallbackCommand, ''), webNowPlayingBridgeConfigName())
+    if not sent then
+        return false
+    end
+
+    logExternalCommandThrottled(
+        externalCommandLogKey('toggle-fallback', previousCommand, trim(externalPlaybackState.player)),
+        'Jukebox WebNowPlaying command fallback sent after no observable state change: original=' .. previousCommand
+            .. ' fallback=' .. fallbackCommand
+            .. ' player=' .. trim(externalPlaybackState.player)
+            .. ' support=' .. trim(supportFlag) .. '=' .. trim(supportValue)
+            .. ' bestEffort=' .. (bestEffort and '1' or '0'),
+        'Warning',
+        5)
+    beginExternalCommandWatch(fallbackCommand, '', supportFlag, supportValue, bestEffort, externalPlaybackState.commandWatch.reconnectRetry, true)
+    return true
+end
+
 function tickExternalCommandWatchdog()
     if not externalPlaybackState.commandWatch.active then
         JukeboxScheduler.externalCommandWatchdog = false
@@ -1152,6 +1190,9 @@ function tickExternalCommandWatchdog()
         .. ' support=' .. trim(externalPlaybackState.commandWatch.supportFlag) .. '=' .. trim(externalPlaybackState.commandWatch.supportValue)
         .. ' bestEffort=' .. (externalPlaybackState.commandWatch.bestEffort and '1' or '0')
     local command = externalPlaybackState.commandWatch.command
+    if requestExternalPlayPauseFallback(command) then
+        return true
+    end
     if not externalPlaybackState.commandWatch.reconnectRetry and requestExternalBridgeReconnect(command, externalPlaybackState.commandWatch.valueText) then
         externalPlaybackState.commandWatch.ticks = 0
         externalPlaybackState.commandWatch.reconnectRetry = true

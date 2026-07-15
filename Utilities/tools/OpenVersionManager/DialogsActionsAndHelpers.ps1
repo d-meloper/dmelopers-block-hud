@@ -339,27 +339,23 @@ function Invoke-VersionReleaseCatalog {
         throw (T 'Helper_VersionManager_Update_VersionCatalogBackendRequired' (U '\uBC84\uC804 \uBAA9\uB85D \uC870\uD68C/\uC124\uCE58 \uBC31\uC5D4\uB4DC\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.'))
     }
 
-    $outputPath = Join-Path ([System.IO.Path]::GetTempPath()) ('DMeloperVersionCatalog_{0}_{1}.json' -f $PID, [System.Guid]::NewGuid().ToString('N'))
-    $errorPath = $outputPath + '.error'
-    $command = '$ProgressPreference = ''SilentlyContinue''; & ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $catalogScript) +
-        ' -CurrentTargetRoot ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $Root) +
-        ' -OutputJson -SyncUpdateCache' +
-        $(if ($ForceRefresh) { '' } else { ' -PreferFreshCache' })
-    $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encodedCommand)
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $catalogScript, '-CurrentTargetRoot', $Root, '-OutputJson', '-SyncUpdateCache')
+    if (-not $ForceRefresh) {
+        $arguments += '-PreferFreshCache'
+    }
 
     $process = $null
     $exitCode = $null
     $jsonText = ''
     $errorText = ''
     try {
-        $process = Start-Process `
-            -FilePath (Get-PowerShellExecutablePath) `
-            -ArgumentList $arguments `
-            -WindowStyle Hidden `
-            -RedirectStandardOutput $outputPath `
-            -RedirectStandardError $errorPath `
-            -PassThru
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = New-VersionManagerHostProcessStartInfo -Arguments $arguments -RedirectOutput
+        if (-not $process.Start()) {
+            throw 'Version catalog helper process could not be started.'
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         $deadline = [DateTime]::UtcNow.AddSeconds($ProcessTimeoutSeconds)
         while (-not $process.WaitForExit(50)) {
             [System.Windows.Forms.Application]::DoEvents()
@@ -385,24 +381,13 @@ function Invoke-VersionReleaseCatalog {
         if ($null -ne $candidateExitCode) {
             $exitCode = [int]$candidateExitCode
         }
-        $jsonText = if (Test-Path -LiteralPath $outputPath -PathType Leaf) {
-            [System.IO.File]::ReadAllText($outputPath, $script:Utf8NoBom).Trim()
-        }
-        else {
-            ''
-        }
-        $errorText = if (Test-Path -LiteralPath $errorPath -PathType Leaf) {
-            [System.IO.File]::ReadAllText($errorPath, $script:Utf8NoBom).Trim()
-        }
-        else {
-            ''
-        }
+        $jsonText = ([string]$stdoutTask.Result).Trim()
+        $errorText = ([string]$stderrTask.Result).Trim()
     }
     finally {
         if ($null -ne $process) {
             $process.Dispose()
         }
-        Remove-Item -LiteralPath $outputPath, $errorPath -Force -ErrorAction SilentlyContinue
     }
     if ([string]::IsNullOrWhiteSpace($jsonText)) {
         throw ("Version catalog helper did not emit JSON. {0}" -f $errorText)
@@ -443,37 +428,30 @@ function Invoke-VersionReleaseInstall {
         throw (T 'Helper_VersionManager_Update_VersionCatalogBackendRequired' (U '\uBC84\uC804 \uBAA9\uB85D \uC870\uD68C/\uC124\uCE58 \uBC31\uC5D4\uB4DC\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.'))
     }
 
-    $command = '$ProgressPreference = ''SilentlyContinue''; & ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $installScript) +
-        ' -CurrentTargetRoot ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $Root) +
-        ' -EmitResultPairs'
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $installScript, '-CurrentTargetRoot', $Root, '-EmitResultPairs')
     if (-not [string]::IsNullOrWhiteSpace($SelectedTargetRoot)) {
-        $command += ' -SelectedTargetRoot ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $SelectedTargetRoot)
+        $arguments += @('-SelectedTargetRoot', $SelectedTargetRoot)
     }
     else {
-        $command += ' -PackageUrl ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $PackageUrl) +
-            ' -ExpectedVersion ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $ExpectedVersion)
+        $arguments += @('-PackageUrl', $PackageUrl, '-ExpectedVersion', $ExpectedVersion)
         if ($AllowCompatibilityWarning) {
-            $command += ' -AllowCompatibilityWarning'
+            $arguments += '-AllowCompatibilityWarning'
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedReleaseVariant)) {
-        $command += ' -ExpectedReleaseVariant ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $ExpectedReleaseVariant)
+        $arguments += @('-ExpectedReleaseVariant', $ExpectedReleaseVariant)
     }
-    $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encodedCommand)
-    $outputPath = Join-Path ([System.IO.Path]::GetTempPath()) ('DMeloperVersionInstall_{0}_{1}.out' -f $PID, [System.Guid]::NewGuid().ToString('N'))
-    $errorPath = $outputPath + '.error'
     $process = $null
     $exitCode = $null
     $output = @()
     try {
-        $process = Start-Process `
-            -FilePath (Get-PowerShellExecutablePath) `
-            -ArgumentList $arguments `
-            -WindowStyle Hidden `
-            -RedirectStandardOutput $outputPath `
-            -RedirectStandardError $errorPath `
-            -PassThru
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = New-VersionManagerHostProcessStartInfo -Arguments $arguments -RedirectOutput
+        if (-not $process.Start()) {
+            throw 'Version install helper process could not be started.'
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         while (-not $process.WaitForExit(100)) {
             [System.Windows.Forms.Application]::DoEvents()
         }
@@ -482,25 +460,14 @@ function Invoke-VersionReleaseInstall {
         if ($null -ne $candidateExitCode) {
             $exitCode = [int]$candidateExitCode
         }
-        $outputLines = if (Test-Path -LiteralPath $outputPath -PathType Leaf) {
-            @([System.IO.File]::ReadAllLines($outputPath, $script:Utf8NoBom))
-        }
-        else {
-            @()
-        }
-        $errorLines = if (Test-Path -LiteralPath $errorPath -PathType Leaf) {
-            @([System.IO.File]::ReadAllLines($errorPath, $script:Utf8NoBom))
-        }
-        else {
-            @()
-        }
+        $outputLines = @(([string]$stdoutTask.Result) -split "\r?\n" | Where-Object { $_ -ne '' })
+        $errorLines = @(([string]$stderrTask.Result) -split "\r?\n" | Where-Object { $_ -ne '' })
         $output = @($outputLines + $errorLines)
     }
     finally {
         if ($null -ne $process) {
             $process.Dispose()
         }
-        Remove-Item -LiteralPath $outputPath, $errorPath -Force -ErrorAction SilentlyContinue
     }
     $pairs = Convert-VersionManagerOutputToResultPairs -Output $output
     $status = [string]($pairs['DMEL_STATUS'])
@@ -559,29 +526,38 @@ function Invoke-ClearDownloadCache {
 function Get-VersionManagerSessionProcesses {
     param([Parameter(Mandatory = $true)][string]$ResolvedTargetRoot)
 
-    $scriptPath = Get-VersionManagerEntrypointPath
-    $rootPattern = [regex]::Escape($ResolvedTargetRoot)
-    $scriptPattern = [regex]::Escape($scriptPath)
-    $windowFlagPattern = '(?i)(^|[\s"''])-WindowSession($|[\s"''])'
-
-    $sessions = @()
     try {
-        $sessions = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -OperationTimeoutSec 2 -ErrorAction Stop | Where-Object {
-            $commandLine = [string](Get-ObjectPropertyValue -Object $_ -Name 'CommandLine' -DefaultValue '')
-            if ([string]::IsNullOrWhiteSpace($commandLine)) {
-                return $false
-            }
-            return (
-                ($commandLine -match $scriptPattern) -and
-                ($commandLine -match $rootPattern) -and
-                ($commandLine -match $windowFlagPattern)
-            )
-        })
+        $state = Read-JsonFile -Path (Get-VersionManagerLaunchStatePath -Root $ResolvedTargetRoot)
+        if ($null -eq $state) {
+            return @()
+        }
+
+        $status = [string](Get-ObjectPropertyValue -Object $state -Name 'Status' -DefaultValue '')
+        if ($status -notin @('launching', 'initializing', 'shown')) {
+            return @()
+        }
+
+        $processId = [int](Get-ObjectPropertyValue -Object $state -Name 'ProcessId' -DefaultValue 0)
+        if ($processId -le 0 -or $processId -eq $PID) {
+            return @()
+        }
+
+        $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+        if ($null -eq $process) {
+            return @()
+        }
+
+        if ($process.ProcessName -notin @('BlockHudPowerShellHost', 'powershell', 'pwsh')) {
+            Write-Log ("Skipping existing version manager session cleanup because launch-state PID {0} is now '{1}'." -f $processId, $process.ProcessName) 'WARN'
+            return @()
+        }
+
+        return @($process)
     }
     catch {
-        Write-Log ("Skipping existing version manager session cleanup after process query failed: {0}" -f $_.Exception.Message) 'WARN'
+        Write-Log ("Skipping existing version manager session cleanup after launch-state check failed: {0}" -f $_.Exception.Message) 'WARN'
     }
-    return $sessions
+    return @()
 }
 
 function Stop-VersionManagerSessions {
@@ -589,7 +565,7 @@ function Stop-VersionManagerSessions {
 
     foreach ($process in @(Get-VersionManagerSessionProcesses -ResolvedTargetRoot $ResolvedTargetRoot)) {
         try {
-            $processId = [int](Get-ObjectPropertyValue -Object $process -Name 'ProcessId' -DefaultValue 0)
+            $processId = [int]$process.Id
             if ($processId -le 0) {
                 continue
             }
@@ -618,35 +594,34 @@ function Start-VersionManagerLauncherForRoot {
 
     $script:LogPath = Get-BlockHudCanonicalLogPath -Root $resolvedTargetRoot -ScriptRoot (Get-VersionManagerToolsRoot)
     Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value $script:LogPath
-    Save-VersionManagerLaunchState -Root $resolvedTargetRoot -Status 'launching' -LaunchTokenValue $LaunchToken
 
     Write-VersionManagerLaunchDiagnostic -Root $resolvedTargetRoot -Stage 'launcher-before-session-cleanup' -LaunchTokenValue $LaunchToken -Details @(
         ('script={0}' -f (Get-VersionManagerEntrypointPath))
     )
     Stop-VersionManagerSessions -ResolvedTargetRoot $resolvedTargetRoot
     Write-VersionManagerLaunchDiagnostic -Root $resolvedTargetRoot -Stage 'launcher-after-session-cleanup' -LaunchTokenValue $LaunchToken
+    Save-VersionManagerLaunchState -Root $resolvedTargetRoot -Status 'launching' -LaunchTokenValue $LaunchToken
 
     $powershellExe = Get-PowerShellExecutablePath
-    $command = '& ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value (Get-VersionManagerEntrypointPath)) +
-        ' -TargetRoot ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $resolvedTargetRoot) +
-        ' -WindowSession' +
-        $(if ([string]::IsNullOrWhiteSpace($LaunchToken)) { '' } else { ' -LaunchToken ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $LaunchToken) }) +
-        $(if ([string]::IsNullOrWhiteSpace($InitialAction)) { '' } else { ' -InitialAction ' + (ConvertTo-PowerShellSingleQuotedLiteral -Value $InitialAction) })
-    $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
     $argumentList = @(
         '-NoProfile'
         '-ExecutionPolicy'
         'Bypass'
         '-STA'
-        '-EncodedCommand'
-        $encodedCommand
+        '-File'
+        (Get-VersionManagerEntrypointPath)
+        '-TargetRoot'
+        $resolvedTargetRoot
+        '-WindowSession'
     )
+    if (-not [string]::IsNullOrWhiteSpace($LaunchToken)) {
+        $argumentList += @('-LaunchToken', $LaunchToken)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($InitialAction)) {
+        $argumentList += @('-InitialAction', $InitialAction)
+    }
 
-    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $startInfo.FileName = $powershellExe
-    $startInfo.Arguments = ($argumentList -join ' ')
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
+    $startInfo = New-VersionManagerHostProcessStartInfo -Arguments $argumentList
     $startedProcess = [System.Diagnostics.Process]::Start($startInfo)
     if ($null -eq $startedProcess) {
         throw 'The Skin manager window session process could not be started.'

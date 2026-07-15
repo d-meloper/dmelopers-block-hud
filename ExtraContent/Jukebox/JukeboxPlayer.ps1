@@ -21,7 +21,7 @@ $script:ResultPairs = [ordered]@{
     DMEL_EVENT   = '0'
     DMEL_AUDIOFILE = ''
 }
-$script:ServerLaunchContractVersion = 'repeat-reopen-v3'
+$script:ServerLaunchContractVersion = 'repeat-reopen-v4'
 $script:LastHeartbeatUnixSeconds = 0
 
 try {
@@ -410,6 +410,21 @@ function Test-ProcessAlive {
     }
 }
 
+function Get-ProcessStartTimeUtcText {
+    param([int]$ProcessId)
+
+    if ($ProcessId -le 0) {
+        return ''
+    }
+    try {
+        $process = Get-Process -Id $ProcessId -ErrorAction Stop
+        return $process.StartTime.ToUniversalTime().ToString('o')
+    }
+    catch {
+        return ''
+    }
+}
+
 function Get-ServerProcessId {
     $pidFile = Get-PidFilePath
     if (-not [System.IO.File]::Exists($pidFile)) {
@@ -427,19 +442,38 @@ function Get-ServerProcessId {
 function Get-ServerLaunchContract {
     $path = Get-ServerLaunchContractPath
     if (-not [System.IO.File]::Exists($path)) {
-        return ''
+        return $null
     }
     try {
-        return ([System.IO.File]::ReadAllText($path, $script:Utf8NoBom)).Trim()
+        $raw = ([System.IO.File]::ReadAllText($path, $script:Utf8NoBom)).Trim()
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            return $null
+        }
+        if ($raw.StartsWith('{', [System.StringComparison]::Ordinal)) {
+            return $raw | ConvertFrom-Json
+        }
+        return [PSCustomObject]@{
+            Version = $raw
+            ProcessId = 0
+            Token = ''
+            ProcessStartTimeUtc = ''
+        }
     }
     catch {
-        return ''
+        return $null
     }
 }
 
 function Write-ServerLaunchContract {
     Ensure-InstanceDirectories
-    [System.IO.File]::WriteAllText((Get-ServerLaunchContractPath), $script:ServerLaunchContractVersion, $script:Utf8NoBom)
+    $contract = [ordered]@{
+        Version = $script:ServerLaunchContractVersion
+        ProcessId = [int]$PID
+        Token = [Guid]::NewGuid().ToString('N')
+        ProcessStartTimeUtc = Get-ProcessStartTimeUtcText -ProcessId ([int]$PID)
+    }
+    $json = $contract | ConvertTo-Json -Compress
+    [System.IO.File]::WriteAllText((Get-ServerLaunchContractPath), $json, $script:Utf8NoBom)
 }
 
 function Clear-ServerLaunchContract {
@@ -463,12 +497,36 @@ function Clear-ServerHeartbeat {
 }
 
 function Test-ServerLaunchContractCurrent {
-    return [string]::Equals((Get-ServerLaunchContract), $script:ServerLaunchContractVersion, [System.StringComparison]::Ordinal)
+    param([int]$ProcessId = 0)
+
+    $contract = Get-ServerLaunchContract
+    if ($null -eq $contract) {
+        return $false
+    }
+    if (-not [string]::Equals([string]$contract.Version, $script:ServerLaunchContractVersion, [System.StringComparison]::Ordinal)) {
+        return $false
+    }
+    if ($ProcessId -le 0) {
+        return $true
+    }
+    if ([int]$contract.ProcessId -ne $ProcessId) {
+        return $false
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$contract.Token)) {
+        return $false
+    }
+
+    $expectedStartTimeUtc = [string]$contract.ProcessStartTimeUtc
+    if ([string]::IsNullOrWhiteSpace($expectedStartTimeUtc)) {
+        return $false
+    }
+    $actualStartTimeUtc = Get-ProcessStartTimeUtcText -ProcessId $ProcessId
+    return [string]::Equals($actualStartTimeUtc, $expectedStartTimeUtc, [System.StringComparison]::Ordinal)
 }
 
 function Reset-LegacyServerIfNeeded {
     $serverPid = Get-ServerProcessId
-    if ($serverPid -le 0 -or (Test-ServerLaunchContractCurrent)) {
+    if ($serverPid -le 0 -or (Test-ServerLaunchContractCurrent -ProcessId $serverPid)) {
         return
     }
 
@@ -514,7 +572,6 @@ function Start-ServerProcess {
     $powerShellPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
     $arguments = @(
         '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-STA',
         '-ExecutionPolicy', 'Bypass',
         '-File', $PSCommandPath,

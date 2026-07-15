@@ -175,6 +175,7 @@ local externalPlaybackState = {
         bestEffort = false,
         reconnectRetry = false,
         waitingForReconnect = false,
+        toggleFallbackTried = false,
     },
     commandLogTimes = {},
 }

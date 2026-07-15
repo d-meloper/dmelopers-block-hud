@@ -726,10 +726,6 @@ function Get-VersionReleaseCatalog {
         if ($null -ne $freshCachedCatalog) {
             return (Update-CachedReleaseCatalogLocalState -Root $resolvedRoot -Catalog $freshCachedCatalog -Config $config)
         }
-        if ($null -ne $script:CompatibleCachedCatalog) {
-            Set-VersionManagerObjectPropertyValue -Object $script:CompatibleCachedCatalog -Name 'catalog_cache_stale' -Value $true
-            return (Update-CachedReleaseCatalogLocalState -Root $resolvedRoot -Catalog $script:CompatibleCachedCatalog -Config $config)
-        }
     }
 
     $releases = @(Invoke-GitHubReleaseCatalogRequest -Owner ([string]$config.Owner) -Repo ([string]$config.Repo))

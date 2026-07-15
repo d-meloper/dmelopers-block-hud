@@ -96,13 +96,6 @@ return function(app)
         options = options or {}
         if not SKIN:GetMeasure(tostring(measureName or '')) then
             logNotice('Settings detached helper run measure is missing: ' .. tostring(measureName or ''))
-            if methods.ShowModalAlertByKeys and trim(helperKind or '') == 'openLogFolder' then
-                methods.ShowModalAlertByKeys(
-                    'error',
-                    'ModalAlert_OpenLogFailed',
-                    'The log folder could not be opened. Check whether File Explorer is working normally.'
-                )
-            end
             return false
         end
 

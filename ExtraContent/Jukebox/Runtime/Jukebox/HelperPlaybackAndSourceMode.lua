@@ -213,6 +213,9 @@ end
 showExternalPlayerUnavailable = function(reason, command)
     reason = trim(reason)
     command = trim(command)
+    if reason:lower() == 'no-observable-change' then
+        return false
+    end
     local key = externalUnavailableAlertKey(reason, command)
     local placeholders = nil
     if key == 'ModalAlert_JukeboxExternalCommandUnsupported'

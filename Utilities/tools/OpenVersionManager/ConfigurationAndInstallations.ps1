@@ -338,7 +338,19 @@ function Save-UpdateConfiguration {
 function Read-SourceRegistry {
     param([Parameter(Mandatory = $true)][string]$Root)
 
-    $value = Read-JsonFile -Path (Get-SourceRegistryPath -Root $Root)
+    $path = Get-SourceRegistryPath -Root $Root
+    try {
+        $value = Read-JsonFile -Path $path
+    }
+    catch {
+        try {
+            Write-Log -Level 'WARN' -Message ("Ignoring unreadable version manager source registry '{0}': {1}" -f $path, $_.Exception.Message)
+        }
+        catch {
+        }
+        return @()
+    }
+
     if ($null -eq $value) {
         return @()
     }
