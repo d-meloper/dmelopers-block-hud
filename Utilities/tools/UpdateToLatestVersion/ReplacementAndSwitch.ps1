@@ -379,22 +379,87 @@ function Get-UpdateRuntimePowerShellPath {
         return $runtimeHost
     }
 
-    $candidate = Join-Path $PSHOME 'powershell.exe'
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-        return $candidate
+    $moduleRootVariable = Get-Variable -Scope Script -Name 'ModuleRoot' -ErrorAction SilentlyContinue
+    $moduleRoot = if ($null -ne $moduleRootVariable -and -not [string]::IsNullOrWhiteSpace([string]$moduleRootVariable.Value)) {
+        [string]$moduleRootVariable.Value
+    }
+    else {
+        $PSScriptRoot
+    }
+    $toolsRoot = Split-Path -Parent $moduleRoot
+    $skinRoot = [System.IO.Path]::GetFullPath((Join-Path $toolsRoot '..\..'))
+    $packagedHost = Join-Path $skinRoot '@Resources\Defaults\Runtime\helpers\BlockHudPowerShellHost.exe'
+    if (Test-Path -LiteralPath $packagedHost -PathType Leaf) {
+        return $packagedHost
     }
 
-    $windowsPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    if (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf) {
-        return $windowsPowerShell
+    throw 'BlockHudPowerShellHost.exe could not be located.'
+}
+
+function ConvertTo-WindowsCommandLineArgument {
+    param([AllowNull()][string]$Value)
+
+    $text = [string]$Value
+    if ($text.Length -eq 0) {
+        return '""'
+    }
+    if ($text.IndexOfAny([char[]]@(' ', "`t", "`r", "`n", '"')) -lt 0) {
+        return $text
     }
 
-    $command = Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue
-    if ($command -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
-        return $command.Source
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashes = 0
+    foreach ($character in $text.ToCharArray()) {
+        if ($character -eq '\') {
+            $backslashes++
+            continue
+        }
+        if ($character -eq '"') {
+            [void]$builder.Append(('\' * (($backslashes * 2) + 1)))
+            [void]$builder.Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$builder.Append(('\' * $backslashes))
+            $backslashes = 0
+        }
+        [void]$builder.Append($character)
     }
+    if ($backslashes -gt 0) {
+        [void]$builder.Append(('\' * ($backslashes * 2)))
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
 
-    throw 'powershell.exe could not be located.'
+function Join-WindowsCommandLineArguments {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    $quoted = foreach ($argument in $Arguments) {
+        ConvertTo-WindowsCommandLineArgument -Value $argument
+    }
+    return ($quoted -join ' ')
+}
+
+function Start-DetachedRuntimeHostScript {
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $argumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $Arguments
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = Get-UpdateRuntimePowerShellPath
+    $startInfo.Arguments = Join-WindowsCommandLineArguments -Arguments $argumentList
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    if ($null -eq $process) {
+        throw "Detached runtime helper could not be started: $ScriptPath"
+    }
+    $process.Dispose()
 }
 
 function Invoke-HelperScript {
@@ -518,18 +583,6 @@ function Resolve-SwitchScript {
     throw 'SwitchActiveSkinVersion.ps1 was not found in the selected or current root.'
 }
 
-function ConvertTo-EncodedCommand {
-    param([Parameter(Mandatory = $true)][string]$Command)
-
-    return [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($Command))
-}
-
-function Escape-SingleQuotedString {
-    param([AllowNull()][string]$Value)
-
-    return ([string]$Value).Replace("'", "''")
-}
-
 function Invoke-DetachedOldRootCleanup {
     param(
         [Parameter(Mandatory = $true)][string]$OldRoot,
@@ -631,14 +684,12 @@ catch {
 
     [System.IO.File]::WriteAllText($runnerPath, $runner, $script:Utf8NoBom)
 
-    $command = "& '{0}' -OldRoot '{1}' -SkinsRoot '{2}' -ResultPath '{3}' -CleanupTimeoutSeconds {4}" -f `
-        (Escape-SingleQuotedString -Value $runnerPath),
-        (Escape-SingleQuotedString -Value $OldRoot),
-        (Escape-SingleQuotedString -Value $SkinsRoot),
-        (Escape-SingleQuotedString -Value $resultPath),
-        $CleanupTimeoutSeconds
-    $encoded = ConvertTo-EncodedCommand -Command $command
-    Start-Process -FilePath (Get-UpdateRuntimePowerShellPath) -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded) -WindowStyle Hidden | Out-Null
+    Start-DetachedRuntimeHostScript -ScriptPath $runnerPath -Arguments @(
+        '-OldRoot', $OldRoot,
+        '-SkinsRoot', $SkinsRoot,
+        '-ResultPath', $resultPath,
+        '-CleanupTimeoutSeconds', [string]$CleanupTimeoutSeconds
+    )
 
     $deadline = [DateTime]::UtcNow.AddSeconds($ResultTimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
@@ -767,15 +818,13 @@ catch {
 
     [System.IO.File]::WriteAllText($runnerPath, $runner, $script:Utf8NoBom)
 
-    $command = "& '{0}' -Root '{1}' -TempRoot '{2}' -Reason '{3}' -ResultPath '{4}' -CleanupTimeoutSeconds {5}" -f `
-        (Escape-SingleQuotedString -Value $runnerPath),
-        (Escape-SingleQuotedString -Value $resolvedRoot),
-        (Escape-SingleQuotedString -Value $tempRoot),
-        (Escape-SingleQuotedString -Value $Reason),
-        (Escape-SingleQuotedString -Value $resultPath),
-        $CleanupTimeoutSeconds
-    $encoded = ConvertTo-EncodedCommand -Command $command
-    Start-Process -FilePath (Get-UpdateRuntimePowerShellPath) -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded) -WindowStyle Hidden | Out-Null
+    Start-DetachedRuntimeHostScript -ScriptPath $runnerPath -Arguments @(
+        '-Root', $resolvedRoot,
+        '-TempRoot', $tempRoot,
+        '-Reason', $Reason,
+        '-ResultPath', $resultPath,
+        '-CleanupTimeoutSeconds', [string]$CleanupTimeoutSeconds
+    )
 
     $deadline = [DateTime]::UtcNow.AddSeconds($ResultTimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {

@@ -70,21 +70,74 @@ function Remove-HelperStateFiles {
     }
 }
 
-function Test-JukeboxPlayerProcess {
-    param(
-        [Parameter(Mandatory = $true)][int]$ProcessId,
-        [AllowNull()][string]$CommandLine
-    )
+function Get-ProcessStartTimeUtcText {
+    param([int]$ProcessId)
 
-    $command = [string]$CommandLine
-    if ($command.IndexOf('JukeboxPlayer.ps1', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-        $command.IndexOf('Serve', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
-        return $true
+    if ($ProcessId -le 0) {
+        return ''
+    }
+    try {
+        $process = Get-Process -Id $ProcessId -ErrorAction Stop
+        return $process.StartTime.ToUniversalTime().ToString('o')
+    }
+    catch {
+        return ''
+    }
+}
+
+function Get-ServerLaunchContract {
+    param([Parameter(Mandatory = $true)][string]$InstanceRoot)
+
+    $path = [System.IO.Path]::Combine($InstanceRoot, 'server.launch')
+    if (-not [System.IO.File]::Exists($path)) {
+        return $null
     }
 
     try {
+        $raw = ([System.IO.File]::ReadAllText($path, $script:Utf8NoBom)).Trim()
+        if ([string]::IsNullOrWhiteSpace($raw) -or -not $raw.StartsWith('{', [System.StringComparison]::Ordinal)) {
+            return $null
+        }
+        return $raw | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+}
+
+function Test-JukeboxPlayerProcess {
+    param(
+        [Parameter(Mandatory = $true)][int]$ProcessId,
+        [Parameter(Mandatory = $true)][string]$InstanceRoot
+    )
+
+    try {
         $process = Get-Process -Id $ProcessId -ErrorAction Stop
-        return $process.ProcessName -in @('powershell', 'pwsh')
+        if ($process.ProcessName -notin @('BlockHudPowerShellHost', 'powershell', 'pwsh')) {
+            return $false
+        }
+
+        $contract = Get-ServerLaunchContract -InstanceRoot $InstanceRoot
+        if ($null -eq $contract) {
+            return $false
+        }
+        if (-not [string]::Equals([string]$contract.Version, 'repeat-reopen-v4', [System.StringComparison]::Ordinal)) {
+            return $false
+        }
+        if ([int]$contract.ProcessId -ne $ProcessId) {
+            return $false
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$contract.Token)) {
+            return $false
+        }
+
+        $expectedStartTimeUtc = [string]$contract.ProcessStartTimeUtc
+        if ([string]::IsNullOrWhiteSpace($expectedStartTimeUtc)) {
+            return $false
+        }
+
+        $actualStartTimeUtc = Get-ProcessStartTimeUtcText -ProcessId $ProcessId
+        return [string]::Equals($actualStartTimeUtc, $expectedStartTimeUtc, [System.StringComparison]::Ordinal)
     }
     catch {
         return $false
@@ -100,16 +153,7 @@ try {
         $raw = ([System.IO.File]::ReadAllText($pidPath, $script:Utf8NoBom)).Trim()
         $targetProcessId = 0
         if ([int]::TryParse($raw, [ref]$targetProcessId) -and $targetProcessId -gt 0) {
-            $processInfo = $null
-            try {
-                $processInfo = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $targetProcessId) -ErrorAction SilentlyContinue
-            }
-            catch {
-                $processInfo = $null
-            }
-
-            $commandLine = if ($null -ne $processInfo) { [string]$processInfo.CommandLine } else { '' }
-            if (Test-JukeboxPlayerProcess -ProcessId $targetProcessId -CommandLine $commandLine) {
+            if (Test-JukeboxPlayerProcess -ProcessId $targetProcessId -InstanceRoot $instanceRoot) {
                 Stop-Process -Id $targetProcessId -Force -ErrorAction SilentlyContinue
                 $stopped = 1
             }

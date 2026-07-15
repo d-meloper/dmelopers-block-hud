@@ -256,15 +256,6 @@ function Get-RainmeterProcessPathById {
     catch {
     }
 
-    try {
-        $record = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
-        if ($null -ne $record -and -not [string]::IsNullOrWhiteSpace([string]$record.ExecutablePath)) {
-            return [string]$record.ExecutablePath
-        }
-    }
-    catch {
-    }
-
     return ''
 }
 
@@ -319,17 +310,18 @@ function Get-RainmeterPluginArchitecture {
 }
 
 function Get-CurrentRainmeterProcessId {
-    $candidateId = [int]$PID
-    for ($depth = 0; $depth -lt 8 -and $candidateId -gt 0; $depth++) {
-        $record = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$candidateId" -ErrorAction SilentlyContinue
-        if ($null -eq $record) {
-            break
-        }
-        if ([string]::Equals([string]$record.Name, 'Rainmeter.exe', [System.StringComparison]::OrdinalIgnoreCase)) {
-            return $candidateId
-        }
-        $candidateId = [int]$record.ParentProcessId
+    $rainmeterProcesses = @()
+    try {
+        $rainmeterProcesses = @(Get-Process -Name 'Rainmeter' -ErrorAction SilentlyContinue)
     }
+    catch {
+        $rainmeterProcesses = @()
+    }
+
+    if ($rainmeterProcesses.Count -eq 1) {
+        return [int]$rainmeterProcesses[0].Id
+    }
+
     return 0
 }
 
@@ -340,8 +332,8 @@ function Get-RainmeterProcessRecord {
         return $null
     }
 
-    $record = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
-    if ($null -eq $record -or -not [string]::Equals([string]$record.Name, 'Rainmeter.exe', [System.StringComparison]::OrdinalIgnoreCase)) {
+    $record = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if ($null -eq $record -or -not [string]::Equals([string]$record.ProcessName, 'Rainmeter', [System.StringComparison]::OrdinalIgnoreCase)) {
         return $null
     }
 
@@ -360,39 +352,9 @@ function Get-ProcessOwnerInfo {
         }
     }
 
-    $user = ''
-    $domain = ''
-    try {
-        $owner = Invoke-CimMethod -InputObject $record -MethodName GetOwner -ErrorAction SilentlyContinue
-        if ($null -ne $owner) {
-            $user = [string]$owner.User
-            $domain = [string]$owner.Domain
-        }
-    }
-    catch {
-        $user = ''
-        $domain = ''
-    }
-    if ([string]::IsNullOrWhiteSpace($user)) {
-        try {
-            $wmiRecord = Get-WmiObject -Class Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
-            if ($null -ne $wmiRecord) {
-                $owner = $wmiRecord.GetOwner()
-                if ($null -ne $owner) {
-                    $user = [string]$owner.User
-                    $domain = [string]$owner.Domain
-                }
-            }
-        }
-        catch {
-            $user = ''
-            $domain = ''
-        }
-    }
-
     return [PSCustomObject]@{
-        User = $user
-        Domain = $domain
+        User = ''
+        Domain = ''
         SessionId = [int]$record.SessionId
     }
 }
@@ -489,6 +451,17 @@ function Get-WebNowPlayingPortConflictState {
     $currentRainmeterId = Get-CurrentRainmeterProcessId
     $ownerIds = @(Get-HttpServiceRainmeterOwnerIds -Port $webNowPlayingPort)
     $ownerPid = 0
+    if ($currentRainmeterId -le 0 -and $ownerIds.Count -gt 0) {
+        return [PSCustomObject]@{
+            Conflict = $true
+            Code = 'PORT_IN_USE'
+            OwnerPid = 0
+            OwnerUser = ''
+            OwnerDomain = ''
+            OwnerSessionId = -1
+        }
+    }
+
     if ($currentRainmeterId -gt 0) {
         $otherOwnerIds = @($ownerIds | Where-Object { [int]$_ -ne $currentRainmeterId })
         if ($ownerIds -contains $currentRainmeterId -and $otherOwnerIds.Count -eq 0) {
@@ -534,6 +507,10 @@ function Stop-WebNowPlayingPortOwner {
     }
 
     $currentRainmeterId = Get-CurrentRainmeterProcessId
+    if ($currentRainmeterId -le 0) {
+        Write-InstallerResult -Status 'NOOP' -Code 'OWNER_CHANGED' -Message 'The current Rainmeter process could not be identified before termination.' -OwnerPid $ProcessId -InstallPath (Get-UserPluginPath)
+        return
+    }
     if ($currentRainmeterId -gt 0 -and $ProcessId -eq $currentRainmeterId) {
         Write-InstallerResult -Status 'ERROR' -Code 'OWNER_IS_CURRENT' -Message 'The current Rainmeter process will not be terminated.' -OwnerPid $ProcessId -InstallPath (Get-UserPluginPath)
         return

@@ -104,13 +104,6 @@ return function(app)
         end
 
         logNotice('Log folder open ' .. string.lower(status) .. ': ' .. table.concat(details, ' | '))
-        if methods.ShowModalAlertByKeys then
-            methods.ShowModalAlertByKeys(
-                'error',
-                'ModalAlert_OpenLogFailed',
-                'The log folder could not be opened. Check whether File Explorer is working normally.'
-            )
-        end
     end
 
     function methods.finishPendingLoadCycle()

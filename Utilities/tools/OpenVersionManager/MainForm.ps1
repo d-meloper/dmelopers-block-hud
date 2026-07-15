@@ -1493,6 +1493,7 @@ function Start-VersionManager {
         }
         catch {
         }
+        try { Save-VersionManagerLaunchState -Root $ui.Root -Status 'closed' -LaunchTokenValue $LaunchToken } catch {}
     })
     [void]$form.ShowDialog()
 }

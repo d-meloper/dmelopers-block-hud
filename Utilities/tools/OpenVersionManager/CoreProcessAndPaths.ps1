@@ -223,22 +223,81 @@ function Get-PowerShellExecutablePath {
         return $runtimeHost
     }
 
-    $candidate = Join-Path $PSHOME 'powershell.exe'
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-        return $candidate
+    $toolsRoot = Get-VersionManagerToolsRoot
+    $skinRoot = [System.IO.Path]::GetFullPath((Join-Path $toolsRoot '..\..'))
+    $packagedHost = Join-Path $skinRoot '@Resources\Defaults\Runtime\helpers\BlockHudPowerShellHost.exe'
+    if (Test-Path -LiteralPath $packagedHost -PathType Leaf) {
+        return $packagedHost
     }
 
-    $windowsPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    if (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf) {
-        return $windowsPowerShell
+    throw 'BlockHudPowerShellHost.exe could not be located.'
+}
+
+function ConvertTo-WindowsCommandLineArgument {
+    param([AllowNull()][string]$Value)
+
+    $text = [string]$Value
+    if ($text.Length -eq 0) {
+        return '""'
+    }
+    if ($text.IndexOfAny([char[]]@(' ', "`t", "`r", "`n", '"')) -lt 0) {
+        return $text
     }
 
-    $command = Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue
-    if ($command -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
-        return $command.Source
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashes = 0
+    foreach ($character in $text.ToCharArray()) {
+        if ($character -eq '\') {
+            $backslashes++
+            continue
+        }
+        if ($character -eq '"') {
+            [void]$builder.Append(('\' * (($backslashes * 2) + 1)))
+            [void]$builder.Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$builder.Append(('\' * $backslashes))
+            $backslashes = 0
+        }
+        [void]$builder.Append($character)
     }
+    if ($backslashes -gt 0) {
+        [void]$builder.Append(('\' * ($backslashes * 2)))
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
 
-    throw 'powershell.exe could not be located.'
+function Join-WindowsCommandLineArguments {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    $quoted = foreach ($argument in $Arguments) {
+        ConvertTo-WindowsCommandLineArgument -Value $argument
+    }
+    return ($quoted -join ' ')
+}
+
+function New-VersionManagerHostProcessStartInfo {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [switch]$RedirectOutput
+    )
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = Get-PowerShellExecutablePath
+    $startInfo.Arguments = Join-WindowsCommandLineArguments -Arguments $Arguments
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    if ($RedirectOutput) {
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = $script:Utf8NoBom
+        $startInfo.StandardErrorEncoding = $script:Utf8NoBom
+    }
+    return $startInfo
 }
 
 function ConvertTo-PowerShellSingleQuotedLiteral {
@@ -409,12 +468,55 @@ function Read-JsonFile {
         return $null
     }
 
-    $raw = [System.IO.File]::ReadAllText($Path, $script:Utf8NoBom)
-    if ([string]::IsNullOrWhiteSpace($raw)) {
-        return $null
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 8; $attempt++) {
+        try {
+            $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+            $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
+            try {
+                $reader = New-Object System.IO.StreamReader($stream, $script:Utf8NoBom, $true)
+                try {
+                    $raw = $reader.ReadToEnd()
+                }
+                finally {
+                    $reader.Dispose()
+                    $stream = $null
+                }
+            }
+            finally {
+                if ($null -ne $stream) {
+                    $stream.Dispose()
+                }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($raw)) {
+                return $null
+            }
+
+            return ($raw | ConvertFrom-Json)
+        }
+        catch [System.IO.IOException] {
+            $lastError = $_
+        }
+        catch [System.UnauthorizedAccessException] {
+            $lastError = $_
+        }
+        catch {
+            $lastError = $_
+            if ($attempt -ge 8) {
+                throw
+            }
+        }
+
+        if ($attempt -lt 8) {
+            Start-Sleep -Milliseconds ([Math]::Min(250, 25 * $attempt))
+        }
     }
 
-    return ($raw | ConvertFrom-Json)
+    if ($null -ne $lastError) {
+        throw $lastError
+    }
+    return $null
 }
 
 function Write-JsonFile {
@@ -429,7 +531,56 @@ function Write-JsonFile {
     }
 
     $json = $Value | ConvertTo-Json -Depth 8
-    [System.IO.File]::WriteAllText($Path, $json, $script:Utf8NoBom)
+    $tempDirectory = if ([string]::IsNullOrWhiteSpace($parent)) { [System.IO.Directory]::GetCurrentDirectory() } else { $parent }
+    $fileName = [System.IO.Path]::GetFileName($Path)
+    $tempPath = Join-Path $tempDirectory ('.' + $fileName + '.' + [string]$PID + '.' + [guid]::NewGuid().ToString('N') + '.tmp')
+    $backupPath = $tempPath + '.bak'
+    [System.IO.File]::WriteAllText($tempPath, $json, $script:Utf8NoBom)
+
+    $lastError = $null
+    try {
+        for ($attempt = 1; $attempt -le 10; $attempt++) {
+            try {
+                if (Test-Path -LiteralPath $Path -PathType Leaf) {
+                    try {
+                        [System.IO.File]::Replace($tempPath, $Path, $backupPath, $true)
+                        if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
+                            Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+                        }
+                    }
+                    catch [System.IO.FileNotFoundException] {
+                        [System.IO.File]::Move($tempPath, $Path)
+                    }
+                }
+                else {
+                    [System.IO.File]::Move($tempPath, $Path)
+                }
+                return
+            }
+            catch [System.IO.IOException] {
+                $lastError = $_
+            }
+            catch [System.UnauthorizedAccessException] {
+                $lastError = $_
+            }
+
+            if ($attempt -lt 10) {
+                Start-Sleep -Milliseconds ([Math]::Min(300, 30 * $attempt))
+            }
+        }
+
+        if ($null -ne $lastError) {
+            throw $lastError
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $tempPath -PathType Leaf) {
+            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
+            Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Save-VersionManagerLaunchState {
@@ -444,15 +595,21 @@ function Save-VersionManagerLaunchState {
         LaunchToken = [string]$LaunchTokenValue
         Status = [string]$Status
         Message = [string]$Message
+        ProcessId = [int]$PID
         UpdatedAtUtc = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
     }
     Write-JsonFile -Path (Get-VersionManagerLaunchStatePath -Root $Root) -Value $payload
     if (Get-Command Set-VersionManagerSettingsCacheVariables -ErrorAction SilentlyContinue) {
-        Set-VersionManagerSettingsCacheVariables -Root $Root -Values ([ordered]@{
-            VersionManagerLaunchToken = [string]$payload.LaunchToken
-            VersionManagerLaunchStatus = [string]$payload.Status
-            VersionManagerLaunchMessage = [string]$payload.Message
-        })
+        try {
+            Set-VersionManagerSettingsCacheVariables -Root $Root -Values ([ordered]@{
+                VersionManagerLaunchToken = [string]$payload.LaunchToken
+                VersionManagerLaunchStatus = [string]$payload.Status
+                VersionManagerLaunchMessage = [string]$payload.Message
+            })
+        }
+        catch {
+            Write-VersionManagerLaunchDiagnostic -Root $Root -Stage 'state-cache-mirror-warning' -LaunchTokenValue $LaunchTokenValue -Message $_.Exception.Message
+        }
     }
     Write-VersionManagerLaunchDiagnostic -Root $Root -Stage ('state:' + [string]$Status) -LaunchTokenValue $LaunchTokenValue -Message $Message -Details @(
         ('statePath={0}' -f (Get-VersionManagerLaunchStatePath -Root $Root))
@@ -463,7 +620,7 @@ function Wait-VersionManagerLaunchShown {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
         [string]$ExpectedLaunchToken = '',
-        [int]$TimeoutMilliseconds = 5000,
+        [int]$TimeoutMilliseconds = 8000,
         [int]$PollMilliseconds = 100,
         [AllowNull()][System.Diagnostics.Process]$Process
     )

@@ -842,22 +842,13 @@ function Get-InstallRuntimePowerShellPath {
         return $runtimeHost
     }
 
-    $candidate = Join-Path $PSHOME 'powershell.exe'
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-        return $candidate
+    $skinRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+    $packagedHost = Join-Path $skinRoot '@Resources\Defaults\Runtime\helpers\BlockHudPowerShellHost.exe'
+    if (Test-Path -LiteralPath $packagedHost -PathType Leaf) {
+        return $packagedHost
     }
 
-    $windowsPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    if (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf) {
-        return $windowsPowerShell
-    }
-
-    $command = Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue
-    if ($command -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
-        return $command.Source
-    }
-
-    throw 'powershell.exe could not be located.'
+    throw 'BlockHudPowerShellHost.exe could not be located.'
 }
 
 function Invoke-HelperScript {

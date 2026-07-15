@@ -156,11 +156,19 @@ local function hasSkinGetVariable()
     return ok and type(method) == 'function'
 
 end
+
+function EditorLifecycle.DecodeCatalogEscapes(value)
+    return tostring(value or '')
+        :gsub('\\n', '\n')
+        :gsub('\\r', '\r')
+        :gsub('\\t', '\t')
+end
+
 local function L(key, fallback)
 
     if hasSkinGetVariable() then
 
-        return SKIN:GetVariable('Loc_' .. tostring(key or ''), fallback or '')
+        return EditorLifecycle.DecodeCatalogEscapes(SKIN:GetVariable('Loc_' .. tostring(key or ''), fallback or ''))
 
     end
 
@@ -170,7 +178,7 @@ local function L(key, fallback)
 
     end
 
-    return fallback or ''
+    return EditorLifecycle.DecodeCatalogEscapes(fallback)
 
 end
 
