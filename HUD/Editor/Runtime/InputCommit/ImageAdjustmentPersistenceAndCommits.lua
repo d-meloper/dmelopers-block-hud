@@ -867,6 +867,7 @@ function UpdatePickedProgramAtLocator(pathValue, imageValue, locator)
         return
     end
     if not record.Populated then
+        ensureSelectedDraftItemForEdit(locator)
         return
     end
 

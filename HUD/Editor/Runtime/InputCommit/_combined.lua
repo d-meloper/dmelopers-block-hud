@@ -5980,6 +5980,44 @@ end
 
 
 
+ensureSelectedDraftItemForEdit = function(locator)
+
+
+
+    if locator and not isLocatorCurrentSelection(locator) then
+
+
+
+        return false
+
+
+
+    end
+
+
+
+    if type(AddSelectedDraftItem) ~= 'function' then
+
+
+
+        return false
+
+
+
+    end
+
+
+
+    AddSelectedDraftItem()
+
+    return true
+
+
+
+end
+
+
+
 local function updateFieldAtLocator(locator, fieldName, value)
 
 
@@ -6007,6 +6045,8 @@ local function updateFieldAtLocator(locator, fieldName, value)
     if not record.Populated then
 
 
+
+        ensureSelectedDraftItemForEdit(locator)
 
         return
 
@@ -7505,6 +7545,7 @@ function UpdatePickedProgramAtLocator(pathValue, imageValue, locator)
         return
     end
     if not record.Populated then
+        ensureSelectedDraftItemForEdit(locator)
         return
     end
 

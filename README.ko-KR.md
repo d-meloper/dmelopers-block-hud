@@ -65,6 +65,19 @@ GitHub에서 직접 설치하려는 경우에는 반드시 `.rmskin` 파일을 �
 
 [스킨 노션 페이지](https://www.notion.so/DMeloper-s-Block-HUD-2f12dc0bb4ae803a8643f3eb1601ed5d?pvs=21)
 
+## 로컬라이제이션
+
+현재 지원 중인 언어:
+
+- 한국어
+- 영어
+- 터키어
+- 러시아어
+
+스킨 번역을 돕거나 기존 번역을 개선하고 싶다면 DMeloper's Block HUD Translation Hub를 이용해 주세요. 코드나 Rainmeter 파일을 직접 수정할 필요는 없으며, 번역 작업은 검토 가능한 TSV/스프레드시트 파일을 통해 진행됩니다.
+
+[DMeloper's Block HUD Translation Hub](https://www.notion.so/aismash/DMeloper-s-Block-HUD-Translation-Hub-3982dc0bb4ae80ebb693ecd08d9d498a?source=copy_link)
+
 ## 문제 해결
 
 먼저 다음 항목을 확인해 보세요.

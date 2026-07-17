@@ -493,8 +493,12 @@ function Resolve-MinecraftSkinTexture(
 
         $resolvedModel = Normalize-MinecraftSkinModel $FallbackModel
         $metadataModel = ''
-        if ($null -ne $skinTexture.metadata) {
-            $metadataModel = Trim-Text ([string]$skinTexture.metadata.model).ToLowerInvariant()
+        $metadataProperty = $skinTexture.PSObject.Properties['metadata']
+        if ($null -ne $metadataProperty -and $null -ne $metadataProperty.Value) {
+            $modelProperty = $metadataProperty.Value.PSObject.Properties['model']
+            if ($null -ne $modelProperty) {
+                $metadataModel = Trim-Text ([string]$modelProperty.Value).ToLowerInvariant()
+            }
         }
 
         if ($metadataModel -eq 'slim') {

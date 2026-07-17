@@ -118,6 +118,8 @@ function Invoke-DeferredPickerMode([string]$Mode) {
     & $flowScriptPath -Mode $Mode
 }
 
+$resolveShortcutCommandLineInvoker = ${function:Resolve-ShortcutCommandLine}
+
 try {
     $uiText = Get-PickerUiText
     $windowTitle = [string]$uiText.WindowTitle
@@ -200,9 +202,10 @@ try {
         }
 
         if ($dialog.ShowDialog($pickerForm) -eq [System.Windows.Forms.DialogResult]::OK) {
+            $resolvedPath = & $resolveShortcutCommandLineInvoker -SelectedPath ([string]$dialog.FileName)
             $pickerForm.Tag = [PSCustomObject]@{
                 Kind  = 'Path'
-                Value = Resolve-ShortcutCommandLine ([string]$dialog.FileName)
+                Value = $resolvedPath
             }
             $pickerForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
             $pickerForm.Close()
