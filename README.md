@@ -65,6 +65,19 @@ For setup, customization, and daily usage instructions, see the Skin Notion page
 
 [Skin Notion page](https://www.notion.so/aismash/DMeloper-s-Block-HUD-Global-35c2dc0bb4ae801abf7dd76acee80689?source=copy_link)
 
+## Localization
+
+Currently supported languages:
+
+- Korean
+- English
+- Turkish
+- Russian
+
+If you want to help translate the skin or improve an existing translation, please use the DMeloper's Block HUD Translation Hub. You do not need to edit code or Rainmeter files; translation work is handled through reviewed TSV/spreadsheet files.
+
+[DMeloper's Block HUD Translation Hub](https://www.notion.so/aismash/DMeloper-s-Block-HUD-Translation-Hub-3982dc0bb4ae80ebb693ecd08d9d498a?source=copy_link)
+
 ## Troubleshooting
 
 Check these items first.

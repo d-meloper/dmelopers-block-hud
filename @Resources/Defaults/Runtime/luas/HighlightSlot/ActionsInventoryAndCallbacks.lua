@@ -517,6 +517,7 @@ function RestoreInventoryBackgroundActiveConfigOnRefresh()
     if RainmeterConfigState then
         RainmeterConfigState.Register(SKIN)
     end
+    local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
     local wasVisible = IsInventoryVisibleStateEnabled()
     if not wasVisible then
         SKIN:Bang('!UpdateMeasure', 'MeasureInventoryBGEnableGuard')
@@ -529,6 +530,7 @@ function RestoreInventoryBackgroundActiveConfigOnRefresh()
     end
     RestoreInventoryBackgroundActiveConfig()
     RestoreInventoryAfterBackgroundReady()
+    ApplyInventoryBackdropOpenZOrder(rootPath)
 end
 function DeactivateClosedInventoryBackgroundOnRefresh()
     LoadEssentials()
@@ -564,6 +566,14 @@ function RequestInventoryActivation(inventoryConfig)
     SKIN:Bang('!SetVariable', 'BlockHudInventoryPanelOpenDeferredRestore', '1')
     SKIN:Bang('!UpdateMeasure', 'MeasureInventoryPanelOpenDeferredRestore')
 end
+function RequestSettingsRouteDeferredRestore()
+    SKIN:Bang('!SetVariable', 'BlockHudSettingsRouteDeferredRestore', '1')
+    SKIN:Bang('!UpdateMeasure', 'MeasureSettingsRouteDeferredRestore')
+end
+function RequestEditorOpenDeferredRestore()
+    SKIN:Bang('!SetVariable', 'BlockHudEditorOpenDeferredRestore', '1')
+    SKIN:Bang('!UpdateMeasure', 'MeasureEditorOpenDeferredRestore')
+end
 function RestoreInventoryOpenAfterBackgroundActivation()
     LoadEssentials()
     local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
@@ -581,6 +591,24 @@ function RestoreInventoryOpenAfterInventoryActivation()
     end
     local inventoryConfig = rootPath .. '\\HUD\\Inventory'
     SKIN:Bang('!CommandMeasure', 'MeasureHighlight', 'RestoreInventoryActiveConfigOnOpen()', inventoryConfig)
+end
+function RestoreSettingsRouteAfterActivation()
+    LoadEssentials()
+    if SettingsRouteLauncher and SettingsRouteLauncher.RestorePendingRouteAfterActivation then
+        SettingsRouteLauncher.RestorePendingRouteAfterActivation(SKIN)
+    end
+end
+function RestoreEditorOpenAfterActivation()
+    LoadEssentials()
+    local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
+    if rootPath == '' then
+        return
+    end
+    local editorConfig = rootPath .. '\\HUD\\Editor'
+    SKIN:Bang('!CommandMeasure', 'MeasureRainmeterConfigState', 'RegisterCurrentConfigActive()', editorConfig)
+    SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'ApplyLayout()', editorConfig)
+    SKIN:Bang('!Show', editorConfig)
+    SKIN:Bang('!CommandMeasure', 'MeasureInputCommit', 'ResumeEditorResident()', editorConfig)
 end
 function RestoreInventoryActiveConfigOnOpen()
     LoadEssentials()
@@ -686,7 +714,7 @@ function ActivateAllInventory()
     SetInventoryVisibleState(true, rootPath)
     prepareInventoryOpenPosition(inventoryActive, inventoryConfig)
     if not inventoryBgActive then
-        InventoryLifecycle.CreateInventoryBgSurface(rootPath):ActivateIfInactive()
+        RequestInventoryBackgroundActivation(inventoryBgConfig)
         return
     end
     if editorOpen then
@@ -714,7 +742,6 @@ function ActivateAllInventory()
     if inventoryActive then
         HighlightCommandMeasureForActiveConfig('MeasureHighlight', 'RollHerobrineInventoryReplacement()', inventoryConfig)
     end
-    ApplyInventoryBackdropOpenZOrder(rootPath)
 end
 function ResetInteractionState()
     LoadEssentials()
@@ -901,6 +928,7 @@ function HandleEditButtonClick()
     local editorActive = isRainmeterConfigActive(editorConfig)
     if not editorActive then
         editorSurface:ActivateIfInactive()
+        RequestEditorOpenDeferredRestore()
     end
     if editorActive then
         editorSurface:ShowActiveAfterLayout()
@@ -923,7 +951,10 @@ function HandleSettingsButtonClick()
         return
     end
     if not settingsActive then
-        SettingsRouteLauncher.Open(SKIN, 'normal', 'general', '1')
+        local _, settingsActivationRequested = SettingsRouteLauncher.Open(SKIN, 'normal', 'general', '1')
+        if settingsActivationRequested then
+            RequestSettingsRouteDeferredRestore()
+        end
         return
     end
     local settingsSurface = PanelLifecycle.CreateSettingsSurface(rootPath)
@@ -942,7 +973,10 @@ function HandleSteveSkinEditButtonClick()
         resetHotbarInteraction(rootPath)
     end
     PlayClickSound()
-    SettingsRouteLauncher.Open(SKIN, 'normal', 'inventory', '2')
+    local _, settingsActivationRequested = SettingsRouteLauncher.Open(SKIN, 'normal', 'inventory', '2')
+    if settingsActivationRequested then
+        RequestSettingsRouteDeferredRestore()
+    end
 end
 function HandleCreatorProfileClick()
     LoadEssentials()
