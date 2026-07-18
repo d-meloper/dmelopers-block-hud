@@ -69,10 +69,13 @@ For setup, customization, and daily usage instructions, see the Skin Notion page
 
 Currently supported languages:
 
-- Korean
-- English
-- Turkish
-- Russian
+- Korean (`ko-KR`)
+- English (`en-US`)
+- Turkish (`tr-TR`)
+- Russian (`ru-RU`)
+- Simplified Chinese (`zh-CN`)
+- Armenian (`hy-AM`)
+- Danish (`da-DK`)
 
 If you want to help translate the skin or improve an existing translation, please use the DMeloper's Block HUD Translation Hub. You do not need to edit code or Rainmeter files; translation work is handled through reviewed TSV/spreadsheet files.
 
