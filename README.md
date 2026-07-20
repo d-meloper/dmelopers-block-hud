@@ -4,6 +4,21 @@
 
 English | [한국어](README.ko-KR.md)
 
+## Windows Security and Antivirus Notice
+
+> [!WARNING]
+> Some antivirus products and some scanning engines on VirusTotal currently detect `BlockHudPowerShellHost.exe` or related helper scripts as malware, including virus or Trojan classifications. The project is aware of these reports and continues to review the packaged files and execution paths that can trigger them.
+
+DMeloper's Block HUD uses the packaged `BlockHudPowerShellHost.exe` and local PowerShell helper scripts for operations that Rainmeter cannot reliably perform on its own, including file selection, image processing, applying settings, importing data, updates, version switching, and Jukebox features.
+
+These files are required components of Block HUD. However, behavior- and reputation-based antivirus checks involving PowerShell automation and newly built executables may delay initialization or display a warning immediately after installation or an update.
+
+Code signing could make the publisher identity easier to verify, but it does not guarantee that every antivirus warning will disappear. This project is developed, distributed, and maintained entirely free of charge, and the developer cannot currently sustain code-signing costs of approximately KRW 200,000 per year. The release executable is therefore not digitally signed at this time.
+
+Use packages downloaded from the official GitHub Releases page and verify the SHA256 checksum published in the release notes. Future updates will continue to simplify helper execution paths and reduce behavior that can trigger behavior-based antivirus detection.
+
+[Why Block HUD uses helper programs](ANTIVIRUS.md)
+
 <p align="center">
   <a href="https://github.com/d-meloper/dmelopers-block-hud/releases/latest"><img alt="Latest release" src="https://raw.githubusercontent.com/d-meloper/dmelopers-block-hud/badges/release.svg"></a>
   <a href="https://github.com/d-meloper/dmelopers-block-hud/releases"><img alt="Total downloads" src="https://raw.githubusercontent.com/d-meloper/dmelopers-block-hud/badges/downloads.svg"></a>
