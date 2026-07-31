@@ -6,6 +6,7 @@ param(
     [string]$AppPrivateKey = $env:DMEL_BADGE_APP_PRIVATE_KEY,
     [string]$AppInstallationId = $env:DMEL_BADGE_APP_INSTALLATION_ID,
     [string]$OutputDirectory,
+    [string]$FixturePath,
     [switch]$NoPush,
     [switch]$SkipCamoPurge
 )
@@ -192,6 +193,37 @@ function Get-LatestStableRelease {
     return ($Releases | Sort-Object { [DateTimeOffset]::Parse([string]$_.published_at) } -Descending | Select-Object -First 1)
 }
 
+function Get-LatestStableReleaseWithAsset {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Releases,
+        [Parameter(Mandatory = $true)][string]$AssetName
+    )
+
+    $matching = @(
+        foreach ($release in $Releases) {
+            $versionKey = Get-SemanticVersionKey -TagName ([string]$release.tag_name)
+            if ($null -eq $versionKey) {
+                continue
+            }
+            $asset = @($release.assets | Where-Object { [string]$_.name -ceq $AssetName } | Select-Object -First 1)
+            if ($asset.Count -eq 0) {
+                continue
+            }
+            [PSCustomObject]@{
+                Release = $release
+                Major = $versionKey.Major
+                Minor = $versionKey.Minor
+                Patch = $versionKey.Patch
+                PublishedAt = [DateTimeOffset]::Parse([string]$release.published_at)
+            }
+        }
+    )
+    if ($matching.Count -eq 0) {
+        throw "No stable semantic release contains the exact asset '$AssetName'."
+    }
+    return ($matching | Sort-Object Major, Minor, Patch, PublishedAt -Descending | Select-Object -First 1).Release
+}
+
 function ConvertTo-DisplayCount {
     param([Parameter(Mandatory = $true)][int]$Value)
 
@@ -298,23 +330,48 @@ function Write-Utf8NoBomFile {
 function Get-BadgePayload {
     param(
         [Parameter(Mandatory = $true)][string]$RepoSlug,
-        [string]$Token
+        [string]$Token,
+        [string]$FixturePath
     )
 
-    $repo = Invoke-GitHubApi -Path "repos/$RepoSlug" -Token $Token
-    $publishedReleases = @(Get-AllPublishedReleases -RepoSlug $RepoSlug -Token $Token)
+    if (-not [string]::IsNullOrWhiteSpace($FixturePath)) {
+        $resolvedFixturePath = [IO.Path]::GetFullPath($FixturePath)
+        if (-not (Test-Path -LiteralPath $resolvedFixturePath -PathType Leaf)) {
+            throw "Badge fixture does not exist: $resolvedFixturePath"
+        }
+        $fixture = Get-Content -LiteralPath $resolvedFixturePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $repo = $fixture.repository
+        $publishedReleases = @(Select-PublishedReleases -Releases @($fixture.releases))
+    }
+    else {
+        $repo = Invoke-GitHubApi -Path "repos/$RepoSlug" -Token $Token
+        $publishedReleases = @(Get-AllPublishedReleases -RepoSlug $RepoSlug -Token $Token)
+    }
     $stableReleases = @(Select-StableReleases -Releases $publishedReleases)
     if ($stableReleases.Count -eq 0) {
         throw "No stable GitHub releases found for $RepoSlug."
     }
     $latest = Get-LatestStableRelease -Releases $stableReleases
+    $koreaAssetName = 'DMelopers-Block-HUD_Korea.zip'
+    $globalAssetName = 'DMelopers-Block-HUD_Global.zip'
+    $latestKorea = Get-LatestStableReleaseWithAsset -Releases $stableReleases -AssetName $koreaAssetName
+    $latestGlobal = Get-LatestStableReleaseWithAsset -Releases $stableReleases -AssetName $globalAssetName
     $downloadCount = Get-TotalReleaseAssetDownloads -Releases $publishedReleases
 
     return [PSCustomObject]@{
+        SchemaVersion = 2
         RepoSlug = $RepoSlug
         GeneratedAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
         LatestRelease = [string]$latest.tag_name
         LatestReleaseName = [string]$latest.name
+        LatestReleaseKorea = [string]$latestKorea.tag_name
+        LatestReleaseNameKorea = [string]$latestKorea.name
+        LatestAssetNameKorea = $koreaAssetName
+        LatestPublishedAtUtcKorea = ([DateTimeOffset]::Parse([string]$latestKorea.published_at)).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        LatestReleaseGlobal = [string]$latestGlobal.tag_name
+        LatestReleaseNameGlobal = [string]$latestGlobal.name
+        LatestAssetNameGlobal = $globalAssetName
+        LatestPublishedAtUtcGlobal = ([DateTimeOffset]::Parse([string]$latestGlobal.published_at)).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         TotalDownloads = $downloadCount
         Stars = [int]$repo.stargazers_count
     }
@@ -352,11 +409,29 @@ function Test-BadgePayloadValuesEqual {
     if ($null -eq $ExistingPayload) {
         return $false
     }
+    foreach ($requiredProperty in @(
+        'SchemaVersion',
+        'LatestReleaseKorea', 'LatestReleaseNameKorea', 'LatestAssetNameKorea', 'LatestPublishedAtUtcKorea',
+        'LatestReleaseGlobal', 'LatestReleaseNameGlobal', 'LatestAssetNameGlobal', 'LatestPublishedAtUtcGlobal'
+    )) {
+        if ($null -eq $ExistingPayload.PSObject.Properties[$requiredProperty]) {
+            return $false
+        }
+    }
 
     return (
+        ([int]$ExistingPayload.SchemaVersion -eq [int]$NewPayload.SchemaVersion) -and
         ([string]$ExistingPayload.RepoSlug -eq [string]$NewPayload.RepoSlug) -and
         ([string]$ExistingPayload.LatestRelease -eq [string]$NewPayload.LatestRelease) -and
         ([string]$ExistingPayload.LatestReleaseName -eq [string]$NewPayload.LatestReleaseName) -and
+        ([string]$ExistingPayload.LatestReleaseKorea -eq [string]$NewPayload.LatestReleaseKorea) -and
+        ([string]$ExistingPayload.LatestReleaseNameKorea -eq [string]$NewPayload.LatestReleaseNameKorea) -and
+        ([string]$ExistingPayload.LatestAssetNameKorea -eq [string]$NewPayload.LatestAssetNameKorea) -and
+        ([string]$ExistingPayload.LatestPublishedAtUtcKorea -eq [string]$NewPayload.LatestPublishedAtUtcKorea) -and
+        ([string]$ExistingPayload.LatestReleaseGlobal -eq [string]$NewPayload.LatestReleaseGlobal) -and
+        ([string]$ExistingPayload.LatestReleaseNameGlobal -eq [string]$NewPayload.LatestReleaseNameGlobal) -and
+        ([string]$ExistingPayload.LatestAssetNameGlobal -eq [string]$NewPayload.LatestAssetNameGlobal) -and
+        ([string]$ExistingPayload.LatestPublishedAtUtcGlobal -eq [string]$NewPayload.LatestPublishedAtUtcGlobal) -and
         ([int]$ExistingPayload.TotalDownloads -eq [int]$NewPayload.TotalDownloads) -and
         ([int]$ExistingPayload.Stars -eq [int]$NewPayload.Stars)
     )
@@ -567,15 +642,19 @@ function Invoke-CamoPurge {
 }
 
 $apiToken = $null
+if (-not [string]::IsNullOrWhiteSpace($FixturePath) -and -not $NoPush) {
+    throw '-FixturePath is allowed only with -NoPush.'
+}
 if (-not $NoPush) {
     $apiToken = Get-GitHubAppToken -AppId $AppId -PrivateKey $AppPrivateKey -InstallationId $AppInstallationId
 }
 
-$payload = Get-BadgePayload -RepoSlug $RepoSlug -Token $apiToken
+$payload = Get-BadgePayload -RepoSlug $RepoSlug -Token $apiToken -FixturePath $FixturePath
 if ($NoPush) {
     if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
         throw '-OutputDirectory is required when -NoPush is set.'
     }
+    $payload = Resolve-BadgePayloadTimestamp -ExistingPayload (Get-ExistingBadgePayload -RepositoryPath $OutputDirectory) -NewPayload $payload
     Write-BadgeFiles -Directory $OutputDirectory -Payload $payload
     Write-Host "Wrote badge files to $OutputDirectory"
     return
