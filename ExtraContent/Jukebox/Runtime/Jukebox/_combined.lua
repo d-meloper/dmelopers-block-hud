@@ -385,8 +385,6 @@ end
 local function buildArgs(command, audioOverride, requestPath, loopEnabled, volumePercent)
     local resolvedAudioPath = audioOverride or ''
     local args = {
-        '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-STA',
         '-ExecutionPolicy', 'Bypass',
         '-File', quotePowerShellArgument(scriptPath()),
@@ -423,8 +421,6 @@ function webNowPlayingInstallState.buildArgs(action)
         normalizedAction = 'Check'
     end
     local args = {
-        '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quotePowerShellArgument(webNowPlayingInstallState.scriptPath()),
         '-Action', quotePowerShellArgument(normalizedAction),
@@ -443,9 +439,7 @@ local function buildOpenLogFolderArgs()
     end
     local helperPath = joinPath(rootPath, 'Utilities\\tools\\OpenSettingsLogFolder.ps1')
     return table.concat({
-        '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
-        '-WindowStyle', 'Hidden',
         '-File', quotePowerShellArgument(helperPath),
         '-TargetRoot', quotePowerShellArgument(rootPath),
         '-EmitResultPairs',
@@ -478,8 +472,6 @@ end
 
 local function buildEmergencyStopArgs()
     local args = {
-        '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quotePowerShellArgument(emergencyStopScriptPath()),
         '-InstanceKey', quotePowerShellArgument(instanceKey()),

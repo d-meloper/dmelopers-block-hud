@@ -207,7 +207,7 @@ function Invoke-ImportFromInstallation {
         throw (T 'Helper_VersionManager_Install_HelperMissing' 'ImportFromOldVersion.ps1 was not found.')
     }
 
-    $output = @(& (Get-PowerShellExecutablePath) -NoProfile -ExecutionPolicy Bypass -STA -File $importScript -TargetRoot $Root -SourceRoot $SourcePath -EmitResultPairs 2>&1)
+    $output = @(& (Get-PowerShellExecutablePath) -ExecutionPolicy Bypass -STA -File $importScript -TargetRoot $Root -SourceRoot $SourcePath -EmitResultPairs 2>&1)
     $exitCode = $LASTEXITCODE
     $pairs = @{}
     foreach ($line in $output) {
@@ -339,7 +339,7 @@ function Invoke-VersionReleaseCatalog {
         throw (T 'Helper_VersionManager_Update_VersionCatalogBackendRequired' (U '\uBC84\uC804 \uBAA9\uB85D \uC870\uD68C/\uC124\uCE58 \uBC31\uC5D4\uB4DC\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.'))
     }
 
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $catalogScript, '-CurrentTargetRoot', $Root, '-OutputJson', '-SyncUpdateCache')
+    $arguments = @('-ExecutionPolicy', 'Bypass', '-File', $catalogScript, '-CurrentTargetRoot', $Root, '-OutputJson', '-SyncUpdateCache')
     if (-not $ForceRefresh) {
         $arguments += '-PreferFreshCache'
     }
@@ -428,7 +428,7 @@ function Invoke-VersionReleaseInstall {
         throw (T 'Helper_VersionManager_Update_VersionCatalogBackendRequired' (U '\uBC84\uC804 \uBAA9\uB85D \uC870\uD68C/\uC124\uCE58 \uBC31\uC5D4\uB4DC\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.'))
     }
 
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $installScript, '-CurrentTargetRoot', $Root, '-EmitResultPairs')
+    $arguments = @('-ExecutionPolicy', 'Bypass', '-File', $installScript, '-CurrentTargetRoot', $Root, '-EmitResultPairs')
     if (-not [string]::IsNullOrWhiteSpace($SelectedTargetRoot)) {
         $arguments += @('-SelectedTargetRoot', $SelectedTargetRoot)
     }
@@ -604,7 +604,6 @@ function Start-VersionManagerLauncherForRoot {
 
     $powershellExe = Get-PowerShellExecutablePath
     $argumentList = @(
-        '-NoProfile'
         '-ExecutionPolicy'
         'Bypass'
         '-STA'

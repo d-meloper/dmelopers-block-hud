@@ -473,8 +473,6 @@ end
 
 function JukeboxDiscSlotExternalCoverFingerprint.buildArgs(coverImage, token)
     return table.concat({
-        '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quotePowerShellArgument(fingerprintHelperPath()),
         '-SourcePath', quotePowerShellArgument(coverImage),

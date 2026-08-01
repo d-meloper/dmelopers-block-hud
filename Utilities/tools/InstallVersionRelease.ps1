@@ -859,7 +859,7 @@ function Invoke-HelperScript {
     )
 
     Write-Log ("Starting {0}: {1}" -f $Operation, $ScriptPath)
-    $output = @(& (Get-InstallRuntimePowerShellPath) -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments 2>&1)
+    $output = @(& (Get-InstallRuntimePowerShellPath) -ExecutionPolicy Bypass -File $ScriptPath @Arguments 2>&1)
     $exitCode = $LASTEXITCODE
     $pairs = Convert-OutputToResultPairs -Output $output
     $status = [string]($pairs['DMEL_STATUS'])

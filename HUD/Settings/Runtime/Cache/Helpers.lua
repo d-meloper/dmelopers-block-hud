@@ -135,7 +135,7 @@ return function(app)
 
         options = options or {}
 
-        local command = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        local command = '-ExecutionPolicy Bypass -File '
 
             .. methods.escapeCommandArgument(methods.computerInfoHelperScriptPath())
 
@@ -233,7 +233,7 @@ return function(app)
             resolvedModel = 'slim'
         end
 
-        return '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        return '-ExecutionPolicy Bypass -File '
 
             .. methods.escapeCommandArgument(methods.fetchMinecraftSkinScriptPath())
 
@@ -286,7 +286,7 @@ return function(app)
             resolvedModel = 'slim'
         end
 
-        local command = '-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        local command = '-STA -ExecutionPolicy Bypass -File '
             .. methods.escapeCommandArgument(methods.minecraftSkinFilePickerScriptPath())
             .. ' -OutputDirectory '
             .. methods.escapeCommandArgument(methods.playerSkinImageDirectoryPath())
@@ -328,7 +328,7 @@ return function(app)
 
     function methods.startupAutoRunHelperArguments(mode)
 
-        return '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        return '-ExecutionPolicy Bypass -File '
 
             .. methods.escapeCommandArgument('.\\StartupAutoRun.ps1')
 
@@ -395,7 +395,7 @@ return function(app)
     end
 
     function methods.openVersionManagerHelperArguments(launchToken, initialAction)
-        local args = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        local args = '-ExecutionPolicy Bypass -File '
             .. methods.escapeCommandArgument(methods.openVersionManagerScriptPath())
             .. ' -TargetRoot '
             .. methods.escapeCommandArgument('..\\..')
@@ -441,7 +441,7 @@ return function(app)
     end
 
     function methods.openLogFolderHelperArguments()
-        return '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        return '-ExecutionPolicy Bypass -File '
             .. methods.escapeCommandArgument(methods.openLogFolderScriptPath())
             .. ' -TargetRoot '
             .. methods.escapeCommandArgument('..\\..')

@@ -586,7 +586,7 @@ local function buildOpenLogFolderArgs()
         return ''
     end
     local helperPath = rootPath .. 'Utilities\\tools\\OpenSettingsLogFolder.ps1'
-    return '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ' .. quotePowerShellArgument(helperPath) ..
+    return '-ExecutionPolicy Bypass -File ' .. quotePowerShellArgument(helperPath) ..
         ' -TargetRoot ' .. quotePowerShellArgument(rootPath)
 end
 

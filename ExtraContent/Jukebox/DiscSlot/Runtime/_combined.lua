@@ -397,8 +397,6 @@ function JukeboxDiscSlotBuildOpenAudioFolderArgs(path)
     end
 
     return table.concat({
-        '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quoteCommandLineArgument(helperPath),
         '-Path', quoteCommandLineArgument(path),
@@ -426,8 +424,6 @@ end
 
 local function buildScannerArgs()
     return table.concat({
-        '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quotePowerShellArgument(scannerScriptPath()),
         '-AudioDirectory', quotePowerShellArgument(audioDirectoryPath()),
@@ -810,7 +806,6 @@ function JukeboxDiscSlotSyncVolumeDialogVariables()
     local cancelText = localizedControlText('Loc_Common_Cancel', 'Cancel')
     setVariable('JukeboxDiscSlotVolumeDialogProgram', resolvePowerShellProgramPath())
     setVariable('JukeboxDiscSlotVolumeDialogArgs', table.concat({
-        '-NoProfile',
         '-STA',
         '-ExecutionPolicy', 'Bypass',
         '-File', quoteCommandLineArgument('.\\JukeboxVolumeDialog.ps1'),
@@ -1378,8 +1373,6 @@ end
 
 function JukeboxDiscSlotExternalCoverFingerprint.buildArgs(coverImage, token)
     return table.concat({
-        '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quotePowerShellArgument(fingerprintHelperPath()),
         '-SourcePath', quotePowerShellArgument(coverImage),

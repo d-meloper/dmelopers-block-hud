@@ -449,7 +449,7 @@ function Start-DetachedRuntimeHostScript {
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
 
-    $argumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $Arguments
+    $argumentList = @('-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $Arguments
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = Get-UpdateRuntimePowerShellPath
     $startInfo.Arguments = Join-WindowsCommandLineArguments -Arguments $argumentList
@@ -470,7 +470,7 @@ function Invoke-HelperScript {
     )
 
     Write-Log ("Starting {0}: {1}" -f $Operation, $ScriptPath)
-    $output = @(& (Get-UpdateRuntimePowerShellPath) -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments 2>&1)
+    $output = @(& (Get-UpdateRuntimePowerShellPath) -ExecutionPolicy Bypass -File $ScriptPath @Arguments 2>&1)
     $exitCode = $LASTEXITCODE
     $pairs = Convert-OutputToResultPairs -Output $output
     $status = [string]($pairs['DMEL_STATUS'])

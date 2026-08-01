@@ -571,7 +571,6 @@ function Start-ServerProcess {
 
     $powerShellPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
     $arguments = @(
-        '-NoProfile',
         '-STA',
         '-ExecutionPolicy', 'Bypass',
         '-File', $PSCommandPath,

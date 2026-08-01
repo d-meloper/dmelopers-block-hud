@@ -268,7 +268,7 @@ function Invoke-HelperProcess {
         [Parameter(Mandatory = $true)][hashtable]$Parameters
     )
 
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $HelperPath)
+    $arguments = @('-ExecutionPolicy', 'Bypass', '-File', $HelperPath)
     foreach ($name in @('TargetRoot', 'LaunchToken', 'InitialAction')) {
         if ($Parameters.ContainsKey($name)) {
             $arguments += @('-' + $name, [string]$Parameters[$name])

@@ -351,8 +351,6 @@ function EditorImagePixelationAndPreview.buildCleanupArgs(payload)
     end
     local quote = module.quotePowerShellArgument
     return table.concat({
-        '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quote(EditorImagePixelationAndPreview.helperPath()),
         '-RequestJsonBase64', quote(payload),
