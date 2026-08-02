@@ -88,7 +88,17 @@ function Emit-ResultPairs {
     }
 
     Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value $script:LogPath
-    foreach ($key in @('DMEL_STATUS', 'DMEL_SOURCEPATH', 'DMEL_BACKUPPATH', 'DMEL_LOGPATH', 'DMEL_MESSAGE')) {
+    foreach ($key in @(
+        'DMEL_STATUS',
+        'DMEL_SOURCEPATH',
+        'DMEL_BACKUPPATH',
+        'DMEL_LOGPATH',
+        'DMEL_MESSAGE',
+        'DMEL_COMPATIBILITY',
+        'DMEL_REPAIRCOUNT',
+        'DMEL_REPAIRSUMMARY',
+        'DMEL_REPAIRPLANID'
+    )) {
         Write-OutputPair -Key $key -Value $script:ResultPairs[$key]
     }
 }
@@ -201,36 +211,106 @@ function Resolve-FullPath {
     return $full
 }
 
-function Ensure-FinalPathApi {
-    if ('DMeloperMigrationFinalPath' -as [type]) {
-        return
+function Get-ReparseTargetText {
+    param([Parameter(Mandatory = $true)][System.IO.FileSystemInfo]$Item)
+
+    $property = $Item.PSObject.Properties['Target']
+    if ($null -eq $property -or $null -eq $property.Value) {
+        return ''
     }
 
-    Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
-using Microsoft.Win32.SafeHandles;
-
-public static class DMeloperMigrationFinalPath {
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    public static extern SafeFileHandle CreateFile(
-        string lpFileName,
-        uint dwDesiredAccess,
-        uint dwShareMode,
-        IntPtr lpSecurityAttributes,
-        uint dwCreationDisposition,
-        uint dwFlagsAndAttributes,
-        IntPtr hTemplateFile);
-
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    public static extern uint GetFinalPathNameByHandle(
-        SafeFileHandle hFile,
-        StringBuilder lpszFilePath,
-        uint cchFilePath,
-        uint dwFlags);
+    foreach ($candidate in @($property.Value)) {
+        if ($null -ne $candidate -and -not [string]::IsNullOrWhiteSpace([string]$candidate)) {
+            return [string]$candidate
+        }
+    }
+    return ''
 }
-"@
+
+function Test-CloudPlaceholderReparsePoint {
+    param([Parameter(Mandatory = $true)][System.IO.FileSystemInfo]$Item)
+
+    # Windows cloud placeholders are non-redirecting reparse points.  The
+    # RecallOnOpen / RecallOnDataAccess flags distinguish those placeholders
+    # from an unknown redirecting tag whose target PowerShell cannot resolve.
+    $recallOnOpen = [System.IO.FileAttributes]0x00040000
+    $recallOnDataAccess = [System.IO.FileAttributes]0x00400000
+    return (($Item.Attributes -band $recallOnOpen) -ne 0 -or
+        ($Item.Attributes -band $recallOnDataAccess) -ne 0)
+}
+
+function Resolve-ReparseAwareExistingPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $candidate = Resolve-FullPath -Path $Path
+    $visited = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    for ($pass = 0; $pass -lt 32; $pass++) {
+        if (-not $visited.Add($candidate)) {
+            throw "Reparse-point resolution loop detected at '$candidate'."
+        }
+
+        $leaf = Get-Item -LiteralPath $candidate -Force -ErrorAction Stop
+        $chain = New-Object System.Collections.Generic.List[System.IO.FileSystemInfo]
+        $cursor = $leaf
+        while ($null -ne $cursor) {
+            $chain.Insert(0, $cursor)
+            $parentPath = [System.IO.Path]::GetDirectoryName($cursor.FullName.TrimEnd('\', '/'))
+            if ([string]::IsNullOrWhiteSpace($parentPath) -or
+                [string]::Equals($parentPath, $cursor.FullName, [System.StringComparison]::OrdinalIgnoreCase)) {
+                break
+            }
+            try {
+                $cursor = Get-Item -LiteralPath $parentPath -Force -ErrorAction Stop
+            }
+            catch {
+                break
+            }
+        }
+
+        $redirected = $false
+        foreach ($item in $chain) {
+            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+                continue
+            }
+
+            $target = Get-ReparseTargetText -Item $item
+            if ([string]::IsNullOrWhiteSpace($target)) {
+                $linkTypeProperty = $item.PSObject.Properties['LinkType']
+                $linkType = if ($null -eq $linkTypeProperty) { '' } else { [string]$linkTypeProperty.Value }
+                if (-not [string]::IsNullOrWhiteSpace($linkType)) {
+                    throw "Reparse target is unavailable for '$($item.FullName)' (LinkType=$linkType)."
+                }
+                if (Test-CloudPlaceholderReparsePoint -Item $item) {
+                    continue
+                }
+                throw "Unsupported targetless reparse point cannot be resolved safely: '$($item.FullName)'."
+            }
+
+            if (-not [System.IO.Path]::IsPathRooted($target)) {
+                $target = Join-Path ([System.IO.Path]::GetDirectoryName($item.FullName)) $target
+            }
+            $target = [System.IO.Path]::GetFullPath($target).TrimEnd('\', '/')
+            if (-not (Test-Path -LiteralPath $target)) {
+                throw "Reparse target does not exist: '$target'."
+            }
+
+            $remaining = $candidate.Substring($item.FullName.TrimEnd('\', '/').Length).TrimStart('\', '/')
+            $candidate = if ([string]::IsNullOrWhiteSpace($remaining)) {
+                $target
+            }
+            else {
+                [System.IO.Path]::GetFullPath((Join-Path $target $remaining))
+            }
+            $redirected = $true
+            break
+        }
+
+        if (-not $redirected) {
+            return $candidate.TrimEnd('\', '/').ToLowerInvariant()
+        }
+    }
+
+    throw "Reparse-point resolution exceeded the supported depth for '$Path'."
 }
 
 function Get-FinalExistingPathInfo {
@@ -240,42 +320,10 @@ function Get-FinalExistingPathInfo {
     $item = Get-Item -LiteralPath $resolved
 
     try {
-        Ensure-FinalPathApi
-        $fileFlagBackupSemantics = 0x02000000
-        $openExisting = 3
-        $shareReadWriteDelete = 7
-        $handle = [DMeloperMigrationFinalPath]::CreateFile($item.FullName, 0, $shareReadWriteDelete, [IntPtr]::Zero, $openExisting, $fileFlagBackupSemantics, [IntPtr]::Zero)
-        if ($handle.IsInvalid) {
-            $handle.Dispose()
-            throw "CreateFile failed for $($item.FullName)"
-        }
-
-        try {
-            $builder = New-Object System.Text.StringBuilder 1024
-            $length = [DMeloperMigrationFinalPath]::GetFinalPathNameByHandle($handle, $builder, [uint32]$builder.Capacity, 0)
-            if ($length -le 0) {
-                throw "GetFinalPathNameByHandle failed for $($item.FullName)"
-            }
-            if ($length -gt $builder.Capacity) {
-                $builder = New-Object System.Text.StringBuilder ([int]$length + 1)
-                $length = [DMeloperMigrationFinalPath]::GetFinalPathNameByHandle($handle, $builder, [uint32]$builder.Capacity, 0)
-            }
-
-            $finalPath = $builder.ToString()
-            if ($finalPath.StartsWith('\\?\UNC\')) {
-                $finalPath = '\' + $finalPath.Substring(7)
-            }
-            elseif ($finalPath.StartsWith('\\?\')) {
-                $finalPath = $finalPath.Substring(4)
-            }
-            return [pscustomobject]@{
-                Success = $true
-                Path = $finalPath.TrimEnd('\', '/').ToLowerInvariant()
-                Error = ''
-            }
-        }
-        finally {
-            $handle.Dispose()
+        return [pscustomobject]@{
+            Success = $true
+            Path = Resolve-ReparseAwareExistingPath -Path $item.FullName
+            Error = ''
         }
     }
     catch {
@@ -661,6 +709,11 @@ function Test-NonRedirectingReparsePoint {
         return $false
     }
 
+    if (-not (Test-CloudPlaceholderReparsePoint -Item $Item)) {
+        $Reason.Value = 'unsupported targetless reparse tag'
+        return $false
+    }
+
     $itemIdentity = Normalize-PathIdentity -Path $Item.FullName
     $finalPathInfo = Get-FinalExistingPathInfo -Path $Item.FullName
     if (-not $finalPathInfo.Success) {
@@ -722,83 +775,21 @@ function Assert-SafeTargetPath {
     }
 }
 
-function Select-SourceRootWithDialog {
-    param([Parameter(Mandatory = $true)][string]$InitialPath)
-
-    Add-Type -AssemblyName System.Windows.Forms
-    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dialog.Description = T 'Helper_Import_FolderPrompt' "Select the older (v1.1.0+) DMeloper's Block HUD folder."
-    $dialog.ShowNewFolderButton = $false
-    if (Test-Path -LiteralPath $InitialPath -PathType Container) {
-        $dialog.SelectedPath = $InitialPath
+function Ensure-ImportFromOldVersionInteractiveSourceSelection {
+    if ($null -ne (Get-Command -Name 'Select-SourceRootWithDialog' -CommandType Function -ErrorAction SilentlyContinue) -and
+        $null -ne (Get-Command -Name 'Confirm-DetectedSourceSelection' -CommandType Function -ErrorAction SilentlyContinue)) {
+        return
     }
 
-    $result = $dialog.ShowDialog()
-    if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
-        throw (New-Object System.OperationCanceledException (T 'Helper_Import_SelectCanceled' 'The user canceled old-data import.'))
+    $interactivePath = Join-Path $script:ModuleRoot 'InteractiveSourceSelection.ps1'
+    if (-not (Test-Path -LiteralPath $interactivePath -PathType Leaf)) {
+        throw "Interactive source-selection module was not found: $interactivePath"
     }
 
-    $selectedDirectory = $dialog.SelectedPath
-    if ($null -eq $selectedDirectory) {
-        $selectedDirectory = ''
-    }
-    $selectedDirectory = $selectedDirectory.Trim()
-    $selected = Resolve-SourceRootCandidate -Candidate $selectedDirectory
-    if (-not $selected) {
-        $message = T 'Helper_Import_InvalidFolder' 'The selected folder is not a valid v1.1.0+ skin folder:'
-        throw ($message + ' ' + $selectedDirectory)
-    }
-
-    return $selected
-}
-
-function Confirm-DetectedSourceSelection {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$DetectedSource,
-        [Parameter(Mandatory = $true)]
-        [string]$BrowseRoot
-    )
-
-    Add-Type -AssemblyName System.Windows.Forms
-    $messageLines = @(
-        (T 'Helper_Import_ConfirmFound' 'An older (v1.1.0+) skin folder to import was found.'),
-        '',
-        $DetectedSource,
-        '',
-        (T 'Helper_Import_ConfirmYes' 'Yes: use this folder'),
-        (T 'Helper_Import_ConfirmNo' 'No: choose a different folder'),
-        (T 'Helper_Import_ConfirmCancel' 'Cancel: exit without changes')
-    )
-    $message = [string]::Join([Environment]::NewLine, $messageLines)
-    $result = [System.Windows.Forms.MessageBox]::Show(
-        $message,
-        (T 'Helper_Import_ConfirmTitle' 'Old-data import'),
-        [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
-        [System.Windows.Forms.MessageBoxIcon]::Question,
-        [System.Windows.Forms.MessageBoxDefaultButton]::Button1
-    )
-
-    switch ($result) {
-        ([System.Windows.Forms.DialogResult]::Yes) {
-            Write-Log "Auto-detected source confirmed: $DetectedSource"
-            return [pscustomobject]@{
-                Path = $DetectedSource
-                Detection = 'auto'
-            }
-        }
-        ([System.Windows.Forms.DialogResult]::No) {
-            $selectedSource = Select-SourceRootWithDialog -InitialPath $BrowseRoot
-            Write-Log "Source selected after declining auto-detected source: $selectedSource"
-            return [pscustomobject]@{
-                Path = $selectedSource
-                Detection = 'manual'
-            }
-        }
-        default {
-            Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $DetectedSource
-            throw (New-Object System.OperationCanceledException (T 'Helper_Import_SelectCanceled' 'The user canceled old-data import.'))
-        }
+    . $interactivePath
+    foreach ($functionName in @('Select-SourceRootWithDialog', 'Confirm-DetectedSourceSelection')) {
+        $loadedFunction = Get-Item -LiteralPath ('Function:\' + $functionName) -ErrorAction Stop
+        Set-Item -LiteralPath ('Function:\script:' + $functionName) -Value $loadedFunction.ScriptBlock
     }
 }
 
@@ -933,6 +924,7 @@ function Find-SourceRoot {
             }
 
             Write-Log "Auto-detected source candidate: $resolvedSource"
+            Ensure-ImportFromOldVersionInteractiveSourceSelection
             return (Confirm-DetectedSourceSelection -DetectedSource $resolvedSource -BrowseRoot $skinsRoot)
         }
 
@@ -947,6 +939,7 @@ function Find-SourceRoot {
         throw (T 'Helper_Import_AutoDetectNeedsManual' 'Without opening the folder picker, a compatible v1.1.0+ skin folder cannot be auto-detected. Specify -SourceRoot directly.')
     }
 
+    Ensure-ImportFromOldVersionInteractiveSourceSelection
     return [pscustomobject]@{
         Path = (Select-SourceRootWithDialog -InitialPath $skinsRoot)
         Detection = 'manual'

@@ -2,6 +2,138 @@
 
 # Dot-sourced by the public entrypoint. Keep public CLI contracts in the entrypoint file.
 
+function Test-OpenVersionManagerScriptSupportsParameter {
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [Parameter(Mandatory = $true)][string]$ParameterName
+    )
+
+    if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+        return $false
+    }
+
+    try {
+        $content = Read-TextSmart -Path $ScriptPath
+        return ($content -match ('(?i)\$' + [regex]::Escape($ParameterName) + '\b'))
+    }
+    catch {
+        return $false
+    }
+}
+
+function ConvertTo-ComparableExplorerPath {
+    param([AllowNull()][string]$LocationUrl)
+
+    if ([string]::IsNullOrWhiteSpace($LocationUrl)) {
+        return ''
+    }
+
+    try {
+        $uri = [System.Uri]$LocationUrl
+        if (-not $uri.IsFile) {
+            return ''
+        }
+        return [System.IO.Path]::GetFullPath($uri.LocalPath).TrimEnd('\', '/')
+    }
+    catch {
+        return ''
+    }
+}
+
+function Invoke-ExplorerForegroundHint {
+    param(
+        [Parameter(Mandatory = $true)][string]$Target,
+        [AllowNull()][System.Diagnostics.Process]$StartedProcess
+    )
+
+    $deadline = [DateTime]::UtcNow.AddMilliseconds(1500)
+    $wscriptShell = $null
+    $shellApplication = $null
+    try {
+        $wscriptShell = New-Object -ComObject WScript.Shell
+        $shellApplication = New-Object -ComObject Shell.Application
+        $comparableTarget = [System.IO.Path]::GetFullPath($Target).TrimEnd('\', '/')
+
+        do {
+            if ($null -ne $StartedProcess) {
+                try {
+                    $StartedProcess.Refresh()
+                    if (-not $StartedProcess.HasExited -and $StartedProcess.MainWindowHandle -ne [IntPtr]::Zero) {
+                        if ($wscriptShell.AppActivate([int]$StartedProcess.Id)) {
+                            return $true
+                        }
+                    }
+                }
+                catch {
+                }
+            }
+
+            $matchingTitles = New-Object System.Collections.Generic.List[string]
+            $titleCounts = @{}
+            foreach ($window in @($shellApplication.Windows())) {
+                try {
+                    $title = [string]$window.LocationName
+                    if (-not [string]::IsNullOrWhiteSpace($title)) {
+                        $titleKey = $title.ToUpperInvariant()
+                        $titleCounts[$titleKey] = 1 + [int]$titleCounts[$titleKey]
+                    }
+                    $windowPath = ConvertTo-ComparableExplorerPath -LocationUrl ([string]$window.LocationURL)
+                    if ([string]::Equals($windowPath, $comparableTarget, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        if (-not [string]::IsNullOrWhiteSpace($title) -and -not $matchingTitles.Contains($title)) {
+                            $matchingTitles.Add($title)
+                        }
+                    }
+                }
+                catch {
+                }
+            }
+
+            $uniqueMatchingTitles = @($matchingTitles | Where-Object { [int]$titleCounts[$_.ToUpperInvariant()] -eq 1 })
+            if ($uniqueMatchingTitles.Count -eq 1 -and $wscriptShell.AppActivate($uniqueMatchingTitles[0])) {
+                return $true
+            }
+
+            Start-Sleep -Milliseconds 75
+        } while ([DateTime]::UtcNow -lt $deadline)
+    }
+    catch {
+    }
+    finally {
+        if ($null -ne $shellApplication -and [System.Runtime.InteropServices.Marshal]::IsComObject($shellApplication)) {
+            [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shellApplication)
+        }
+        if ($null -ne $wscriptShell -and [System.Runtime.InteropServices.Marshal]::IsComObject($wscriptShell)) {
+            [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($wscriptShell)
+        }
+    }
+
+    return $false
+}
+
+function Start-DetachedExplorer {
+    param([Parameter(Mandatory = $true)][string]$Target)
+
+    $windowsRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
+    if ([string]::IsNullOrWhiteSpace($windowsRoot)) {
+        $windowsRoot = [Environment]::ExpandEnvironmentVariables('%SystemRoot%')
+    }
+    $explorerPath = [System.IO.Path]::Combine($windowsRoot, 'explorer.exe')
+    if (-not [System.IO.File]::Exists($explorerPath)) {
+        throw 'File Explorer is unavailable.'
+    }
+
+    $quotedTarget = '"' + $Target.Replace('"', '') + '"'
+    $startedProcess = Start-Process -FilePath $explorerPath -ArgumentList $quotedTarget -WindowStyle Normal -PassThru
+    try {
+        [void](Invoke-ExplorerForegroundHint -Target $Target -StartedProcess $startedProcess)
+    }
+    finally {
+        if ($null -ne $startedProcess) {
+            $startedProcess.Dispose()
+        }
+    }
+}
+
 function Open-FolderPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -15,7 +147,7 @@ function Open-FolderPath {
         Split-Path -Parent $Path
     }
     if (-not [string]::IsNullOrWhiteSpace($target)) {
-        Invoke-Item -LiteralPath $target
+        Start-DetachedExplorer -Target ([System.IO.Path]::GetFullPath($target))
     }
 }
 
@@ -88,15 +220,16 @@ function Show-VersionManagerMessageBox {
         return [System.Windows.Forms.MessageBox]::Show($Message, $caption, $Buttons, $Icon)
     }
 
-    $wasTopMost = [bool]$ownerForm.TopMost
+    $ownerForm.TopMost = $true
+    $ownerForm.BringToFront()
+    $ownerForm.Activate()
     try {
-        $ownerForm.TopMost = $false
-        $ownerForm.Activate()
         return [System.Windows.Forms.MessageBox]::Show($ownerForm, $Message, $caption, $Buttons, $Icon)
     }
     finally {
         if (-not $ownerForm.IsDisposed) {
-            $ownerForm.TopMost = $wasTopMost
+            $ownerForm.TopMost = $true
+            $ownerForm.BringToFront()
             $ownerForm.Activate()
         }
     }
@@ -175,6 +308,11 @@ function Show-SourceEntryDialog {
     $form.Controls.AddRange(@($pathLabel, $pathBox, $browseButton, $hint, $okButton, $cancelButton))
     $form.AcceptButton = $okButton
     $form.CancelButton = $cancelButton
+    $form.Add_Shown({
+        $form.TopMost = $true
+        $form.BringToFront()
+        $form.Activate()
+    })
 
     if ($form.ShowDialog($Owner) -ne [System.Windows.Forms.DialogResult]::OK) {
         $form.Dispose()
@@ -199,7 +337,9 @@ function Show-SourceEntryDialog {
 function Invoke-ImportFromInstallation {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)][string]$SourcePath
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [string]$ProgressOwnerRoot = '',
+        [string]$ProgressToken = ''
     )
 
     $importScript = Get-ImportHelperPath -Root $Root
@@ -207,8 +347,87 @@ function Invoke-ImportFromInstallation {
         throw (T 'Helper_VersionManager_Install_HelperMissing' 'ImportFromOldVersion.ps1 was not found.')
     }
 
-    $output = @(& (Get-PowerShellExecutablePath) -NoProfile -ExecutionPolicy Bypass -STA -File $importScript -TargetRoot $Root -SourceRoot $SourcePath -EmitResultPairs 2>&1)
-    $exitCode = $LASTEXITCODE
+    $importParameters = [ordered]@{
+        TargetRoot = $Root
+        SourceRoot = $SourcePath
+        NonInteractive = $true
+    }
+    $supportsProgressOwner = Test-OpenVersionManagerScriptSupportsParameter -ScriptPath $importScript -ParameterName 'ProgressOwnerRoot'
+    $supportsProgressToken = Test-OpenVersionManagerScriptSupportsParameter -ScriptPath $importScript -ParameterName 'ProgressToken'
+    if ($supportsProgressOwner -and $supportsProgressToken -and
+        -not [string]::IsNullOrWhiteSpace($ProgressOwnerRoot) -and
+        -not [string]::IsNullOrWhiteSpace($ProgressToken)) {
+        $importParameters['ProgressOwnerRoot'] = $ProgressOwnerRoot
+        $importParameters['ProgressToken'] = $ProgressToken
+    }
+    elseif ($supportsProgressOwner -xor $supportsProgressToken) {
+        Write-Log 'Import helper exposes an incomplete progress contract; using the legacy non-determinate UI.' 'WARN'
+    }
+
+    $passThruResult = Invoke-VersionManagerPassThruScript `
+        -ScriptPath $importScript `
+        -Parameters $importParameters `
+        -PassThruParameter 'PassThruResultObject' `
+        -RequiredProperty 'DMEL_STATUS' `
+        -TimeoutSeconds 1800
+    if ($null -ne $passThruResult) {
+        $status = ([string]$passThruResult.DMEL_STATUS).ToUpperInvariant()
+        return [PSCustomObject]@{
+            ExitCode = $(if ($status -eq 'ERROR') { 1 } else { 0 })
+            Status = $status
+            Message = [string]$passThruResult.DMEL_MESSAGE
+            SourcePath = [string]$passThruResult.DMEL_SOURCEPATH
+            LogPath = [string]$passThruResult.DMEL_LOGPATH
+            Output = ''
+        }
+    }
+    try {
+        Write-Log 'Import helper uses the legacy external-process compatibility path.' 'WARN'
+    }
+    catch {
+    }
+
+    $arguments = @(
+        '-NoProfile'
+        '-ExecutionPolicy'
+        'Bypass'
+        '-STA'
+        '-File'
+        $importScript
+        '-TargetRoot'
+        $Root
+        '-SourceRoot'
+        $SourcePath
+        '-EmitResultPairs'
+    )
+    if ($supportsProgressOwner -and $supportsProgressToken -and
+        -not [string]::IsNullOrWhiteSpace($ProgressOwnerRoot) -and
+        -not [string]::IsNullOrWhiteSpace($ProgressToken)) {
+        $arguments += @('-ProgressOwnerRoot', $ProgressOwnerRoot, '-ProgressToken', $ProgressToken)
+    }
+    $process = New-Object System.Diagnostics.Process
+    try {
+        $process.StartInfo = New-VersionManagerHostProcessStartInfo -Arguments $arguments -RedirectOutput
+        if (-not $process.Start()) {
+            throw 'Import helper process could not be started.'
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
+        $stdoutText = [string]$stdoutTask.Result
+        $stderrText = [string]$stderrTask.Result
+    }
+    finally {
+        $process.Dispose()
+    }
+
+    $output = @()
+    foreach ($streamText in @($stdoutText, $stderrText)) {
+        if (-not [string]::IsNullOrEmpty([string]$streamText)) {
+            $output += @([string]$streamText -split "\r?\n" | Where-Object { $_ -ne '' })
+        }
+    }
     $pairs = @{}
     foreach ($line in $output) {
         $textLine = [string]$line
@@ -255,64 +474,6 @@ function Invoke-ImportFromInstallation {
     }
 }
 
-function Get-UpdateCache {
-    param([Parameter(Mandatory = $true)][string]$Root)
-
-    return (Read-VersionManagerUpdateCache -Root $Root)
-}
-
-function Save-UpdateCache {
-    param(
-        [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)]$Cache
-    )
-
-    try {
-        return (Save-VersionManagerUpdateCache -Root $Root -Cache $Cache)
-    }
-    catch {
-        $normalized = ConvertTo-VersionManagerUpdateCacheObject -Cache $Cache
-        Write-JsonFile -Path (Get-UpdateCachePath -Root $Root) -Value $normalized
-        return $normalized
-    }
-}
-
-function Update-UpdateCache {
-    param(
-        [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)]$Patch
-    )
-
-    try {
-        return (Update-VersionManagerUpdateCache -Root $Root -Patch $Patch)
-    }
-    catch {
-        $current = Get-UpdateCache -Root $Root
-        $merged = Merge-VersionManagerUpdateCache -BaseCache $current -PatchCache $Patch
-        Write-JsonFile -Path (Get-UpdateCachePath -Root $Root) -Value $merged
-        return $merged
-    }
-}
-
-function Test-UpdateConfigured {
-    param($Config)
-
-    $activePattern = $null
-    try {
-        $activePattern = Resolve-ActiveUpdateAssetPattern -Config $Config
-    }
-    catch {
-        return $false
-    }
-
-    return (
-        [string]::Equals([string]$Config.Provider, 'github', [System.StringComparison]::OrdinalIgnoreCase) -and
-        -not [string]::IsNullOrWhiteSpace([string]$Config.Owner) -and
-        -not [string]::IsNullOrWhiteSpace([string]$Config.Repo) -and
-        -not [string]::IsNullOrWhiteSpace([string]$activePattern.AssetPattern)
-    )
-}
-
 function Convert-VersionManagerOutputToResultPairs {
     param([object[]]$Output)
 
@@ -327,90 +488,85 @@ function Convert-VersionManagerOutputToResultPairs {
     return $pairs
 }
 
-function Invoke-VersionReleaseCatalog {
+function Test-VersionManagerScriptParameter {
     param(
-        [Parameter(Mandatory = $true)][string]$Root,
-        [switch]$ForceRefresh,
-        [ValidateRange(5, 120)][int]$ProcessTimeoutSeconds = 25
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [Parameter(Mandatory = $true)][string]$ParameterName
     )
 
-    $catalogScript = Get-VersionCatalogHelperPath -Root $Root
-    if (-not (Test-Path -LiteralPath $catalogScript -PathType Leaf)) {
-        throw (T 'Helper_VersionManager_Update_VersionCatalogBackendRequired' (U '\uBC84\uC804 \uBAA9\uB85D \uC870\uD68C/\uC124\uCE58 \uBC31\uC5D4\uB4DC\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.'))
-    }
-
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $catalogScript, '-CurrentTargetRoot', $Root, '-OutputJson', '-SyncUpdateCache')
-    if (-not $ForceRefresh) {
-        $arguments += '-PreferFreshCache'
-    }
-
-    $process = $null
-    $exitCode = $null
-    $jsonText = ''
-    $errorText = ''
     try {
-        $process = New-Object System.Diagnostics.Process
-        $process.StartInfo = New-VersionManagerHostProcessStartInfo -Arguments $arguments -RedirectOutput
-        if (-not $process.Start()) {
-            throw 'Version catalog helper process could not be started.'
+        $tokens = $null
+        $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($ScriptPath, [ref]$tokens, [ref]$errors)
+        if ($null -eq $ast -or $null -eq $ast.ParamBlock) {
+            return $false
         }
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        $deadline = [DateTime]::UtcNow.AddSeconds($ProcessTimeoutSeconds)
-        while (-not $process.WaitForExit(50)) {
-            [System.Windows.Forms.Application]::DoEvents()
-            if ($script:VersionManagerWindowClosing) {
-                try {
-                    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-                }
-                catch {
-                }
-                throw 'Version catalog request was canceled because the Skin manager is closing.'
-            }
-            if ([DateTime]::UtcNow -ge $deadline) {
-                try {
-                    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-                }
-                catch {
-                }
-                throw ("Version catalog request exceeded the {0}-second operation deadline." -f $ProcessTimeoutSeconds)
+        foreach ($parameter in @($ast.ParamBlock.Parameters)) {
+            if ([string]::Equals([string]$parameter.Name.VariablePath.UserPath, $ParameterName, [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $true
             }
         }
-        $process.Refresh()
-        $candidateExitCode = $process.ExitCode
-        if ($null -ne $candidateExitCode) {
-            $exitCode = [int]$candidateExitCode
-        }
-        $jsonText = ([string]$stdoutTask.Result).Trim()
-        $errorText = ([string]$stderrTask.Result).Trim()
-    }
-    finally {
-        if ($null -ne $process) {
-            $process.Dispose()
-        }
-    }
-    if ([string]::IsNullOrWhiteSpace($jsonText)) {
-        throw ("Version catalog helper did not emit JSON. {0}" -f $errorText)
-    }
-
-    $catalog = $null
-    try {
-        $catalog = $jsonText | ConvertFrom-Json
     }
     catch {
-        throw ("Version catalog helper emitted invalid JSON. exitCode={0}; output={1}; error={2}" -f $exitCode, $jsonText, $errorText)
-    }
-
-    $status = [string](Get-ObjectPropertyValue -Object $catalog -Name 'status' -DefaultValue '')
-    $message = [string](Get-ObjectPropertyValue -Object $catalog -Name 'message' -DefaultValue '')
-    if ((($null -ne $exitCode) -and $exitCode -ne 0) -or [string]::Equals($status, 'ERROR', [System.StringComparison]::OrdinalIgnoreCase)) {
-        if ([string]::IsNullOrWhiteSpace($message)) {
-            $message = "Version catalog helper failed with exit code $exitCode."
+        try {
+            Write-Log ("Could not inspect helper parameter contract: {0}" -f $_.Exception.Message) 'WARN'
         }
-        throw $message
+        catch {
+        }
+    }
+    return $false
+}
+
+function Invoke-VersionManagerPassThruScript {
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Parameters,
+        [Parameter(Mandatory = $true)][string]$PassThruParameter,
+        [Parameter(Mandatory = $true)][string]$RequiredProperty,
+        [ValidateRange(5, 3600)][int]$TimeoutSeconds = 1800
+    )
+
+    if (-not (Test-VersionManagerScriptParameter -ScriptPath $ScriptPath -ParameterName $PassThruParameter)) {
+        return $null
+    }
+    $invocationParameters = [ordered]@{}
+    foreach ($entry in $Parameters.GetEnumerator()) {
+        $invocationParameters[[string]$entry.Key] = $entry.Value
+    }
+    $invocationParameters[$PassThruParameter] = $true
+    $invocation = Invoke-VersionManagerIsolatedScript `
+        -ScriptPath $ScriptPath `
+        -Parameters $invocationParameters `
+        -TimeoutSeconds $TimeoutSeconds `
+        -CancelWhenWindowCloses
+    $resultObject = Get-VersionManagerPassThruObject -Output $invocation.Output -RequiredProperty $RequiredProperty
+    if ($null -eq $resultObject) {
+        $detail = [string]::Join(' | ', @($invocation.Errors))
+        throw ("Helper did not return the required pass-through object ({0}). {1}" -f $RequiredProperty, $detail)
+    }
+    return $resultObject
+}
+
+function Get-VersionInstallCompatibilityContractError {
+    param(
+        [Parameter(Mandatory = $true)][string]$Status,
+        [string]$Compatibility = '',
+        [string]$RepairCount = '',
+        [string]$RepairPlanId = ''
+    )
+
+    if (-not [string]::Equals($Status, 'WARN', [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals($Compatibility, 'REPAIRABLE', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return ''
     }
 
-    return $catalog
+    $countValue = 0
+    if ($RepairPlanId -notmatch '^[0-9A-Fa-f]{64}$' -or
+        -not [int]::TryParse($RepairCount, [ref]$countValue) -or
+        $countValue -le 0) {
+        return 'Install helper reported a repairable compatibility warning without a valid repair count and SHA-256 plan id.'
+    }
+    return ''
 }
 
 function Invoke-VersionReleaseInstall {
@@ -420,12 +576,99 @@ function Invoke-VersionReleaseInstall {
         [string]$ExpectedVersion,
         [string]$ExpectedReleaseVariant,
         [string]$SelectedTargetRoot,
-        [switch]$AllowCompatibilityWarning
+        [switch]$AllowCompatibilityWarning,
+        [string]$ExpectedRepairPlanId = '',
+        [string]$ProgressOwnerRoot = '',
+        [string]$ProgressToken = ''
     )
 
     $installScript = Get-VersionReleaseInstallHelperPath -Root $Root
     if (-not (Test-Path -LiteralPath $installScript -PathType Leaf)) {
-        throw (T 'Helper_VersionManager_Update_VersionCatalogBackendRequired' (U '\uBC84\uC804 \uBAA9\uB85D \uC870\uD68C/\uC124\uCE58 \uBC31\uC5D4\uB4DC\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.'))
+        throw (T 'Helper_VersionManager_Update_InstallBackendRequired' (U '\uBC84\uC804 \uC124\uCE58 \uBC31\uC5D4\uB4DC\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.'))
+    }
+
+    $passThruParameters = [ordered]@{
+        CurrentTargetRoot = $Root
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SelectedTargetRoot)) {
+        $passThruParameters['SelectedTargetRoot'] = $SelectedTargetRoot
+    }
+    else {
+        $passThruParameters['PackageUrl'] = $PackageUrl
+        $passThruParameters['ExpectedVersion'] = $ExpectedVersion
+        if ($AllowCompatibilityWarning) {
+            $passThruParameters['AllowCompatibilityWarning'] = $true
+            if (-not [string]::IsNullOrWhiteSpace($ExpectedRepairPlanId)) {
+                $passThruParameters['ExpectedRepairPlanId'] = $ExpectedRepairPlanId
+            }
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedReleaseVariant)) {
+        $passThruParameters['ExpectedReleaseVariant'] = $ExpectedReleaseVariant
+    }
+    $supportsProgressOwner = Test-OpenVersionManagerScriptSupportsParameter -ScriptPath $installScript -ParameterName 'ProgressOwnerRoot'
+    $supportsProgressToken = Test-OpenVersionManagerScriptSupportsParameter -ScriptPath $installScript -ParameterName 'ProgressToken'
+    if ($supportsProgressOwner -and $supportsProgressToken -and
+        -not [string]::IsNullOrWhiteSpace($ProgressOwnerRoot) -and
+        -not [string]::IsNullOrWhiteSpace($ProgressToken)) {
+        $passThruParameters['ProgressOwnerRoot'] = $ProgressOwnerRoot
+        $passThruParameters['ProgressToken'] = $ProgressToken
+    }
+    elseif ($supportsProgressOwner -xor $supportsProgressToken) {
+        Write-Log 'Version install helper exposes an incomplete progress contract; using the legacy non-determinate UI.' 'WARN'
+    }
+    $passThruResult = Invoke-VersionManagerPassThruScript `
+        -ScriptPath $installScript `
+        -Parameters $passThruParameters `
+        -PassThruParameter 'PassThruResultObject' `
+        -RequiredProperty 'DMEL_STATUS' `
+        -TimeoutSeconds 3600
+    if ($null -ne $passThruResult) {
+        $status = ([string]$passThruResult.DMEL_STATUS).ToUpperInvariant()
+        $message = [string]$passThruResult.DMEL_MESSAGE
+        $compatibility = [string](Get-ObjectPropertyValue -Object $passThruResult -Name 'DMEL_COMPATIBILITY' -DefaultValue '')
+        $repairCount = [string](Get-ObjectPropertyValue -Object $passThruResult -Name 'DMEL_REPAIRCOUNT' -DefaultValue '0')
+        $repairSummary = [string](Get-ObjectPropertyValue -Object $passThruResult -Name 'DMEL_REPAIRSUMMARY' -DefaultValue '')
+        $repairPlanId = [string](Get-ObjectPropertyValue -Object $passThruResult -Name 'DMEL_REPAIRPLANID' -DefaultValue '')
+        if ($status -ne 'OK' -and $status -ne 'WARN' -and $status -ne 'ERROR' -and $status -ne 'NOOP') {
+            $message = "Install helper emitted unsupported DMEL_STATUS '$status'."
+            $status = 'ERROR'
+        }
+        if ($status -eq 'OK' -or $status -eq 'WARN' -or $status -eq 'NOOP') {
+            $missingContract = New-Object System.Collections.Generic.List[string]
+            if (($status -eq 'OK' -or $status -eq 'NOOP') -and [string]::IsNullOrWhiteSpace([string]$passThruResult.DMEL_SOURCEPATH)) {
+                $missingContract.Add('DMEL_SOURCEPATH')
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$passThruResult.DMEL_LOGPATH)) {
+                $missingContract.Add('DMEL_LOGPATH')
+            }
+            if ($missingContract.Count -gt 0) {
+                $message = 'Install helper reported success without required result fields: ' + ($missingContract.ToArray() -join ', ')
+                $status = 'ERROR'
+            }
+        }
+        $compatibilityContractError = Get-VersionInstallCompatibilityContractError -Status $status -Compatibility $compatibility -RepairCount $repairCount -RepairPlanId $repairPlanId
+        if (-not [string]::IsNullOrWhiteSpace($compatibilityContractError)) {
+            $message = $compatibilityContractError
+            $status = 'ERROR'
+        }
+        return [PSCustomObject]@{
+            ExitCode = $(if ($status -eq 'ERROR') { 1 } else { 0 })
+            Status = $status
+            Message = $message
+            SourcePath = [string]$passThruResult.DMEL_SOURCEPATH
+            LogPath = [string]$passThruResult.DMEL_LOGPATH
+            Compatibility = $compatibility
+            RepairCount = $repairCount
+            RepairSummary = $repairSummary
+            RepairPlanId = $repairPlanId
+            Output = ''
+        }
+    }
+    try {
+        Write-Log 'Version install helper uses the legacy external-process compatibility path.' 'WARN'
+    }
+    catch {
     }
 
     $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $installScript, '-CurrentTargetRoot', $Root, '-EmitResultPairs')
@@ -436,10 +679,18 @@ function Invoke-VersionReleaseInstall {
         $arguments += @('-PackageUrl', $PackageUrl, '-ExpectedVersion', $ExpectedVersion)
         if ($AllowCompatibilityWarning) {
             $arguments += '-AllowCompatibilityWarning'
+            if (-not [string]::IsNullOrWhiteSpace($ExpectedRepairPlanId)) {
+                $arguments += @('-ExpectedRepairPlanId', $ExpectedRepairPlanId)
+            }
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedReleaseVariant)) {
         $arguments += @('-ExpectedReleaseVariant', $ExpectedReleaseVariant)
+    }
+    if ($supportsProgressOwner -and $supportsProgressToken -and
+        -not [string]::IsNullOrWhiteSpace($ProgressOwnerRoot) -and
+        -not [string]::IsNullOrWhiteSpace($ProgressToken)) {
+        $arguments += @('-ProgressOwnerRoot', $ProgressOwnerRoot, '-ProgressToken', $ProgressToken)
     }
     $process = $null
     $exitCode = $null
@@ -499,13 +750,244 @@ function Invoke-VersionReleaseInstall {
         }
     }
 
+    $compatibility = [string]($pairs['DMEL_COMPATIBILITY'])
+    $repairCount = [string]($pairs['DMEL_REPAIRCOUNT'])
+    $repairSummary = [string]($pairs['DMEL_REPAIRSUMMARY'])
+    $repairPlanId = [string]($pairs['DMEL_REPAIRPLANID'])
+    $compatibilityContractError = Get-VersionInstallCompatibilityContractError -Status $status -Compatibility $compatibility -RepairCount $repairCount -RepairPlanId $repairPlanId
+    if (-not [string]::IsNullOrWhiteSpace($compatibilityContractError)) {
+        $message = $compatibilityContractError
+        $status = 'ERROR'
+    }
+
     return [PSCustomObject]@{
         ExitCode = $exitCode
         Status = $status
         Message = $message
         SourcePath = [string]($pairs['DMEL_SOURCEPATH'])
         LogPath = [string]($pairs['DMEL_LOGPATH'])
+        Compatibility = $compatibility
+        RepairCount = $repairCount
+        RepairSummary = $repairSummary
+        RepairPlanId = $repairPlanId
         Output = ($output | Out-String)
+    }
+}
+
+function ConvertTo-CurrentSkinResetResult {
+    param(
+        [AllowNull()]$ResultObject,
+        [int]$ExitCode = 0,
+        [string]$Output = ''
+    )
+
+    $status = ([string](Get-ObjectPropertyValue -Object $ResultObject -Name 'DMEL_STATUS' -DefaultValue '')).Trim().ToUpperInvariant()
+    $message = [string](Get-ObjectPropertyValue -Object $ResultObject -Name 'DMEL_MESSAGE' -DefaultValue '')
+    $sourcePath = [string](Get-ObjectPropertyValue -Object $ResultObject -Name 'DMEL_SOURCEPATH' -DefaultValue '')
+    $logPath = [string](Get-ObjectPropertyValue -Object $ResultObject -Name 'DMEL_LOGPATH' -DefaultValue '')
+    if ($status -ne 'OK' -and $status -ne 'NOOP' -and $status -ne 'WARN' -and $status -ne 'ERROR') {
+        $message = "Current-skin reset helper emitted unsupported DMEL_STATUS '$status'."
+        $status = 'ERROR'
+    }
+    if (($status -eq 'OK' -or $status -eq 'NOOP') -and [string]::IsNullOrWhiteSpace($sourcePath)) {
+        $message = 'Current-skin reset helper reported success without DMEL_SOURCEPATH.'
+        $status = 'ERROR'
+    }
+    if (($status -eq 'OK' -or $status -eq 'NOOP' -or $status -eq 'WARN') -and [string]::IsNullOrWhiteSpace($logPath)) {
+        $message = 'Current-skin reset helper reported a result without DMEL_LOGPATH.'
+        $status = 'ERROR'
+    }
+    return [PSCustomObject]@{
+        ExitCode = $(if ($status -eq 'ERROR') { 1 } else { $ExitCode })
+        Status = $status
+        Message = $message
+        SourcePath = $sourcePath
+        LogPath = $logPath
+        Output = $Output
+    }
+}
+
+function Invoke-CurrentSkinReset {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$PackageUrl,
+        [Parameter(Mandatory = $true)][string]$ExpectedVersion,
+        [Parameter(Mandatory = $true)][ValidateSet('Korea', 'Global')][string]$ExpectedReleaseVariant,
+        [AllowNull()][scriptblock]$OnStageChanged
+    )
+
+    $stableVersion = ConvertTo-VersionManagerStableComparableVersion -VersionText $ExpectedVersion
+    if ($null -eq $stableVersion) {
+        throw 'Current-skin reset requires a stable semantic ExpectedVersion.'
+    }
+    $currentVersionText = Get-SkinMetadataVersion -Root $Root
+    $currentVersion = ConvertTo-VersionManagerStableComparableVersion -VersionText $currentVersionText
+    if ($null -eq $currentVersion -or $currentVersion -ne $stableVersion) {
+        throw 'Current-skin reset ExpectedVersion did not match the active root.'
+    }
+    $expectedTag = ([string]$ExpectedVersion).Trim()
+    if (-not $expectedTag.StartsWith('v', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $expectedTag = 'v' + $expectedTag
+    }
+    $expectedAssetName = Get-BlockHudFixedUpdateZipAssetName -ReleaseVariant $ExpectedReleaseVariant -LanguageCode $script:LanguageCode
+    $rootConfig = Get-UpdateConfiguration -Root $Root
+    $rootProfile = Get-VersionManagerBadgeProfile -Config $rootConfig
+    if (-not [string]::Equals([string]$rootConfig.ReleaseVariant, $ExpectedReleaseVariant, [System.StringComparison]::Ordinal)) {
+        throw 'Current-skin reset release variant did not match the active root.'
+    }
+    $allowedUrl = 'https://github.com/{0}/releases/download/{1}/{2}' -f `
+        [string]$rootProfile.RepositorySlug,
+        [uri]::EscapeDataString($expectedTag),
+        [uri]::EscapeDataString($expectedAssetName)
+    if (-not [string]::Equals($allowedUrl, $PackageUrl, [System.StringComparison]::Ordinal)) {
+        throw 'Current-skin reset rejected an unexpected package URL.'
+    }
+
+    $resetScript = Join-Path (Get-VersionManagerToolsRoot) 'UpdateToLatestVersion.ps1'
+    if (-not (Test-Path -LiteralPath $resetScript -PathType Leaf)) {
+        throw 'Current-skin reset helper is missing.'
+    }
+    foreach ($requiredParameter in @('CurrentTargetRoot', 'PackagePath', 'ExpectedVersion', 'ExpectedReleaseVariant', 'ResetCurrentVersion')) {
+        if (-not (Test-VersionManagerScriptParameter -ScriptPath $resetScript -ParameterName $requiredParameter)) {
+            throw "Current-skin reset helper does not support -$requiredParameter."
+        }
+    }
+
+    Add-Type -AssemblyName System.Net.Http
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    $handler.UseCookies = $false
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    $client.Timeout = [timespan]::FromSeconds(300)
+    $response = $null
+    $packagePath = Join-Path ([System.IO.Path]::GetTempPath()) ('DMeloper-CurrentSkinReset-' + [guid]::NewGuid().ToString('N') + '.zip')
+    $request = $null
+    try {
+        if ($null -ne $OnStageChanged) {
+            & $OnStageChanged 'download'
+        }
+        $request = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Get, $PackageUrl)
+        $request.Headers.CacheControl = New-Object System.Net.Http.Headers.CacheControlHeaderValue
+        $request.Headers.CacheControl.NoCache = $true
+        $request.Headers.CacheControl.NoStore = $true
+        $requestTask = $client.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead)
+        while (-not $requestTask.IsCompleted) {
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 25
+        }
+        $response = $requestTask.GetAwaiter().GetResult()
+        if (-not $response.IsSuccessStatusCode) {
+            throw ("Current-skin reset download failed with HTTP {0}." -f [int]$response.StatusCode)
+        }
+        $file = New-Object System.IO.FileStream($packagePath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None, 65536, $true)
+        try {
+            $copyTask = $response.Content.CopyToAsync($file)
+            while (-not $copyTask.IsCompleted) {
+                [System.Windows.Forms.Application]::DoEvents()
+                Start-Sleep -Milliseconds 25
+            }
+            $copyTask.GetAwaiter().GetResult()
+            $file.Flush($true)
+        }
+        finally {
+            $file.Dispose()
+        }
+        if ((Get-Item -LiteralPath $packagePath -Force).Length -lt 4) {
+            throw 'Current-skin reset download was empty.'
+        }
+        $signature = New-Object byte[] 4
+        $signatureStream = New-Object System.IO.FileStream($packagePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+        try {
+            if ($signatureStream.Read($signature, 0, 4) -ne 4) {
+                throw 'Current-skin reset download was too small to be a ZIP package.'
+            }
+        }
+        finally {
+            $signatureStream.Dispose()
+        }
+        if ($signature[0] -ne 0x50 -or $signature[1] -ne 0x4B -or
+            (($signature[2] -ne 0x03 -or $signature[3] -ne 0x04) -and
+             ($signature[2] -ne 0x05 -or $signature[3] -ne 0x06) -and
+             ($signature[2] -ne 0x07 -or $signature[3] -ne 0x08))) {
+            throw 'Current-skin reset download did not have a ZIP signature.'
+        }
+        if ($null -ne $OnStageChanged) {
+            & $OnStageChanged 'validating'
+            [System.Windows.Forms.Application]::DoEvents()
+        }
+
+        $parameters = [ordered]@{
+            CurrentTargetRoot = $Root
+            PackagePath = $packagePath
+            ExpectedVersion = $expectedTag
+            ExpectedReleaseVariant = $ExpectedReleaseVariant
+            ResetCurrentVersion = $true
+            NonInteractive = $true
+        }
+        if ($null -ne $OnStageChanged) {
+            & $OnStageChanged 'applying'
+            [System.Windows.Forms.Application]::DoEvents()
+        }
+        $passThruResult = Invoke-VersionManagerPassThruScript `
+            -ScriptPath $resetScript `
+            -Parameters $parameters `
+            -PassThruParameter 'PassThruResultObject' `
+            -RequiredProperty 'DMEL_STATUS' `
+            -TimeoutSeconds 3600
+        if ($null -ne $passThruResult) {
+            return (ConvertTo-CurrentSkinResetResult -ResultObject $passThruResult)
+        }
+
+        $arguments = @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $resetScript,
+            '-CurrentTargetRoot', $Root,
+            '-PackagePath', $packagePath,
+            '-ExpectedVersion', $expectedTag,
+            '-ExpectedReleaseVariant', $ExpectedReleaseVariant,
+            '-ResetCurrentVersion', '-NonInteractive', '-EmitResultPairs'
+        )
+        $process = New-Object System.Diagnostics.Process
+        try {
+            $process.StartInfo = New-VersionManagerHostProcessStartInfo -Arguments $arguments -RedirectOutput
+            if (-not $process.Start()) {
+                throw 'Current-skin reset helper process could not be started.'
+            }
+            $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+            $stderrTask = $process.StandardError.ReadToEndAsync()
+            while (-not $process.WaitForExit(100)) {
+                [System.Windows.Forms.Application]::DoEvents()
+            }
+            $output = @(
+                @(([string]$stdoutTask.Result) -split '\r?\n' | Where-Object { $_ -ne '' }) +
+                @(([string]$stderrTask.Result) -split '\r?\n' | Where-Object { $_ -ne '' })
+            )
+            $pairs = Convert-VersionManagerOutputToResultPairs -Output $output
+            $pairObject = [PSCustomObject]@{
+                DMEL_STATUS = [string]$pairs['DMEL_STATUS']
+                DMEL_SOURCEPATH = [string]$pairs['DMEL_SOURCEPATH']
+                DMEL_LOGPATH = [string]$pairs['DMEL_LOGPATH']
+                DMEL_MESSAGE = [string]$pairs['DMEL_MESSAGE']
+            }
+            return (ConvertTo-CurrentSkinResetResult -ResultObject $pairObject -ExitCode ([int]$process.ExitCode) -Output ($output | Out-String))
+        }
+        finally {
+            $process.Dispose()
+        }
+    }
+    catch [System.Threading.Tasks.TaskCanceledException] {
+        throw 'Current-skin reset download exceeded the 300-second transport deadline.'
+    }
+    finally {
+        if ($null -ne $request) {
+            $request.Dispose()
+        }
+        if ($null -ne $response) {
+            $response.Dispose()
+        }
+        $client.Dispose()
+        $handler.Dispose()
+        if (Test-Path -LiteralPath $packagePath -PathType Leaf) {
+            Remove-Item -LiteralPath $packagePath -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -521,126 +1003,4 @@ function Invoke-ClearDownloadCache {
         DownloadedAtUtc = ''
     })
     return $cache
-}
-
-function Get-VersionManagerSessionProcesses {
-    param([Parameter(Mandatory = $true)][string]$ResolvedTargetRoot)
-
-    try {
-        $state = Read-JsonFile -Path (Get-VersionManagerLaunchStatePath -Root $ResolvedTargetRoot)
-        if ($null -eq $state) {
-            return @()
-        }
-
-        $status = [string](Get-ObjectPropertyValue -Object $state -Name 'Status' -DefaultValue '')
-        if ($status -notin @('launching', 'initializing', 'shown')) {
-            return @()
-        }
-
-        $processId = [int](Get-ObjectPropertyValue -Object $state -Name 'ProcessId' -DefaultValue 0)
-        if ($processId -le 0 -or $processId -eq $PID) {
-            return @()
-        }
-
-        $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
-        if ($null -eq $process) {
-            return @()
-        }
-
-        if ($process.ProcessName -notin @('BlockHudPowerShellHost', 'powershell', 'pwsh')) {
-            Write-Log ("Skipping existing version manager session cleanup because launch-state PID {0} is now '{1}'." -f $processId, $process.ProcessName) 'WARN'
-            return @()
-        }
-
-        return @($process)
-    }
-    catch {
-        Write-Log ("Skipping existing version manager session cleanup after launch-state check failed: {0}" -f $_.Exception.Message) 'WARN'
-    }
-    return @()
-}
-
-function Stop-VersionManagerSessions {
-    param([Parameter(Mandatory = $true)][string]$ResolvedTargetRoot)
-
-    foreach ($process in @(Get-VersionManagerSessionProcesses -ResolvedTargetRoot $ResolvedTargetRoot)) {
-        try {
-            $processId = [int]$process.Id
-            if ($processId -le 0) {
-                continue
-            }
-            Write-Log ("Stopping existing version manager session PID {0}" -f $processId)
-            Stop-Process -Id $processId -Force -ErrorAction Stop
-            try {
-                Wait-Process -Id $processId -Timeout 5 -ErrorAction SilentlyContinue
-            }
-            catch {
-            }
-        }
-        catch {
-            Write-Log ("Failed to stop existing version manager session: {0}" -f $_.Exception.Message) 'WARN'
-        }
-    }
-}
-
-function Start-VersionManagerLauncherForRoot {
-    param(
-        [Parameter(Mandatory = $true)][string]$ResolvedTargetRoot
-    )
-
-    if (-not (Test-SkinRoot -Root $resolvedTargetRoot)) {
-        throw 'TargetRoot is not a valid Block HUD skin root.'
-    }
-
-    $script:LogPath = Get-BlockHudCanonicalLogPath -Root $resolvedTargetRoot -ScriptRoot (Get-VersionManagerToolsRoot)
-    Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value $script:LogPath
-
-    Write-VersionManagerLaunchDiagnostic -Root $resolvedTargetRoot -Stage 'launcher-before-session-cleanup' -LaunchTokenValue $LaunchToken -Details @(
-        ('script={0}' -f (Get-VersionManagerEntrypointPath))
-    )
-    Stop-VersionManagerSessions -ResolvedTargetRoot $resolvedTargetRoot
-    Write-VersionManagerLaunchDiagnostic -Root $resolvedTargetRoot -Stage 'launcher-after-session-cleanup' -LaunchTokenValue $LaunchToken
-    Save-VersionManagerLaunchState -Root $resolvedTargetRoot -Status 'launching' -LaunchTokenValue $LaunchToken
-
-    $powershellExe = Get-PowerShellExecutablePath
-    $argumentList = @(
-        '-NoProfile'
-        '-ExecutionPolicy'
-        'Bypass'
-        '-STA'
-        '-File'
-        (Get-VersionManagerEntrypointPath)
-        '-TargetRoot'
-        $resolvedTargetRoot
-        '-WindowSession'
-    )
-    if (-not [string]::IsNullOrWhiteSpace($LaunchToken)) {
-        $argumentList += @('-LaunchToken', $LaunchToken)
-    }
-    if (-not [string]::IsNullOrWhiteSpace($InitialAction)) {
-        $argumentList += @('-InitialAction', $InitialAction)
-    }
-
-    $startInfo = New-VersionManagerHostProcessStartInfo -Arguments $argumentList
-    $startedProcess = [System.Diagnostics.Process]::Start($startInfo)
-    if ($null -eq $startedProcess) {
-        throw 'The Skin manager window session process could not be started.'
-    }
-    Write-Log ("Started version manager window session PID {0}" -f $startedProcess.Id)
-    Write-VersionManagerLaunchDiagnostic -Root $resolvedTargetRoot -Stage 'launcher-child-started' -LaunchTokenValue $LaunchToken -Details @(
-        ('childPid={0}' -f $startedProcess.Id),
-        ('powershell={0}' -f $powershellExe)
-    )
-    return $startedProcess
-}
-
-function Start-VersionManagerLauncher {
-    $root = Get-TargetRoot
-    $process = Start-VersionManagerLauncherForRoot -ResolvedTargetRoot $root
-    $launchResult = Wait-VersionManagerLaunchShown -Root $root -ExpectedLaunchToken $LaunchToken -Process $process
-    Write-VersionManagerLaunchDiagnostic -Root $root -Stage ('launcher-wait-' + [string]$launchResult.Status) -LaunchTokenValue $LaunchToken -Message ([string]$launchResult.Message) -Details @(
-        ('observedStatus={0}' -f [string]$launchResult.ObservedStatus),
-        ('observedToken={0}' -f [string]$launchResult.ObservedToken)
-    )
-    return $launchResult
 }

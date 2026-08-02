@@ -1,8 +1,11 @@
+[CmdletBinding(PositionalBinding = $false)]
+param(
+    [Parameter(Position = 0)]
+    [AllowEmptyString()]
+    [string]$InitialDirectory = ''
+)
+
 try {
-$InitialDirectory = $null
-if ($args.Count -gt 0) {
-    $InitialDirectory = $args[0]
-}
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8NoBom
@@ -24,6 +27,66 @@ function L([string]$Key, [string]$Fallback = '') {
 
 function LF([string]$Key, [string[]]$Arguments, [string]$Fallback = '') {
     return Format-LocalizedText -Table $locTable -Key $Key -Arguments $Arguments -Fallback $Fallback
+}
+
+function New-EditorImagePickerDialogState {
+    param(
+        [AllowEmptyString()]
+        [string]$ResolvedInitialDirectory = ''
+    )
+
+    $dialog = $null
+    $ownerForm = $null
+    try {
+        $dialog = New-Object System.Windows.Forms.OpenFileDialog
+        $dialog.Title = L 'Helper_PickImage_Title' 'Select an item image'
+        $dialog.Filter = (L 'Helper_PickImage_FilterLabel' 'Image Files') + ' (*.png;*.jpg;*.jpeg;*.jpe;*.bmp;*.gif;*.tif;*.tiff;*.ico;*.jxr;*.wdp;*.dds)|*.png;*.jpg;*.jpeg;*.jpe;*.bmp;*.gif;*.tif;*.tiff;*.ico;*.jxr;*.wdp;*.dds'
+        $dialog.FilterIndex = 1
+        $dialog.Multiselect = $false
+        $dialog.CheckFileExists = $true
+        $dialog.RestoreDirectory = $true
+
+        if (-not [string]::IsNullOrEmpty($ResolvedInitialDirectory) -and [System.IO.Directory]::Exists($ResolvedInitialDirectory)) {
+            $dialog.InitialDirectory = [System.IO.Path]::GetFullPath($ResolvedInitialDirectory)
+        }
+        else {
+            $picturesPath = [Environment]::GetFolderPath('MyPictures')
+            if (-not [string]::IsNullOrEmpty($picturesPath) -and [System.IO.Directory]::Exists($picturesPath)) {
+                $dialog.InitialDirectory = $picturesPath
+            }
+        }
+
+        $ownerForm = New-Object System.Windows.Forms.Form
+        $ownerForm.ShowInTaskbar = $false
+        $ownerForm.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+        $ownerForm.Location = New-Object System.Drawing.Point(-32000, -32000)
+        $ownerForm.Size = New-Object System.Drawing.Size(1, 1)
+        $ownerForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedToolWindow
+        $ownerForm.Opacity = 0
+        $ownerForm.TopMost = $true
+        $ownerForm.Add_Shown({
+            $ownerForm.TopMost = $true
+            $ownerForm.BringToFront()
+            $ownerForm.Activate()
+        })
+        $ownerForm.Show()
+        $ownerForm.BringToFront()
+        $ownerForm.Activate()
+
+        return [PSCustomObject]@{
+            Dialog = $dialog
+            OwnerForm = $ownerForm
+        }
+    }
+    catch {
+        if ($null -ne $dialog) {
+            $dialog.Dispose()
+        }
+        if ($null -ne $ownerForm) {
+            $ownerForm.Dispose()
+        }
+        throw
+    }
 }
 
 $resultPairs = [ordered]@{
@@ -122,34 +185,9 @@ function Write-EditorPickerDebugLog(
     return $logPath
 }
 
-$dialog = New-Object System.Windows.Forms.OpenFileDialog
-$dialog.Title = L 'Helper_PickImage_Title' 'Select an item image'
-$dialog.Filter = (L 'Helper_PickImage_FilterLabel' 'Image Files') + ' (*.png;*.jpg;*.jpeg;*.jpe;*.bmp;*.gif;*.tif;*.tiff;*.ico;*.jxr;*.wdp;*.dds)|*.png;*.jpg;*.jpeg;*.jpe;*.bmp;*.gif;*.tif;*.tiff;*.ico;*.jxr;*.wdp;*.dds'
-$dialog.FilterIndex = 1
-$dialog.Multiselect = $false
-$dialog.CheckFileExists = $true
-$dialog.RestoreDirectory = $true
-
-if (-not [string]::IsNullOrEmpty($InitialDirectory) -and [System.IO.Directory]::Exists($InitialDirectory)) {
-    $dialog.InitialDirectory = $InitialDirectory
-}
-else {
-    $picturesPath = [Environment]::GetFolderPath('MyPictures')
-    if (-not [string]::IsNullOrEmpty($picturesPath) -and [System.IO.Directory]::Exists($picturesPath)) {
-        $dialog.InitialDirectory = $picturesPath
-    }
-}
-
-$ownerForm = New-Object System.Windows.Forms.Form
-$ownerForm.ShowInTaskbar = $false
-$ownerForm.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
-$ownerForm.Location = New-Object System.Drawing.Point(-32000, -32000)
-$ownerForm.Size = New-Object System.Drawing.Size(1, 1)
-$ownerForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedToolWindow
-$ownerForm.Opacity = 0
-$ownerForm.TopMost = $true
-$ownerForm.Show()
-$ownerForm.Activate()
+$dialogState = New-EditorImagePickerDialogState -ResolvedInitialDirectory $InitialDirectory
+$dialog = $dialogState.Dialog
+$ownerForm = $dialogState.OwnerForm
 
 try {
 if ($dialog.ShowDialog($ownerForm) -eq [System.Windows.Forms.DialogResult]::OK) {
@@ -185,6 +223,7 @@ if ($dialog.ShowDialog($ownerForm) -eq [System.Windows.Forms.DialogResult]::OK) 
 }
 }
 finally {
+    $dialog.Dispose()
     $ownerForm.Dispose()
 }
 }

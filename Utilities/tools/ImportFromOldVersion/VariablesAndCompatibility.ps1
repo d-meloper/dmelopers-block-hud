@@ -182,7 +182,7 @@ function New-RootConfigNameCompatManifestContent {
     return @'
 @{
     RootModule = 'DMeloperBlockHudCompat.psm1'
-    ModuleVersion = '1.3.10'
+    ModuleVersion = '1.4.0'
     GUID = '7e2698fc-2f2e-4cda-b6e8-b0df5cbf8931'
     Author = 'DMeloper'
     CompanyName = 'DMeloper'
@@ -420,7 +420,8 @@ function Merge-VariablesFile {
         [string[]]$ExcludeKeyPatterns = @(),
         [System.Collections.Specialized.OrderedDictionary]$Backfill,
         [switch]$BackfillBeforeMerge,
-        [hashtable]$ImageRenameMap
+        [hashtable]$ImageRenameMap,
+        [string]$RepairContext = ''
     )
 
     $targetVariables = Read-VariablesFile -Path $TargetPath
@@ -470,7 +471,7 @@ function Merge-VariablesFile {
 
         $value = $sourceVariables[$key]
         if ($key -match '_Image$') {
-            $value = Repair-ImportImageValue -Value $value -ImageRenameMap $ImageRenameMap
+            $value = Repair-ImportImageValue -Value $value -ImageRenameMap $ImageRenameMap -RepairContext $RepairContext -RepairKey $key
         }
         $value = Normalize-ImportedVariableValue -Key $key -Value $value
 

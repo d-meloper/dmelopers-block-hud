@@ -6,7 +6,13 @@ param(
     [switch]$ResetPositions,
     [switch]$ConfirmDetectedSource,
     [switch]$ValidateOnly,
-    [switch]$EmitResultPairs
+    [switch]$AllowItemImageRepair,
+    [string]$ExpectedRepairPlanId = '',
+    [string]$PackageIdentity = '',
+    [string]$ProgressOwnerRoot = '',
+    [string]$ProgressToken = '',
+    [switch]$EmitResultPairs,
+    [switch]$PassThruResultObject
 )
 
 Set-StrictMode -Version 2.0
@@ -19,6 +25,7 @@ $script:StrictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
 $script:LogStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 try {
     [Console]::OutputEncoding = $script:Utf8NoBom
+    $OutputEncoding = $script:Utf8NoBom
 }
 catch {
 }
@@ -33,16 +40,28 @@ $script:ImportTargetMutationStarted = $false
 $script:EphemeralRollbackRoot = ''
 $script:AutoRollbackAttempted = $false
 $script:AutoRollbackSucceeded = $false
+$script:ApprovedItemImageRepairKeys = $null
+$script:AppliedItemImageRepairKeys = $null
+$script:ItemImageCompatibilityPlan = $null
+$script:PreserveRepairableCompatibilityOnError = $false
+$script:ImportProgressPath = ''
+$script:ImportProgressDetailVisible = $false
+$script:ImportAudioWorkload = $null
 $script:ResultPairs = [ordered]@{
     DMEL_STATUS = ''
     DMEL_SOURCEPATH = ''
     DMEL_BACKUPPATH = ''
     DMEL_LOGPATH = ''
     DMEL_MESSAGE = ''
+    DMEL_COMPATIBILITY = 'OK'
+    DMEL_REPAIRCOUNT = '0'
+    DMEL_REPAIRSUMMARY = ''
+    DMEL_REPAIRPLANID = ''
 }
 
 . (Join-Path $PSScriptRoot 'Localization.Common.ps1')
 . (Join-Path $PSScriptRoot 'LowSpecSettings.Policy.ps1')
+. (Join-Path $PSScriptRoot 'ItemImageAsset.Policy.ps1')
 $script:ImportFromOldVersionEntrypointRoot = $PSScriptRoot
 $script:ImportFromOldVersionDefaultTargetRoot = Resolve-BlockHudSkinRoot -StartPath $script:ImportFromOldVersionEntrypointRoot
 $script:LogPath = Get-BlockHudCanonicalLogPath -ScriptRoot $PSScriptRoot
@@ -54,7 +73,9 @@ $script:ModuleRoot = Join-Path $PSScriptRoot 'ImportFromOldVersion'
 . (Join-Path $script:ModuleRoot 'CoreDiscovery.ps1')
 . (Join-Path $script:ModuleRoot 'VariablesAndCompatibility.ps1')
 . (Join-Path $script:ModuleRoot 'AssetsAndRollback.ps1')
+. (Join-Path $script:ModuleRoot 'JukeboxAndProgress.ps1')
 . (Join-Path $script:ModuleRoot 'SettingsLayoutAndImages.ps1')
+. (Join-Path $script:ModuleRoot 'ItemImageRepair.ps1')
 . (Join-Path $script:ModuleRoot 'PlayerEditorAndRun.ps1')
 
 
@@ -213,6 +234,10 @@ try {
         Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value 'Legacy import completed.'
     }
     Save-Log
+    if ($PassThruResultObject) {
+        Write-Output ([PSCustomObject]$script:ResultPairs)
+        return
+    }
     Emit-ResultPairs
     exit 0
 }
@@ -221,6 +246,10 @@ catch [System.OperationCanceledException] {
     Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'CANCEL'
     Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value $_.Exception.Message
     Save-Log
+    if ($PassThruResultObject) {
+        Write-Output ([PSCustomObject]$script:ResultPairs)
+        return
+    }
     Emit-ResultPairs
     exit 0
 }
@@ -230,6 +259,9 @@ catch {
         Write-Log $_.ScriptStackTrace 'ERROR'
     }
     Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'ERROR'
+    if (-not $script:PreserveRepairableCompatibilityOnError) {
+        Set-ResultPairValue -Key 'DMEL_COMPATIBILITY' -Value 'FATAL'
+    }
     Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value $_.Exception.Message
     if ($script:ImportTargetMutationStarted -and -not $script:AutoRollbackAttempted -and -not [string]::IsNullOrWhiteSpace($script:EphemeralRollbackRoot)) {
         $script:AutoRollbackAttempted = $true
@@ -249,6 +281,13 @@ catch {
         }
     }
     Save-Log
+    if ($PassThruResultObject) {
+        Write-Output ([PSCustomObject]$script:ResultPairs)
+        return
+    }
     Emit-ResultPairs
     exit 1
+}
+finally {
+    Remove-ImportProgressBestEffort
 }

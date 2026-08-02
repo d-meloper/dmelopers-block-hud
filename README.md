@@ -4,21 +4,6 @@
 
 English | [한국어](README.ko-KR.md)
 
-## Windows Security and Antivirus Notice
-
-> [!WARNING]
-> Some antivirus products and some scanning engines on VirusTotal currently detect `BlockHudPowerShellHost.exe` or related helper scripts as malware, including virus or Trojan classifications. The project is aware of these reports and continues to review the packaged files and execution paths that can trigger them.
-
-DMeloper's Block HUD uses the packaged `BlockHudPowerShellHost.exe` and local PowerShell helper scripts for operations that Rainmeter cannot reliably perform on its own, including file selection, image processing, applying settings, importing data, updates, version switching, and Jukebox features.
-
-These files are required components of Block HUD. However, behavior- and reputation-based antivirus checks involving PowerShell automation and newly built executables may delay initialization or display a warning immediately after installation or an update.
-
-Code signing could make the publisher identity easier to verify, but it does not guarantee that every antivirus warning will disappear. This project is developed, distributed, and maintained entirely free of charge, and the developer cannot currently sustain code-signing costs of approximately KRW 200,000 per year. The release executable is therefore not digitally signed at this time.
-
-Use packages downloaded from the official GitHub Releases page and verify the SHA256 checksum published in the release notes. Future updates will continue to simplify helper execution paths and reduce behavior that can trigger behavior-based antivirus detection.
-
-[Why Block HUD uses helper programs](ANTIVIRUS.md)
-
 <p align="center">
   <a href="https://github.com/d-meloper/dmelopers-block-hud/releases/latest"><img alt="Latest release" src="https://raw.githubusercontent.com/d-meloper/dmelopers-block-hud/badges/release.svg"></a>
   <a href="https://github.com/d-meloper/dmelopers-block-hud/releases"><img alt="Total downloads" src="https://raw.githubusercontent.com/d-meloper/dmelopers-block-hud/badges/downloads.svg"></a>
@@ -47,6 +32,8 @@ If you are new to Rainmeter or skin installation, the Skin Notion page provides 
 - Settings window with undo, redo, refresh, reset, positioning, theme, font, and startup options
 - Manual drag and snap placement options for HUD elements
 - Import support for older skin data
+- Lightweight update notices with release notes, a 24-hour snooze option, and in-skin latest-version update
+- A confirmed current-skin reset that re-downloads the same version while leaving other installed skins unchanged
 - Korea and Global public package variants
 
 ## Download
@@ -63,7 +50,7 @@ Korean users should download `DMelopers-Block-HUD_Korea.rmskin`. English and glo
 
 Both variants install to the same Rainmeter skin folder, `DMeloper's Block HUD`, so they are not designed to coexist side by side. Installing one variant over the other can overwrite the existing skin folder.
 
-For updates, use the in-skin `Skin manager` whenever possible. It checks the latest version by GitHub Release tag and applies the ZIP package that matches the installed variant; use an `.rmskin` file when reinstalling manually from GitHub.
+For updates, use the in-skin `Skin manager` whenever possible. It checks validated latest-release data for the installed variant and applies the matching ZIP package without loading a historical release list. Compatible settings, items, user images, and local audio are carried into the new install; if some item-image fields cannot be used, the skin asks before clearing only those fields. Use an `.rmskin` file when reinstalling manually from GitHub.
 
 ## Requirements
 
@@ -91,6 +78,13 @@ Currently supported languages:
 - Simplified Chinese (`zh-CN`)
 - Armenian (`hy-AM`)
 - Danish (`da-DK`)
+- Finnish (`fi-FI`)
+- Portuguese (`pt-PT`)
+- Brazilian Portuguese (`pt-BR`)
+- Hinglish/Urdish (`hi-Latn`)
+- Persian (`fa-IR`)
+- Indonesian (`id-ID`)
+- German (`de-DE`)
 
 If you want to help translate the skin or improve an existing translation, please use the DMeloper's Block HUD Translation Hub. You do not need to edit code or Rainmeter files; translation work is handled through reviewed TSV/spreadsheet files.
 

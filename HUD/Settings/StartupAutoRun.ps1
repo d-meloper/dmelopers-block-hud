@@ -44,87 +44,49 @@ function Write-StartupResult {
     }
 }
 
-function Initialize-NativeShortcutApi {
-    if ('DMeloper.StartupShortcutApi' -as [type]) {
-        return
-    }
+function New-ShortcutShell {
+    return (New-Object -ComObject WScript.Shell)
+}
 
-    Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-using System.Runtime.InteropServices.ComTypes;
-using System.Text;
+function Close-ComObject {
+    param([AllowNull()][object]$Value)
 
-namespace DMeloper
-{
-    [ComImport]
-    [Guid("00021401-0000-0000-C000-000000000046")]
-    internal class ShellLink
-    {
-    }
-
-    [ComImport]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    [Guid("000214F9-0000-0000-C000-000000000046")]
-    internal interface IShellLinkW
-    {
-        void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder file, int maxPath, IntPtr findData, uint flags);
-        void GetIDList(out IntPtr idList);
-        void SetIDList(IntPtr idList);
-        void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder name, int maxName);
-        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string name);
-        void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder directory, int maxPath);
-        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string directory);
-        void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder arguments, int maxPath);
-        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string arguments);
-        void GetHotkey(out short hotkey);
-        void SetHotkey(short hotkey);
-        void GetShowCmd(out int showCommand);
-        void SetShowCmd(int showCommand);
-        void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder iconPath, int iconPathLength, out int iconIndex);
-        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string iconPath, int iconIndex);
-        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
-        void Resolve(IntPtr windowHandle, uint flags);
-        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string path);
-    }
-
-    public static class StartupShortcutApi
-    {
-        public static void Create(string shortcutPath, string targetPath, string workingDirectory, string iconPath)
-        {
-            object instance = new ShellLink();
-            try
-            {
-                IShellLinkW link = (IShellLinkW)instance;
-                link.SetPath(targetPath);
-                link.SetWorkingDirectory(workingDirectory);
-                link.SetIconLocation(iconPath, 0);
-                ((IPersistFile)instance).Save(shortcutPath, true);
-            }
-            finally
-            {
-                Marshal.FinalReleaseComObject(instance);
-            }
-        }
-
-        public static string ReadTarget(string shortcutPath)
-        {
-            object instance = new ShellLink();
-            try
-            {
-                ((IPersistFile)instance).Load(shortcutPath, 0);
-                StringBuilder target = new StringBuilder(32768);
-                ((IShellLinkW)instance).GetPath(target, target.Capacity, IntPtr.Zero, 0);
-                return target.ToString();
-            }
-            finally
-            {
-                Marshal.FinalReleaseComObject(instance);
-            }
-        }
+    if ($null -ne $Value -and [System.Runtime.InteropServices.Marshal]::IsComObject($Value)) {
+        [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Value)
     }
 }
-'@ | Out-Null
+
+function ConvertTo-ShortcutComPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [switch]$ExistingFile
+    )
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $fileSystem = $null
+    $entry = $null
+    try {
+        $fileSystem = New-Object -ComObject Scripting.FileSystemObject
+        if ($ExistingFile) {
+            $entry = $fileSystem.GetFile($fullPath)
+            $shortPath = [string]$entry.ShortPath
+            if (-not [string]::IsNullOrWhiteSpace($shortPath)) {
+                return $shortPath
+            }
+        }
+
+        $parentPath = [System.IO.Path]::GetDirectoryName($fullPath)
+        $entry = $fileSystem.GetFolder($parentPath)
+        $shortParent = [string]$entry.ShortPath
+        if (-not [string]::IsNullOrWhiteSpace($shortParent)) {
+            return (Join-Path $shortParent ([System.IO.Path]::GetFileName($fullPath)))
+        }
+        return $fullPath
+    }
+    finally {
+        Close-ComObject -Value $entry
+        Close-ComObject -Value $fileSystem
+    }
 }
 
 function Get-StartupFolderPath {
@@ -140,15 +102,23 @@ function Resolve-ShortcutTargetPath {
         [string]$ShortcutPath
     )
 
+    $shell = $null
+    $shortcut = $null
     try {
-        Initialize-NativeShortcutApi
-        $targetPath = [DMeloper.StartupShortcutApi]::ReadTarget($ShortcutPath)
+        $shell = New-ShortcutShell
+        $shortcut = $shell.CreateShortcut((ConvertTo-ShortcutComPath -Path $ShortcutPath -ExistingFile))
+        $targetPath = [string]$shortcut.TargetPath
         if ([string]::IsNullOrWhiteSpace($targetPath)) {
             return $null
         }
         return $targetPath
-    } catch {
+    }
+    catch {
         return $null
+    }
+    finally {
+        Close-ComObject -Value $shortcut
+        Close-ComObject -Value $shell
     }
 }
 
@@ -298,13 +268,21 @@ function Ensure-CanonicalRainmeterShortcut {
         Remove-Item -LiteralPath $shortcutPath -Force -ErrorAction SilentlyContinue
     }
 
-    Initialize-NativeShortcutApi
-    [DMeloper.StartupShortcutApi]::Create(
-        $shortcutPath,
-        $rainmeterExePath,
-        (Split-Path -Parent $rainmeterExePath),
-        $rainmeterExePath
-    )
+    $shell = $null
+    $shortcut = $null
+    try {
+        $shortcutTargetPath = ConvertTo-ShortcutComPath -Path $rainmeterExePath -ExistingFile
+        $shell = New-ShortcutShell
+        $shortcut = $shell.CreateShortcut((ConvertTo-ShortcutComPath -Path $shortcutPath))
+        $shortcut.TargetPath = $shortcutTargetPath
+        $shortcut.WorkingDirectory = Split-Path -Parent $shortcutTargetPath
+        $shortcut.IconLocation = $shortcutTargetPath + ',0'
+        $shortcut.Save()
+    }
+    finally {
+        Close-ComObject -Value $shortcut
+        Close-ComObject -Value $shell
+    }
     return $true
 }
 

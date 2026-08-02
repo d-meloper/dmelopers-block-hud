@@ -11,6 +11,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:VersionManagerWindowClosing = $false
+$script:VersionManagerOperationLock = $null
 
 $script:VersionManagerEntrypointPath = [System.IO.Path]::GetFullPath($PSCommandPath)
 $script:VersionManagerToolsRoot = [System.IO.Path]::GetFullPath($PSScriptRoot)
@@ -19,6 +20,7 @@ $script:Utf16LeBom = New-Object System.Text.UnicodeEncoding($false, $true)
 $script:LogStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 try {
     [Console]::OutputEncoding = $script:Utf8NoBom
+    $OutputEncoding = $script:Utf8NoBom
 }
 catch {
 }
@@ -45,7 +47,8 @@ catch {
 . (Join-Path $PSScriptRoot 'Localization.Common.ps1')
 . (Join-Path $PSScriptRoot 'VersionManager.UpdateCache.ps1')
 . (Join-Path $PSScriptRoot 'VersionManager.UiState.ps1')
-. (Join-Path $PSScriptRoot 'VersionManager.ReleaseCatalog.ps1')
+. (Join-Path $PSScriptRoot 'VersionManager.ReleaseIdentity.ps1')
+. (Join-Path $PSScriptRoot 'VersionManager.OperationLock.ps1')
 
 $script:LogPath = Get-BlockHudCanonicalLogPath -ScriptRoot $PSScriptRoot
 
@@ -55,8 +58,11 @@ $script:LocTable = Read-LocaleTable -SkinRoot $script:SkinRootForLocalization -L
 
 $script:ModuleRoot = Join-Path $PSScriptRoot 'OpenVersionManager'
 . (Join-Path $script:ModuleRoot 'CoreProcessAndPaths.ps1')
+. (Join-Path $script:ModuleRoot 'SessionLaunch.ps1')
 . (Join-Path $script:ModuleRoot 'ConfigurationAndInstallations.ps1')
-. (Join-Path $script:ModuleRoot 'DialogsActionsAndHelpers.ps1')
+. (Join-Path $script:ModuleRoot 'InteractiveModuleLoader.ps1')
+
+$script:VersionManagerInteractiveModulesLoaded = $false
 . (Join-Path $script:ModuleRoot 'MainForm.ps1')
 
 
@@ -152,6 +158,16 @@ $script:ModuleRoot = Join-Path $PSScriptRoot 'OpenVersionManager'
 try {
     Write-Log ('TargetRoot: ' + (Get-TargetRoot))
     if ($WindowSession) {
+        $windowSessionRoot = Get-TargetRoot
+        Stop-VersionManagerSessions -ResolvedTargetRoot $windowSessionRoot
+        $script:VersionManagerOperationLock = Enter-VersionManagerOperationMutex -TargetRoot $windowSessionRoot
+        if (-not [bool]$script:VersionManagerOperationLock.Acquired) {
+            throw 'Another Skin manager or version update operation is already active.'
+        }
+        if ([bool]$script:VersionManagerOperationLock.Abandoned) {
+            Write-Log ('Recovered an abandoned version-operation mutex: ' + [string]$script:VersionManagerOperationLock.Name) 'WARN'
+        }
+        Save-VersionManagerLaunchState -Root $windowSessionRoot -Status 'launching' -LaunchTokenValue $LaunchToken
         Start-VersionManager
         if (-not [string]::IsNullOrWhiteSpace([string]$script:ResultPairs['DMEL_STATUS'])) {
             Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value (T 'Helper_VersionManager_Result_ClosedAfterOperation' 'Skins closed after completing an operation.')
@@ -207,6 +223,8 @@ catch {
     }
 }
 finally {
+    Exit-VersionManagerOperationMutex -Lock $script:VersionManagerOperationLock
+    $script:VersionManagerOperationLock = $null
     Save-Log
     Emit-ResultPairs
 }

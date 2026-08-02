@@ -627,7 +627,11 @@ function Merge-ImageAdjustmentsFile {
         [string]$SourcePath,
         [Parameter(Mandatory = $true)]
         [string]$TargetPath,
-        [hashtable]$ImageRenameMap
+        [hashtable]$ImageRenameMap,
+        [Parameter(Mandatory = $true)]
+        [string]$SourceImageDirectory,
+        [Parameter(Mandatory = $true)]
+        [string]$TargetImageDirectory
     )
 
     $targetVariables = Read-VariablesFile -Path $TargetPath
@@ -637,6 +641,21 @@ function Merge-ImageAdjustmentsFile {
     }
 
     $sourceVariables = Read-VariablesFile -Path $SourcePath
+    $sourceAdjustmentKeys = New-CaseInsensitiveHashtable
+    foreach ($asset in (Get-DirectoryItemImageAssets -Directory $SourceImageDirectory)) {
+        $adjustKey = Get-ImageAdjustmentKeyForMigration -Value $asset
+        if (-not [string]::IsNullOrWhiteSpace($adjustKey)) {
+            $sourceAdjustmentKeys[$adjustKey] = $true
+        }
+    }
+    $targetAdjustmentKeys = New-CaseInsensitiveHashtable
+    foreach ($asset in (Get-DirectoryItemImageAssets -Directory $TargetImageDirectory)) {
+        $adjustKey = Get-ImageAdjustmentKeyForMigration -Value $asset
+        if (-not [string]::IsNullOrWhiteSpace($adjustKey)) {
+            $targetAdjustmentKeys[$adjustKey] = $true
+        }
+    }
+
     foreach ($key in $sourceVariables.Keys) {
         if ($key -eq 'ImageAdjustKeys') {
             continue
@@ -648,8 +667,11 @@ function Merge-ImageAdjustmentsFile {
 
         $sourceAdjustKey = $matches[1]
         $suffix = $matches[2]
+        if (-not $sourceAdjustmentKeys.ContainsKey($sourceAdjustKey)) {
+            continue
+        }
         $renamedAdjustKey = Get-ImageAdjustmentKeyForMigration -Value (Rename-ImageValue -Value $sourceAdjustKey -RenameMap $ImageRenameMap)
-        if ($renamedAdjustKey.Length -eq 0) {
+        if ($renamedAdjustKey.Length -eq 0 -or -not $targetAdjustmentKeys.ContainsKey($renamedAdjustKey)) {
             continue
         }
 
@@ -660,6 +682,64 @@ function Merge-ImageAdjustmentsFile {
     $null = Invoke-MigrationAction -Action 'Merge image adjustments' -Target $TargetPath -ScriptBlock {
         Write-Utf16Text -Path $TargetPath -Content $content
     }
+}
+
+function Assert-ImportedImageAdjustmentIntegrity {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][string]$TargetPath,
+        [Parameter(Mandatory = $true)][string]$SourceImageDirectory,
+        [Parameter(Mandatory = $true)][string]$TargetImageDirectory,
+        [hashtable]$ImageRenameMap
+    )
+
+    if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
+        return
+    }
+
+    $sourceAssets = New-CaseInsensitiveHashtable
+    foreach ($asset in (Get-DirectoryItemImageAssets -Directory $SourceImageDirectory)) {
+        $adjustKey = Get-ImageAdjustmentKeyForMigration -Value $asset
+        if (-not [string]::IsNullOrWhiteSpace($adjustKey)) {
+            $sourceAssets[$adjustKey] = Join-Path $SourceImageDirectory $asset
+        }
+    }
+    $targetAssets = New-CaseInsensitiveHashtable
+    foreach ($asset in (Get-DirectoryItemImageAssets -Directory $TargetImageDirectory)) {
+        $adjustKey = Get-ImageAdjustmentKeyForMigration -Value $asset
+        if (-not [string]::IsNullOrWhiteSpace($adjustKey)) {
+            $targetAssets[$adjustKey] = Join-Path $TargetImageDirectory $asset
+        }
+    }
+
+    $sourceVariables = Read-VariablesFile -Path $SourcePath
+    $targetVariables = Read-VariablesFile -Path $TargetPath
+    foreach ($key in $sourceVariables.Keys) {
+        if ($key -notmatch '^ImageAdjust_(.+)_(OffsetX|OffsetY|SizeOffset)$') {
+            continue
+        }
+
+        $sourceAdjustKey = $matches[1]
+        $suffix = $matches[2]
+        if (-not $sourceAssets.ContainsKey($sourceAdjustKey)) {
+            continue
+        }
+        $targetAdjustKey = Get-ImageAdjustmentKeyForMigration -Value (Rename-ImageValue -Value $sourceAdjustKey -RenameMap $ImageRenameMap)
+        if ([string]::IsNullOrWhiteSpace($targetAdjustKey) -or -not $targetAssets.ContainsKey($targetAdjustKey)) {
+            continue
+        }
+
+        $targetKey = "ImageAdjust_${targetAdjustKey}_${suffix}"
+        if (-not $targetVariables.Contains($targetKey) -or [string]$targetVariables[$targetKey] -cne [string]$sourceVariables[$key]) {
+            throw "Imported image adjustment integrity validation failed for $targetKey."
+        }
+        if ((Get-Sha256HashString -Path ([string]$sourceAssets[$sourceAdjustKey])) -ne
+            (Get-Sha256HashString -Path ([string]$targetAssets[$targetAdjustKey]))) {
+            throw "Imported image adjustment asset hash validation failed for $targetAdjustKey."
+        }
+    }
+
+    Write-Log 'Imported image adjustment values passed post-import integrity validation.'
 }
 
 function Get-ImageReferenceFindingsFromVariables {
@@ -687,6 +767,10 @@ function Get-ImageReferenceFindingsFromVariables {
             continue
         }
         if ($asset.Equals('more.png', [System.StringComparison]::OrdinalIgnoreCase)) {
+            if (Test-AllowedReservedItemImageReference -Variables $Variables -Context $Context -Key ([string]$key)) {
+                continue
+            }
+            $invalidReferences.Add(("{0}:{1}={2}" -f $Context, $key, $rawValue))
             continue
         }
         if (-not $seen.ContainsKey($asset)) {

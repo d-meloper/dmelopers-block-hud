@@ -69,14 +69,18 @@ function Start-VersionManager {
     $ui.CurrentInstallation = $null
     $ui.OtherInstallations = @()
     $ui.SelectedInstallation = $null
-    $ui.VersionCatalog = $null
-    $ui.VersionCatalogEntries = @()
-    $ui.SelectedVersionCatalogEntry = $null
-    $ui.VersionCatalogOperationInProgress = $false
+    $ui.VerifiedBadge = $null
+    $ui.BadgeRequestSucceeded = $false
+    $ui.LatestInstallInProgress = $false
     $ui.InstallationOperationInProgress = $false
     $ui.UpdateCheckInProgress = $false
     $ui.BusyOverlayVisible = $false
     $ui.BusyOverlayControlStates = @()
+    $ui.BusyOverlayStartedAtUtc = [datetime]::MinValue
+    $ui.BusyOverlayBaseMessage = ''
+    $ui.BusyOverlayProgressToken = ''
+    $ui.BusyOverlayProgressPath = ''
+    $ui.BusyOverlayProgressSignature = ''
     $ui.HasSessionUpdateStatus = $false
     $ui.InitialAction = $normalizedInitialAction
     $ui.InitialActionStarted = $false
@@ -119,6 +123,11 @@ function Start-VersionManager {
     $currentVersionValue.Location = New-Object System.Drawing.Point(18, 24)
     $currentVersionValue.AutoSize = $true
     $currentVersionValue.Font = New-Object System.Drawing.Font('Segoe UI', 16, [System.Drawing.FontStyle]::Bold)
+    $latestVersionValue = New-Object System.Windows.Forms.Label
+    $latestVersionValue.Location = New-Object System.Drawing.Point(180, 32)
+    $latestVersionValue.Size = New-Object System.Drawing.Size(310, 20)
+    $latestVersionValue.Font = New-Object System.Drawing.Font('Segoe UI', 9.5, [System.Drawing.FontStyle]::Bold)
+    $latestVersionValue.Text = (T 'Helper_VersionManager_Update_StatusLatest' 'Latest') + ': -'
     $currentVersionStateIcon = New-Object System.Windows.Forms.Control
     $currentVersionStateIcon.Size = New-Object System.Drawing.Size(24, 24)
     $currentVersionStateIcon.Location = New-Object System.Drawing.Point(506, 27)
@@ -146,37 +155,41 @@ function Start-VersionManager {
     $footerInstallLatest.Bounds = New-Object System.Drawing.Rectangle(536, 56, 176, 26)
     $currentInstallGroup.Controls.AddRange(@(
         $currentVersionValue,
+        $latestVersionValue,
         $currentVersionStateIcon,
         $currentVersionStatusText,
         $footerCheckLatest,
         $footerInstallLatest
     ))
 
-    $versionCatalogGroup = New-Object System.Windows.Forms.GroupBox
-    $versionCatalogGroup.Text = T 'Helper_VersionManager_Update_VersionCatalogGroup' (U '\uBC84\uC804 \uBAA9\uB85D')
-    $versionCatalogGroup.Bounds = New-Object System.Drawing.Rectangle(12, 112, 720, 180)
+    $currentSkinResetGroup = New-Object System.Windows.Forms.GroupBox
+    $currentSkinResetGroup.Text = T 'Helper_VersionManager_Reset_CurrentGroup' (U '\uD604\uC7AC \uC2A4\uD0A8 \uCD08\uAE30\uD654')
+    $currentSkinResetGroup.Bounds = New-Object System.Drawing.Rectangle(12, 140, 720, 75)
 
-    $versionCatalogList = New-Object System.Windows.Forms.ListView
-    $versionCatalogList.Bounds = New-Object System.Drawing.Rectangle(10, 20, 576, 150)
-    $versionCatalogList.View = [System.Windows.Forms.View]::Details
-    $versionCatalogList.FullRowSelect = $true
-    $versionCatalogList.HideSelection = $false
-    $versionCatalogList.MultiSelect = $false
-    $versionCatalogList.GridLines = $true
-    $versionCatalogList.Enabled = $false
-    [void]$versionCatalogList.Columns.Add((T 'Helper_VersionManager_List_Version' 'Version'), 88)
-    [void]$versionCatalogList.Columns.Add((T 'Helper_VersionManager_Update_ReleaseColumn' (U '\uB9B4\uB9AC\uC988')), 204)
-    [void]$versionCatalogList.Columns.Add((T 'Helper_VersionManager_List_Status' 'Status'), 284)
+    $currentSkinResetDescription = New-Object System.Windows.Forms.Label
+    $currentSkinResetDescription.Bounds = New-Object System.Drawing.Rectangle(18, 24, 500, 32)
+    $currentSkinResetDescription.Text = T 'Helper_VersionManager_Reset_CurrentDescription' (U '\uD604\uC7AC \uC2A4\uD0A8\uC758 \uBAA8\uB4E0 \uC124\uC815\uACFC \uC0AC\uC6A9\uC790 \uB370\uC774\uD130\uB97C \uCD08\uAE30 \uC0C1\uD0DC\uB85C \uB418\uB3CC\uB9BD\uB2C8\uB2E4.')
+    [void](Set-VersionManagerControlTextFit `
+        -Control $currentSkinResetDescription `
+        -BaseFontSize ([single]$currentSkinResetDescription.Font.SizeInPoints) `
+        -MinimumScale 0.70 `
+        -Multiline)
 
-    $versionCatalogInstallButton = New-Object System.Windows.Forms.Button
-    $versionCatalogInstallButton.Text = T 'Helper_VersionManager_Action_InstallVersion' (U '\uC774 \uBC84\uC804 \uC124\uCE58\uD558\uAE30')
-    $versionCatalogInstallButtonWidth = [Math]::Max(112, [System.Windows.Forms.TextRenderer]::MeasureText($versionCatalogInstallButton.Text, $versionCatalogInstallButton.Font).Width + 24)
-    $versionCatalogInstallButtonX = 706 - $versionCatalogInstallButtonWidth
-    $versionCatalogList.Width = $versionCatalogInstallButtonX - 18
-    $versionCatalogInstallButton.Bounds = New-Object System.Drawing.Rectangle($versionCatalogInstallButtonX, 18, $versionCatalogInstallButtonWidth, 24)
-    $versionCatalogInstallButton.Enabled = $false
+    $currentSkinResetButton = New-Object System.Windows.Forms.Button
+    $currentSkinResetButton.Bounds = New-Object System.Drawing.Rectangle(536, 20, 176, 26)
+    $currentSkinResetButton.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
+    $currentSkinResetButton.Text = T 'Helper_VersionManager_Reset_CurrentAction' (U '\uC2A4\uD0A8 \uCD08\uAE30\uD654')
+    $currentSkinResetButton.AutoEllipsis = $true
+    [void](Set-VersionManagerControlTextFit `
+        -Control $currentSkinResetButton `
+        -BaseFontSize ([single]$currentSkinResetButton.Font.SizeInPoints) `
+        -MinimumScale 0.70 `
+        -HorizontalPadding 16 `
+        -VerticalPadding 6)
+    $currentSkinResetButton.ForeColor = [System.Drawing.Color]::Red
+    $currentSkinResetButton.Enabled = $false
 
-    $versionCatalogGroup.Controls.AddRange(@($versionCatalogList, $versionCatalogInstallButton))
+    $currentSkinResetGroup.Controls.AddRange(@($currentSkinResetDescription, $currentSkinResetButton))
 
     $otherInstallGroup = New-Object System.Windows.Forms.GroupBox
     $otherInstallGroup.Text = T 'Helper_VersionManager_Install_OtherGroup' (U '\uCEF4\uD4E8\uD130\uC5D0 \uC124\uCE58\uB41C \uC2A4\uD0A8')
@@ -214,7 +227,7 @@ function Start-VersionManager {
     foreach ($button in $installButtons.Values) {
         $otherInstallGroup.Controls.Add($button)
     }
-    $installTab.Controls.AddRange(@($currentInstallGroup, $versionCatalogGroup))
+    $installTab.Controls.AddRange(@($currentInstallGroup, $currentSkinResetGroup))
 
     $foldersTab.Controls.AddRange(@($otherInstallGroup, $installResult))
 
@@ -276,26 +289,56 @@ function Start-VersionManager {
     $busyOverlay.Visible = $false
 
     $busyOverlayCard = New-Object System.Windows.Forms.Panel
-    $busyOverlayCard.Bounds = New-Object System.Drawing.Rectangle(150, 128, 484, 136)
+    $busyOverlayCard.Bounds = New-Object System.Drawing.Rectangle(150, 108, 484, 176)
     $busyOverlayCard.BackColor = [System.Drawing.Color]::White
     $busyOverlayCard.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 
     $busyOverlayTitle = New-Object System.Windows.Forms.Label
     $busyOverlayTitle.Bounds = New-Object System.Drawing.Rectangle(22, 20, 438, 24)
     $busyOverlayTitle.Font = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
-    $busyOverlayTitle.Text = T 'Helper_VersionManager_Busy_Title' 'Update in progress'
+    $busyOverlayTitle.Text = ''
 
     $busyOverlayMessage = New-Object System.Windows.Forms.Label
-    $busyOverlayMessage.Bounds = New-Object System.Drawing.Rectangle(22, 50, 438, 38)
+    $busyOverlayMessage.Bounds = New-Object System.Drawing.Rectangle(22, 50, 438, 42)
     $busyOverlayMessage.Font = New-Object System.Drawing.Font('Segoe UI', 9)
-    $busyOverlayMessage.Text = T 'Helper_VersionManager_Busy_Default' 'Downloading files and preparing skin data. Please do not close this window.'
+    $busyOverlayMessage.Text = ''
+
+    $busyOverlayTitleBaseFontSize = [single]$busyOverlayTitle.Font.SizeInPoints
+    $busyOverlayMessageBaseFontSize = [single]$busyOverlayMessage.Font.SizeInPoints
+    $setBusyOverlayTitle = {
+        param([AllowNull()][string]$Text)
+
+        $busyOverlayTitle.Text = [string]$Text
+        [void](Set-VersionManagerControlTextFit `
+            -Control $busyOverlayTitle `
+            -BaseFontSize $busyOverlayTitleBaseFontSize `
+            -MinimumScale 0.70)
+    }.GetNewClosure()
+    $setBusyOverlayMessage = {
+        param([AllowNull()][string]$Text)
+
+        $busyOverlayMessage.Text = [string]$Text
+        [void](Set-VersionManagerControlTextFit `
+            -Control $busyOverlayMessage `
+            -BaseFontSize $busyOverlayMessageBaseFontSize `
+            -MinimumScale 0.70 `
+            -Multiline)
+    }.GetNewClosure()
+    & $setBusyOverlayTitle (T 'Helper_VersionManager_Busy_Title' 'Skin manager task in progress')
+    & $setBusyOverlayMessage (T 'Helper_VersionManager_Busy_Default' 'Downloading files and preparing skin data. Please do not close this window.')
+
+    $busyOverlayElapsed = New-Object System.Windows.Forms.Label
+    $busyOverlayElapsed.Bounds = New-Object System.Drawing.Rectangle(22, 104, 438, 18)
+    $busyOverlayElapsed.Font = New-Object System.Drawing.Font('Segoe UI', 8.5)
+    $busyOverlayElapsed.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+    $busyOverlayElapsed.Text = TF 'Helper_VersionManager_Busy_Elapsed' @('0') 'Elapsed time: %1 seconds'
 
     $busyOverlayProgress = New-Object System.Windows.Forms.ProgressBar
-    $busyOverlayProgress.Bounds = New-Object System.Drawing.Rectangle(22, 102, 438, 16)
+    $busyOverlayProgress.Bounds = New-Object System.Drawing.Rectangle(22, 134, 438, 16)
     $busyOverlayProgress.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
     $busyOverlayProgress.MarqueeAnimationSpeed = 35
 
-    $busyOverlayCard.Controls.AddRange(@($busyOverlayTitle, $busyOverlayMessage, $busyOverlayProgress))
+    $busyOverlayCard.Controls.AddRange(@($busyOverlayTitle, $busyOverlayMessage, $busyOverlayElapsed, $busyOverlayProgress))
     $busyOverlay.Controls.Add($busyOverlayCard)
 
     $form.Controls.AddRange(@($tabs, $footerRefresh, $footerOpenDownloadPage, $footerOpenRepositoryPage, $footerClose, $busyOverlay))
@@ -310,15 +353,178 @@ function Start-VersionManager {
         $footerClose
     )
 
+    $newVersionImportProgressToken = {
+        param([string]$Prefix = 'version-manager-import')
+
+        $normalizedPrefix = ([string]$Prefix).Trim().ToLowerInvariant()
+        if ($normalizedPrefix -notmatch '^[a-z0-9][a-z0-9._-]*$') {
+            $normalizedPrefix = 'version-manager-import'
+        }
+        return ('{0}-{1}' -f $normalizedPrefix, [guid]::NewGuid().ToString('N'))
+    }
+
+    $resetBusyOverlayProgress = {
+        & $setBusyOverlayMessage ([string]$ui.BusyOverlayBaseMessage)
+        $busyOverlayProgress.MarqueeAnimationSpeed = 35
+        $busyOverlayProgress.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+        $busyOverlayProgress.Value = 0
+        $ui.BusyOverlayProgressSignature = ''
+    }
+
+    $formatProgressBytes = {
+        param([long]$ByteCount)
+
+        $safeBytes = [Math]::Max([long]0, $ByteCount)
+        if ($safeBytes -ge 1073741824) {
+            return ('{0:N2} GiB' -f ($safeBytes / 1073741824.0))
+        }
+        return ('{0:N1} MiB' -f ($safeBytes / 1048576.0))
+    }
+
+    $readVersionImportProgress = {
+        if ([string]::IsNullOrWhiteSpace([string]$ui.BusyOverlayProgressToken) -or
+            [string]::IsNullOrWhiteSpace([string]$ui.BusyOverlayProgressPath) -or
+            -not (Test-Path -LiteralPath $ui.BusyOverlayProgressPath -PathType Leaf)) {
+            return $null
+        }
+
+        try {
+            $progress = [System.IO.File]::ReadAllText($ui.BusyOverlayProgressPath, (New-Object System.Text.UTF8Encoding($false, $true))) | ConvertFrom-Json
+            $schemaVersion = Get-ObjectPropertyValue -Object $progress -Name 'SchemaVersion' -DefaultValue $null
+            $token = [string](Get-ObjectPropertyValue -Object $progress -Name 'Token' -DefaultValue '')
+            $stage = [string](Get-ObjectPropertyValue -Object $progress -Name 'Stage' -DefaultValue '')
+            $detailVisible = Get-ObjectPropertyValue -Object $progress -Name 'DetailVisible' -DefaultValue $null
+            $updatedAtUtc = [string](Get-ObjectPropertyValue -Object $progress -Name 'UpdatedAtUtc' -DefaultValue '')
+            if ($schemaVersion -isnot [int] -or $schemaVersion -ne 1 -or
+                -not [string]::Equals($token, [string]$ui.BusyOverlayProgressToken, [System.StringComparison]::Ordinal) -or
+                $stage -notin @('backup', 'audio-copy', 'jukebox-state', 'validating') -or
+                $detailVisible -isnot [bool] -or
+                $updatedAtUtc -notmatch '^\d{4}-\d{2}-\d{2}T.+Z$') {
+                return $null
+            }
+
+            $values = [ordered]@{}
+            foreach ($name in @('CompletedBytes', 'TotalBytes', 'CompletedFiles', 'TotalFiles')) {
+                $rawValue = Get-ObjectPropertyValue -Object $progress -Name $name -DefaultValue $null
+                if ($null -eq $rawValue -or $rawValue -is [bool] -or $rawValue -is [string]) {
+                    return $null
+                }
+                $decimalValue = [decimal]$rawValue
+                if ($decimalValue -lt 0 -or $decimalValue -ne [decimal]::Truncate($decimalValue) -or
+                    $decimalValue -gt [long]::MaxValue) {
+                    return $null
+                }
+                $values[$name] = [long]$decimalValue
+            }
+            if ($values.CompletedBytes -gt $values.TotalBytes -or $values.CompletedFiles -gt $values.TotalFiles) {
+                return $null
+            }
+
+            return [PSCustomObject]@{
+                Stage = $stage
+                DetailVisible = [bool]$detailVisible
+                CompletedBytes = [long]$values.CompletedBytes
+                TotalBytes = [long]$values.TotalBytes
+                CompletedFiles = [long]$values.CompletedFiles
+                TotalFiles = [long]$values.TotalFiles
+                UpdatedAtUtc = $updatedAtUtc
+            }
+        }
+        catch {
+            return $null
+        }
+    }
+
+    $updateBusyOverlayProgress = {
+        if (-not $ui.BusyOverlayVisible -or [string]::IsNullOrWhiteSpace([string]$ui.BusyOverlayProgressToken)) {
+            return
+        }
+
+        $progress = & $readVersionImportProgress
+        if ($null -eq $progress -or -not [bool]$progress.DetailVisible) {
+            if (-not [string]::IsNullOrEmpty([string]$ui.BusyOverlayProgressSignature)) {
+                & $resetBusyOverlayProgress
+            }
+            return
+        }
+
+        $signature = '{0}|{1}|{2}|{3}|{4}|{5}' -f $progress.Stage, $progress.CompletedBytes, $progress.TotalBytes, $progress.CompletedFiles, $progress.TotalFiles, $progress.UpdatedAtUtc
+        if ([string]::Equals($signature, [string]$ui.BusyOverlayProgressSignature, [System.StringComparison]::Ordinal)) {
+            return
+        }
+
+        $percent = if ($progress.TotalBytes -gt 0) {
+            [Math]::Floor(($progress.CompletedBytes * 100.0) / $progress.TotalBytes)
+        }
+        elseif ($progress.TotalFiles -gt 0) {
+            [Math]::Floor(($progress.CompletedFiles * 100.0) / $progress.TotalFiles)
+        }
+        else {
+            0
+        }
+        $percent = [int][Math]::Max(0, [Math]::Min(100, $percent))
+        $stageMessage = switch ($progress.Stage) {
+            'backup' { T 'Helper_VersionManager_Busy_BackingUpLocalData' 'Backing up local data.' }
+            'audio-copy' { T 'Helper_VersionManager_Busy_CopyingLocalAudio' 'Copying local audio files.' }
+            default { [string]$ui.BusyOverlayBaseMessage }
+        }
+        $detail = [string]$percent + '%'
+        if ($progress.Stage -in @('backup', 'audio-copy')) {
+            $detail = TF 'Helper_VersionManager_Busy_MigrationProgress' @(
+                [string]$percent,
+                (& $formatProgressBytes $progress.CompletedBytes),
+                (& $formatProgressBytes $progress.TotalBytes)
+            ) '%1% · %2 / %3'
+        }
+        & $setBusyOverlayMessage ([string]::Join("`r`n", @($stageMessage, $detail)))
+        $busyOverlayProgress.MarqueeAnimationSpeed = 0
+        $busyOverlayProgress.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+        $busyOverlayProgress.Value = $percent
+        $ui.BusyOverlayProgressSignature = $signature
+    }
+
+    $updateBusyOverlayElapsed = {
+        $elapsedSeconds = if ($ui.BusyOverlayStartedAtUtc -ne [datetime]::MinValue) {
+            [Math]::Max(0, [Math]::Floor(([datetime]::UtcNow - $ui.BusyOverlayStartedAtUtc).TotalSeconds))
+        }
+        else {
+            0
+        }
+        $busyOverlayElapsed.Text = TF 'Helper_VersionManager_Busy_Elapsed' @([string]$elapsedSeconds) 'Elapsed time: %1 seconds'
+    }
+
+    $busyOverlayTimer = New-Object System.Windows.Forms.Timer
+    $busyOverlayTimer.Interval = 250
+    $busyOverlayTimer.Add_Tick({
+        & $updateBusyOverlayElapsed
+        & $updateBusyOverlayProgress
+    })
+
     $showBusyOverlay = {
-        param([AllowNull()][string]$Message)
+        param(
+            [AllowNull()][string]$Message,
+            [AllowNull()][string]$Title = '',
+            [string]$ProgressToken = '',
+            [datetime]$StartedAtUtc = [datetime]::MinValue
+        )
 
         if ([string]::IsNullOrWhiteSpace($Message)) {
             $Message = T 'Helper_VersionManager_Busy_Default' 'Downloading files and preparing skin data. Please do not close this window.'
         }
 
-        $busyOverlayTitle.Text = T 'Helper_VersionManager_Busy_Title' 'Update in progress'
-        $busyOverlayMessage.Text = $Message
+        if ([string]::IsNullOrWhiteSpace($Title)) {
+            $Title = T 'Helper_VersionManager_Busy_Title' 'Skin manager task in progress'
+        }
+
+        & $setBusyOverlayTitle $Title
+        $ui.BusyOverlayBaseMessage = $Message
+        $ui.BusyOverlayProgressToken = ''
+        $ui.BusyOverlayProgressPath = ''
+        if ($ProgressToken -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$') {
+            $ui.BusyOverlayProgressToken = $ProgressToken
+            $ui.BusyOverlayProgressPath = Join-Path (Join-Path $ui.Root '@Resources\Customs\Data') ('VersionImportProgress_{0}.json' -f $ProgressToken)
+        }
+        & $resetBusyOverlayProgress
 
         if (-not $ui.BusyOverlayVisible) {
             $states = New-Object System.Collections.Generic.List[object]
@@ -333,8 +539,18 @@ function Start-VersionManager {
             }
             $ui.BusyOverlayControlStates = @($states.ToArray())
             $ui.BusyOverlayVisible = $true
+            $busyOverlayTimer.Start()
         }
 
+        $ui.BusyOverlayStartedAtUtc = if ($StartedAtUtc -ne [datetime]::MinValue) {
+            $StartedAtUtc.ToUniversalTime()
+        }
+        else {
+            [datetime]::UtcNow
+        }
+
+        & $updateBusyOverlayElapsed
+        & $updateBusyOverlayProgress
         $form.UseWaitCursor = $true
         [System.Windows.Forms.Cursor]::Current = [System.Windows.Forms.Cursors]::WaitCursor
         $busyOverlay.Visible = $true
@@ -357,9 +573,31 @@ function Start-VersionManager {
         }
 
         $busyOverlay.Visible = $false
+        $busyOverlayTimer.Stop()
+        $ui.BusyOverlayStartedAtUtc = [datetime]::MinValue
+        $ui.BusyOverlayBaseMessage = ''
+        $ui.BusyOverlayProgressToken = ''
+        $ui.BusyOverlayProgressPath = ''
+        & $resetBusyOverlayProgress
         $form.UseWaitCursor = $false
         [System.Windows.Forms.Cursor]::Current = [System.Windows.Forms.Cursors]::Default
         [System.Windows.Forms.Application]::DoEvents()
+    }
+
+    $ensureInteractiveModules = {
+        if (Test-VersionManagerInteractiveModulesLoaded) {
+            return
+        }
+
+        & $showBusyOverlay `
+            (T 'Helper_VersionManager_Busy_PreparingFeatures' 'Preparing Skin manager features.') `
+            (T 'Helper_VersionManager_WindowTitle' 'Skin manager')
+        try {
+            [void](Ensure-VersionManagerInteractiveModules)
+        }
+        finally {
+            & $hideBusyOverlay
+        }
     }
 
     $recoverInteractiveStateAfterFailure = {
@@ -370,7 +608,7 @@ function Start-VersionManager {
         }
 
         $ui.UpdateCheckInProgress = $false
-        $ui.VersionCatalogOperationInProgress = $false
+        $ui.LatestInstallInProgress = $false
         $ui.InstallationOperationInProgress = $false
 
         foreach ($control in @($tabs, $footerOpenDownloadPage, $footerOpenRepositoryPage, $footerClose)) {
@@ -440,6 +678,16 @@ function Start-VersionManager {
             $ui.UpdateConfig = Get-UpdateConfiguration -Root $ui.Root
             $ui.UpdateCache = Get-UpdateCache -Root $ui.Root
             $updateConfigured = Test-UpdateConfigured -Config $ui.UpdateConfig
+            $latestDisplayText = if ($ui.BadgeRequestSucceeded -and $null -ne $ui.VerifiedBadge) {
+                [string]$ui.VerifiedBadge.Tag
+            }
+            elseif (-not [string]::IsNullOrWhiteSpace([string]$ui.UpdateCache.LatestVersion)) {
+                [string]$ui.UpdateCache.LatestVersion
+            }
+            else {
+                '-'
+            }
+            $latestVersionValue.Text = (T 'Helper_VersionManager_Update_StatusLatest' 'Latest') + ': ' + $latestDisplayText
 
             if (-not $updateConfigured) {
                 & $setCurrentVersionState 'error' (T 'Helper_VersionManager_Summary_UpdateUnconfigured' 'Update status: update source not configured')
@@ -455,7 +703,7 @@ function Start-VersionManager {
                 return
             }
 
-            if (-not [string]::IsNullOrWhiteSpace([string]$ui.UpdateCache.Error)) {
+            if (-not $ui.BadgeRequestSucceeded -or $null -eq $ui.VerifiedBadge) {
                 $friendlyStatus = Get-UpdateFriendlyMessage -ErrorCode ([string]$ui.UpdateCache.ErrorCode) -DefaultMessage ([string]$ui.UpdateCache.Error) -Surface 'summary'
                 & $setCurrentVersionState 'error' $friendlyStatus
                 $footerInstallLatest.Enabled = $false
@@ -463,10 +711,17 @@ function Start-VersionManager {
                 return
             }
 
-            $latestComparableVersion = Convert-ToVersion -VersionText ([string]$ui.UpdateCache.LatestVersion)
+            $latestComparableVersion = $ui.VerifiedBadge.Version
+            if (-not $latestComparableVersion) {
+                $unknownText = T 'Helper_VersionManager_Update_StatusUnknown' 'Unknown'
+                & $setCurrentVersionState 'unknown' (TF 'Helper_VersionManager_Summary_UpdateErrorFormat' @($unknownText) 'Update status: %1')
+                $footerInstallLatest.Enabled = $false
+                $completedRefresh = $true
+                return
+            }
             if ($latestComparableVersion -and $ui.TargetVersion -and ($latestComparableVersion -gt $ui.TargetVersion)) {
-                & $setCurrentVersionState 'not-latest' (TF 'Helper_VersionManager_Summary_UpdateAvailable' @([string]$ui.UpdateCache.LatestVersion) 'Update status: update available (%1)')
-                $footerInstallLatest.Enabled = -not $ui.UpdateCheckInProgress
+                & $setCurrentVersionState 'not-latest' (TF 'Helper_VersionManager_Summary_UpdateAvailable' @([string]$ui.VerifiedBadge.Tag) 'Update status: update available (%1)')
+                $footerInstallLatest.Enabled = (-not $ui.UpdateCheckInProgress -and -not $ui.LatestInstallInProgress)
                 $completedRefresh = $true
                 return
             }
@@ -493,286 +748,47 @@ function Start-VersionManager {
         }
     }
 
-    $testVersionCatalogEntryCurrent = {
-        param([AllowNull()]$Entry)
-
-        if ($null -eq $Entry) {
-            return $false
-        }
-
-        $entryVersion = Convert-ToVersion -VersionText ([string](Get-ObjectPropertyValue -Object $Entry -Name 'version' -DefaultValue ''))
-        if ($entryVersion -and $ui.TargetVersion -and ($entryVersion -eq $ui.TargetVersion)) {
-            $entryVariant = [string](Get-ObjectPropertyValue -Object $Entry -Name 'release_variant' -DefaultValue '')
-            $currentVariant = [string](Get-ObjectPropertyValue -Object $ui.UpdateConfig -Name 'ReleaseVariant' -DefaultValue '')
-            return (
-                [string]::IsNullOrWhiteSpace($entryVariant) -or
-                [string]::IsNullOrWhiteSpace($currentVariant) -or
-                [string]::Equals($entryVariant, $currentVariant, [System.StringComparison]::OrdinalIgnoreCase)
-            )
-        }
-
-        $installedPath = [string](Get-ObjectPropertyValue -Object $Entry -Name 'installed_path' -DefaultValue '')
-        return (-not [string]::IsNullOrWhiteSpace($installedPath) -and [string]::Equals((Resolve-FullPath -Path $installedPath -AllowMissing), (Resolve-FullPath -Path $ui.Root), [System.StringComparison]::OrdinalIgnoreCase))
-    }
-
-    $testVersionCatalogEntryActionable = {
-        param([AllowNull()]$Entry)
-
-        if ($ui.VersionCatalogOperationInProgress -or $null -eq $Entry) {
-            return $false
-        }
-        if (& $testVersionCatalogEntryCurrent $Entry) {
-            return $false
-        }
-        $entryVersion = Convert-ToVersion -VersionText ([string](Get-ObjectPropertyValue -Object $Entry -Name 'version' -DefaultValue ''))
-        $status = [string](Get-ObjectPropertyValue -Object $Entry -Name 'status' -DefaultValue '')
-        $installedPath = [string](Get-ObjectPropertyValue -Object $Entry -Name 'installed_path' -DefaultValue '')
-        $assetUrl = [string](Get-ObjectPropertyValue -Object $Entry -Name 'asset_url' -DefaultValue '')
-        $isLatestStable = [bool](Get-ObjectPropertyValue -Object $Entry -Name 'is_latest_stable' -DefaultValue $false)
-        if ($isLatestStable) {
-            if (-not [string]::IsNullOrWhiteSpace($installedPath)) {
-                return $true
-            }
-            return ($entryVersion -and $ui.TargetVersion -and ($entryVersion -gt $ui.TargetVersion) -and -not [string]::IsNullOrWhiteSpace($assetUrl))
-        }
-
-        if ([string]::Equals($status, 'installed', [System.StringComparison]::OrdinalIgnoreCase) -and -not [string]::IsNullOrWhiteSpace($installedPath)) {
-            return $true
-        }
-
-        return ([string]::Equals($status, 'available', [System.StringComparison]::OrdinalIgnoreCase) -and -not [string]::IsNullOrWhiteSpace($assetUrl))
-    }
-
-    $formatVersionCatalogStatus = {
-        param([AllowNull()]$Entry)
-
-        $parts = New-Object System.Collections.Generic.List[string]
-        $isLatestStable = [bool](Get-ObjectPropertyValue -Object $Entry -Name 'is_latest_stable' -DefaultValue $false)
-        if ($isLatestStable -and -not (& $testVersionCatalogEntryCurrent $Entry)) {
-            [void]$parts.Add((T 'Helper_VersionManager_Update_StatusLatest' (U '\uAC00\uC7A5 \uCD5C\uC2E0 \uBC84\uC804')))
-        }
-        if (& $testVersionCatalogEntryCurrent $Entry) {
-            [void]$parts.Add((T 'Helper_VersionManager_Update_StatusCurrent' 'current'))
-        }
-
-        $installedPath = [string](Get-ObjectPropertyValue -Object $Entry -Name 'installed_path' -DefaultValue '')
-        if (-not [string]::IsNullOrWhiteSpace($installedPath) -and -not (& $testVersionCatalogEntryCurrent $Entry)) {
-            [void]$parts.Add((T 'Helper_VersionManager_Update_StatusLocal' 'local install'))
-        }
-
-        $status = [string](Get-ObjectPropertyValue -Object $Entry -Name 'status' -DefaultValue '')
-        switch -Regex ($status) {
-            '^latest_stable$' {
-                if (-not (& $testVersionCatalogEntryCurrent $Entry) -and [string]::IsNullOrWhiteSpace($installedPath)) {
-                    $assetUrl = [string](Get-ObjectPropertyValue -Object $Entry -Name 'asset_url' -DefaultValue '')
-                    if (-not [string]::IsNullOrWhiteSpace($assetUrl)) {
-                        [void]$parts.Add((T 'Helper_VersionManager_Update_StatusAvailable' 'available'))
-                    } else {
-                        [void]$parts.Add((T 'Helper_VersionManager_Update_StatusAssetMissing' 'download asset missing'))
-                    }
-                }
-            }
-            '^available$' {
-                if (-not (& $testVersionCatalogEntryCurrent $Entry)) {
-                    [void]$parts.Add((T 'Helper_VersionManager_Update_StatusAvailable' 'available'))
-                }
-            }
-            '^installed$' {
-                if ([string]::IsNullOrWhiteSpace($installedPath)) {
-                    [void]$parts.Add((T 'Helper_VersionManager_Update_StatusInstalled' 'installed'))
-                }
-            }
-            '^asset_missing$' { [void]$parts.Add((T 'Helper_VersionManager_Update_StatusAssetMissing' 'download asset missing')) }
-            default {
-                if (-not [string]::IsNullOrWhiteSpace($status)) {
-                    [void]$parts.Add($status)
-                }
-            }
-        }
-
-        if ($parts.Count -eq 0) {
-            return (T 'Helper_VersionManager_Update_StatusUnknown' 'unknown')
-        }
-        return ($parts.ToArray() -join ' / ')
-    }
-
-    $syncVersionCatalogSelectionState = {
-        $versionCatalogInstallButton.Enabled = (& $testVersionCatalogEntryActionable $ui.SelectedVersionCatalogEntry)
-    }
-
     $syncInstallationSelectionState = {
         $entry = $ui.SelectedInstallation
         $canUseSelected = ($null -ne $entry) -and
             (-not [bool]$entry.IsCurrent) -and
             [bool]$entry.IsValid -and
-            (-not $ui.InstallationOperationInProgress)
+            (-not $ui.InstallationOperationInProgress) -and
+            (-not $ui.LatestInstallInProgress) -and
+            (-not $ui.UpdateCheckInProgress)
         $canImportSelected = ($null -ne $entry) -and
             [bool]$entry.ImportAllowed -and
-            (-not $ui.InstallationOperationInProgress)
+            (-not $ui.InstallationOperationInProgress) -and
+            (-not $ui.LatestInstallInProgress) -and
+            (-not $ui.UpdateCheckInProgress)
         $canDeleteSelected = ($null -ne $entry) -and
             (-not [bool]$entry.IsCurrent) -and
             ($entry.Source -eq 'manual' -or $entry.Source -eq 'auto') -and
-            (-not $ui.InstallationOperationInProgress)
+            (-not $ui.InstallationOperationInProgress) -and
+            (-not $ui.LatestInstallInProgress) -and
+            (-not $ui.UpdateCheckInProgress)
 
         $installButtons.UseVersion.Enabled = $canUseSelected
         $installButtons.Import.Enabled = $canImportSelected
         $installButtons.Delete.Enabled = $canDeleteSelected
     }
 
-    $refreshVersionCatalog = {
-        param([bool]$ForceRefresh = $false)
-
-        if ($ui.VersionCatalogOperationInProgress) {
-            return
-        }
-
-        $ui.VersionCatalogOperationInProgress = $true
-        $ui.VersionCatalog = $null
-        $ui.VersionCatalogEntries = @()
-        $ui.SelectedVersionCatalogEntry = $null
-        $versionCatalogInstallButton.Enabled = $false
-        $versionCatalogList.Enabled = $false
-        $footerRefresh.Enabled = $false
-        $footerCheckLatest.Enabled = $false
-        $versionCatalogList.BeginUpdate()
+    $syncCurrentSkinResetState = {
+        $configured = $false
         try {
-            $versionCatalogList.Items.Clear()
-            [void]$versionCatalogList.Items.Add((& $loadingListItem (T 'Helper_VersionManager_Common_Loading' 'Loading...')))
-        }
-        finally {
-            $versionCatalogList.EndUpdate()
-        }
-        [System.Windows.Forms.Application]::DoEvents()
-
-        try {
-            $ui.TargetVersionText = Get-SkinMetadataVersion -Root $ui.Root
-            $ui.TargetVersion = Convert-ToVersion -VersionText $ui.TargetVersionText
             $ui.UpdateConfig = Get-UpdateConfiguration -Root $ui.Root
-            $ui.VersionCatalog = Invoke-VersionReleaseCatalog -Root $ui.Root -ForceRefresh:$ForceRefresh
-            $ui.VersionCatalogEntries = @($ui.VersionCatalog.releases)
-            $ui.UpdateCache = Get-UpdateCache -Root $ui.Root
-            $ui.HasSessionUpdateStatus = $true
-
-            $versionCatalogList.BeginUpdate()
-            $versionCatalogList.Items.Clear()
-            foreach ($entry in $ui.VersionCatalogEntries) {
-                $versionText = [string](Get-ObjectPropertyValue -Object $entry -Name 'version' -DefaultValue '')
-                $releaseName = [string](Get-ObjectPropertyValue -Object $entry -Name 'release_name' -DefaultValue '')
-                if ([string]::IsNullOrWhiteSpace($releaseName)) {
-                    $releaseName = [string](Get-ObjectPropertyValue -Object $entry -Name 'tag' -DefaultValue '')
-                }
-                $item = New-Object System.Windows.Forms.ListViewItem($versionText)
-                [void]$item.SubItems.Add($releaseName)
-                [void]$item.SubItems.Add((& $formatVersionCatalogStatus $entry))
-                $item.Tag = $entry
-                [void]$versionCatalogList.Items.Add($item)
-            }
-
-            if ($versionCatalogList.Items.Count -eq 0) {
-                $emptyItem = New-Object System.Windows.Forms.ListViewItem('')
-                [void]$emptyItem.SubItems.Add('')
-                [void]$emptyItem.SubItems.Add((T 'Helper_VersionManager_Update_VersionCatalogEmpty' 'No releases were found.'))
-                [void]$versionCatalogList.Items.Add($emptyItem)
-            }
+            [void](Get-VersionManagerBadgeProfile -Config $ui.UpdateConfig)
+            $configured = Test-UpdateConfigured -Config $ui.UpdateConfig
         }
         catch {
-            Write-Log ("Version catalog load failed: {0}" -f $_.Exception.ToString()) 'ERROR'
-            $versionCatalogList.BeginUpdate()
-            $versionCatalogList.Items.Clear()
-            $errorCode = Get-UpdateConfigurationErrorCode -Exception $_.Exception
-            $friendlyMessage = Get-UpdateFriendlyMessage -ErrorCode $errorCode -DefaultMessage ([string]$_.Exception.Message) -Surface 'dialog'
-            $errorItem = New-Object System.Windows.Forms.ListViewItem('')
-            [void]$errorItem.SubItems.Add('')
-            [void]$errorItem.SubItems.Add($friendlyMessage)
-            [void]$versionCatalogList.Items.Add($errorItem)
+            $configured = $false
         }
-        finally {
-            $versionCatalogList.EndUpdate()
-            $ui.VersionCatalogOperationInProgress = $false
-            $ui.HasSessionUpdateStatus = $true
-            $versionCatalogList.Enabled = $true
-            $footerRefresh.Enabled = $true
-            $footerCheckLatest.Enabled = $true
-            try {
-                $ui.UpdateCache = Get-UpdateCache -Root $ui.Root
-                & $refreshSummary
-            }
-            catch {
-                Write-Log ("Could not refresh summary after version catalog completion: {0}" -f $_.Exception.Message) 'WARN'
-            }
-            if ($versionCatalogList.Items.Count -gt 0 -and $null -ne $versionCatalogList.Items[0].Tag) {
-                $versionCatalogList.Items[0].Selected = $true
-                $versionCatalogList.Items[0].Focused = $true
-            }
-            & $syncVersionCatalogSelectionState
-        }
-    }
-
-    $selectVersionCatalogEntry = {
-        param([AllowNull()]$Entry)
-
-        $ui.SelectedVersionCatalogEntry = $Entry
-        foreach ($item in @($versionCatalogList.Items)) {
-            $item.Selected = $false
-            $item.Focused = $false
-        }
-
-        if ($null -eq $Entry) {
-            & $syncVersionCatalogSelectionState
-            return
-        }
-
-        $entryVersion = [string](Get-ObjectPropertyValue -Object $Entry -Name 'version' -DefaultValue '')
-        $entryTag = [string](Get-ObjectPropertyValue -Object $Entry -Name 'tag' -DefaultValue '')
-        foreach ($item in @($versionCatalogList.Items)) {
-            $candidate = $item.Tag
-            if ($null -eq $candidate) {
-                continue
-            }
-
-            $candidateVersion = [string](Get-ObjectPropertyValue -Object $candidate -Name 'version' -DefaultValue '')
-            $candidateTag = [string](Get-ObjectPropertyValue -Object $candidate -Name 'tag' -DefaultValue '')
-            if ([string]::Equals($candidateVersion, $entryVersion, [System.StringComparison]::OrdinalIgnoreCase) -and
-                [string]::Equals($candidateTag, $entryTag, [System.StringComparison]::OrdinalIgnoreCase)) {
-                $item.Selected = $true
-                $item.Focused = $true
-                $item.EnsureVisible()
-                break
-            }
-        }
-
-        & $syncVersionCatalogSelectionState
-    }
-
-    $getLatestVersionCatalogEntryForInstall = {
-        if ($ui.VersionCatalogOperationInProgress) {
-            return $null
-        }
-
-        & $refreshVersionCatalog
-
-        $latestEntry = $null
-        foreach ($entry in @($ui.VersionCatalogEntries)) {
-            $isLatestStable = [bool](Get-ObjectPropertyValue -Object $entry -Name 'is_latest_stable' -DefaultValue $false)
-            if ($isLatestStable) {
-                $latestEntry = $entry
-                break
-            }
-        }
-
-        if ($null -eq $latestEntry -and @($ui.VersionCatalogEntries).Count -gt 0) {
-            $latestEntry = @($ui.VersionCatalogEntries)[0]
-        }
-
-        if ($null -eq $latestEntry) {
-            throw (New-UpdateOperationException -ErrorCode 'update-no-stable-release' -Message (T 'Helper_VersionManager_Update_NoStableRelease' 'The latest release is not a stable published release.'))
-        }
-
-        if (-not (& $testVersionCatalogEntryActionable $latestEntry)) {
-            $detail = Get-VersionCatalogInstallUnavailableDetail -Entry $latestEntry -TargetVersion ([string]$ui.TargetVersion) -TargetRoot ([string]$ui.Root) -OperationInProgress:$ui.VersionCatalogOperationInProgress -IsCurrent:(& $testVersionCatalogEntryCurrent $latestEntry)
-            throw (New-UpdateOperationException -ErrorCode 'update-latest-catalog-install-unavailable' -Message $detail)
-        }
-        return $latestEntry
+        $currentSkinResetButton.Enabled = (
+            $configured -and
+            $null -ne $ui.TargetVersion -and
+            -not $ui.UpdateCheckInProgress -and
+            -not $ui.LatestInstallInProgress -and
+            -not $ui.InstallationOperationInProgress)
     }
 
     $refreshInstallations = {
@@ -875,50 +891,116 @@ function Start-VersionManager {
         [void](Set-VersionManagerAllTabsDirty -TabStates $ui.TabStates)
     }
 
+    $installVerifiedBadgeEntry = $null
+
     $refreshAll = {
         & $setVersionManagerTabsDirtyForGlobalMutation
         $ui.TargetVersionText = Get-SkinMetadataVersion -Root $ui.Root
         $ui.TargetVersion = Convert-ToVersion -VersionText $ui.TargetVersionText
-        & $refreshSummary
-        & $refreshVersionCatalog
         & $refreshInstallations
+        & $runLatestCheck $true
         & $refreshSettingsTab
+        & $syncCurrentSkinResetState
     }
 
     $runLatestCheck = {
         param([bool]$Silent)
 
-        if ($ui.UpdateCheckInProgress -or $ui.VersionCatalogOperationInProgress) {
-            return
+        if ($ui.UpdateCheckInProgress) {
+            return $false
         }
 
         try {
             $ui.UpdateCheckInProgress = $true
+            $ui.BadgeRequestSucceeded = $false
+            $ui.VerifiedBadge = $null
+            $footerRefresh.Enabled = $false
+            $footerCheckLatest.Enabled = $false
+            $footerInstallLatest.Enabled = $false
+            & $syncInstallationSelectionState
+            & $syncCurrentSkinResetState
             & $refreshSummary
             [System.Windows.Forms.Application]::DoEvents()
-            & $refreshVersionCatalog $true
-            $ui.UpdateCache = Get-UpdateCache -Root $ui.Root
+
+            $ui.UpdateConfig = Get-UpdateConfiguration -Root $ui.Root
+            if (-not (Test-UpdateConfigured -Config $ui.UpdateConfig)) {
+                throw (New-UpdateOperationException -ErrorCode 'update-source-unconfigured' -Message (T 'Helper_VersionManager_Update_SourceUnconfigured' 'The update source is not configured yet.'))
+            }
+            $badge = Invoke-VersionManagerBadgeRequest -Config $ui.UpdateConfig -TimeoutSeconds 15
+            $ui.VerifiedBadge = $badge
+            $ui.BadgeRequestSucceeded = $true
+            $ui.UpdateCache = Update-UpdateCache -Root $ui.Root -Patch ([PSCustomObject]@{
+                LastCheckedAtUtc = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                LatestVersion = [string]$badge.Tag
+                RepositorySlug = [string]$badge.RepositorySlug
+                ReleaseName = [string]$badge.ReleaseName
+                ReleaseUrl = [string]$badge.ReleaseUrl
+                AssetName = [string]$badge.AssetName
+                AssetUrl = [string]$badge.AssetUrl
+                PublishedAtUtc = [string]$badge.PublishedAtUtc
+                Status = 'ready'
+                Error = ''
+                ErrorCode = ''
+                FailureHint = ''
+                ReleaseVariant = [string]$badge.ReleaseVariant
+                ActiveAssetPattern = [string]$badge.AssetName
+            })
             $ui.HasSessionUpdateStatus = $true
             & $setVersionManagerTabsDirtyForLatestStateMutation
             & $refreshSummary
             & $refreshSettingsTab
+            return $true
         }
         catch {
-            Write-Log ("Latest version refresh failed: {0}" -f $_.Exception.ToString()) 'ERROR'
+            $errorCode = Get-UpdateConfigurationErrorCode -Exception $_.Exception
+            if ([string]::IsNullOrWhiteSpace($errorCode) -or [string]::Equals($errorCode, 'update-unexpected', [System.StringComparison]::OrdinalIgnoreCase)) {
+                try {
+                    if ($_.Exception.Data.Contains('DMEL_ERROR_CODE')) {
+                        $errorCode = [string]$_.Exception.Data['DMEL_ERROR_CODE']
+                    }
+                }
+                catch {
+                }
+            }
+            $ui.BadgeRequestSucceeded = $false
+            $ui.VerifiedBadge = $null
+            $ui.HasSessionUpdateStatus = $true
+            $previousCache = Get-UpdateCache -Root $ui.Root
+            $previousVersion = ConvertTo-VersionManagerStableComparableVersion -VersionText ([string]$previousCache.LatestVersion)
+            $previousProvenanceValid = ($null -ne $previousVersion -and
+                [string]::Equals([string]$previousCache.RepositorySlug, ('{0}/{1}' -f $ui.UpdateConfig.Owner, $ui.UpdateConfig.Repo), [System.StringComparison]::Ordinal) -and
+                [string]::Equals([string]$previousCache.ReleaseVariant, [string]$ui.UpdateConfig.ReleaseVariant, [System.StringComparison]::Ordinal) -and
+                [string]::Equals([string]$previousCache.AssetName, [string]$ui.UpdateConfig.ActiveAssetPattern, [System.StringComparison]::Ordinal))
+            $ui.UpdateCache = Update-UpdateCache -Root $ui.Root -Patch ([PSCustomObject]@{
+                Status = $(if ($previousProvenanceValid) { 'ready' } else { 'error' })
+                Error = [string]$_.Exception.Message
+                ErrorCode = $errorCode
+                FailureHint = 'badge-feed'
+            })
+            Write-Log ("Latest badge refresh failed: {0}" -f $_.Exception.ToString()) 'ERROR'
+            & $refreshSummary
             if (-not $Silent -and -not $script:VersionManagerWindowClosing) {
-                $dialogMessage = Get-UpdateFriendlyMessage -ErrorCode (Get-UpdateConfigurationErrorCode -Exception $_.Exception) -DefaultMessage ([string]$_.Exception.Message) -Surface 'dialog'
+                $dialogMessage = Get-UpdateFriendlyMessage -ErrorCode $errorCode -DefaultMessage ([string]$_.Exception.Message) -Surface 'dialog'
                 Show-VersionManagerMessageBox -Owner $form -Message $dialogMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
             }
+            return $false
         }
         finally {
             $ui.UpdateCheckInProgress = $false
+            $footerRefresh.Enabled = $true
+            $footerCheckLatest.Enabled = $true
+            & $syncInstallationSelectionState
+            & $syncCurrentSkinResetState
+            try { & $refreshSummary } catch {}
         }
     }
 
     $installLatestVersion = {
-        if ($ui.UpdateCheckInProgress -or $ui.VersionCatalogOperationInProgress) {
+        if ($ui.UpdateCheckInProgress -or $ui.LatestInstallInProgress) {
             return
         }
+
+        & $ensureInteractiveModules
 
         try {
             $config = Get-UpdateConfiguration -Root $ui.Root
@@ -926,18 +1008,39 @@ function Start-VersionManager {
                 throw (New-UpdateOperationException -ErrorCode 'update-source-unconfigured' -Message (T 'Helper_VersionManager_Update_SourceUnconfigured' 'The update source is not configured yet.'))
             }
 
-            $latestEntry = & $getLatestVersionCatalogEntryForInstall
-            if ($null -eq $latestEntry) {
-                return
+            if (-not $ui.BadgeRequestSucceeded -or $null -eq $ui.VerifiedBadge) {
+                throw (New-UpdateOperationException -ErrorCode 'badge-feed-unverified' -Message 'A verified latest-version badge is required before updating.')
             }
-
-            $latestComparableVersion = Convert-ToVersion -VersionText ([string](Get-ObjectPropertyValue -Object $latestEntry -Name 'version' -DefaultValue ''))
+            $latestComparableVersion = $ui.VerifiedBadge.Version
             if (-not $latestComparableVersion -or -not $ui.TargetVersion -or ($latestComparableVersion -le $ui.TargetVersion)) {
                 return
             }
 
-            & $selectVersionCatalogEntry $latestEntry
-            & $installVersionCatalogEntry $latestEntry $true
+            $installedPath = ''
+            foreach ($installation in @($ui.OtherInstallations)) {
+                $installedVersion = ConvertTo-VersionManagerStableComparableVersion -VersionText ([string]$installation.VersionText)
+                if ($null -eq $installedVersion -or $installedVersion -ne $latestComparableVersion -or -not [bool]$installation.IsValid) {
+                    continue
+                }
+                try {
+                    $installedConfig = Get-UpdateConfiguration -Root ([string]$installation.Path)
+                    if ([string]::Equals([string]$installedConfig.ReleaseVariant, [string]$ui.VerifiedBadge.ReleaseVariant, [System.StringComparison]::Ordinal)) {
+                        $installedPath = [string]$installation.Path
+                        break
+                    }
+                }
+                catch {
+                }
+            }
+
+            $latestEntry = [PSCustomObject]@{
+                Version = [string]$ui.VerifiedBadge.VersionText
+                Tag = [string]$ui.VerifiedBadge.Tag
+                AssetUrl = [string]$ui.VerifiedBadge.AssetUrl
+                InstalledPath = $installedPath
+                ReleaseVariant = [string]$ui.VerifiedBadge.ReleaseVariant
+            }
+            & $installVerifiedBadgeEntry $latestEntry $true
         }
         catch {
             $errorCode = Get-UpdateConfigurationErrorCode -Exception $_.Exception
@@ -971,15 +1074,12 @@ function Start-VersionManager {
         & $syncInstallationSelectionState
     })
 
-    $versionCatalogList.Add_SelectedIndexChanged({
-        $ui.SelectedVersionCatalogEntry = if ($versionCatalogList.SelectedItems.Count -gt 0) { $versionCatalogList.SelectedItems[0].Tag } else { $null }
-        & $syncVersionCatalogSelectionState
-    })
-
     $installButtons.UseVersion.Add_Click({
         if ($ui.InstallationOperationInProgress) {
             return
         }
+
+        & $ensureInteractiveModules
 
         $entry = $ui.SelectedInstallation
         if ($null -eq $entry -or [bool]$entry.IsCurrent -or -not [bool]$entry.IsValid) {
@@ -1002,7 +1102,9 @@ function Start-VersionManager {
 
             $ui.InstallationOperationInProgress = $true
             & $syncInstallationSelectionState
-            & $showBusyOverlay (T 'Helper_VersionManager_Busy_Switching' 'Switching to the selected installation. Please do not close this window.')
+            & $showBusyOverlay `
+                (T 'Helper_VersionManager_Busy_Switching' 'Switching to the selected installation. Please do not close this window.') `
+                (T 'Helper_VersionManager_Action_UseVersion' 'Use this skin')
             try {
                 $result = Invoke-VersionReleaseInstall -Root $ui.Root -SelectedTargetRoot ([string]$entry.Path)
             }
@@ -1047,26 +1149,28 @@ function Start-VersionManager {
         }
     })
 
-    $installVersionCatalogEntry = {
+    $installVerifiedBadgeEntry = {
         param(
             [AllowNull()]$entry,
             [bool]$SkipInitialConfirm = $false
         )
 
-        if ($ui.VersionCatalogOperationInProgress) {
+        if ($ui.LatestInstallInProgress) {
             return
         }
 
-        if (-not (& $testVersionCatalogEntryActionable $entry)) {
+        & $ensureInteractiveModules
+
+        if ($null -eq $entry) {
             return
         }
 
-        $versionText = [string](Get-ObjectPropertyValue -Object $entry -Name 'version' -DefaultValue '')
-        $tagText = [string](Get-ObjectPropertyValue -Object $entry -Name 'tag' -DefaultValue '')
+        $versionText = [string](Get-ObjectPropertyValue -Object $entry -Name 'Version' -DefaultValue '')
+        $tagText = [string](Get-ObjectPropertyValue -Object $entry -Name 'Tag' -DefaultValue '')
         $expectedVersion = if ([string]::IsNullOrWhiteSpace($tagText)) { $versionText } else { $tagText }
-        $assetUrl = [string](Get-ObjectPropertyValue -Object $entry -Name 'asset_url' -DefaultValue '')
-        $installedPath = [string](Get-ObjectPropertyValue -Object $entry -Name 'installed_path' -DefaultValue '')
-        $releaseVariant = [string](Get-ObjectPropertyValue -Object $entry -Name 'release_variant' -DefaultValue '')
+        $assetUrl = [string](Get-ObjectPropertyValue -Object $entry -Name 'AssetUrl' -DefaultValue '')
+        $installedPath = [string](Get-ObjectPropertyValue -Object $entry -Name 'InstalledPath' -DefaultValue '')
+        $releaseVariant = [string](Get-ObjectPropertyValue -Object $entry -Name 'ReleaseVariant' -DefaultValue '')
         $isInstalled = -not [string]::IsNullOrWhiteSpace($installedPath)
         $isPre12Target = Test-VersionManagerUnsupportedVersionText -VersionText $versionText
 
@@ -1101,29 +1205,52 @@ function Start-VersionManager {
                 }
             }
 
-            $ui.VersionCatalogOperationInProgress = $true
-            & $syncVersionCatalogSelectionState
+            $ui.LatestInstallInProgress = $true
+            & $syncInstallationSelectionState
+            & $syncCurrentSkinResetState
             $busyMessage = if ($isInstalled) {
                 T 'Helper_VersionManager_Busy_Switching' 'Switching to the selected installation. Please do not close this window.'
+            }
+            elseif ($SkipInitialConfirm) {
+                T 'Helper_VersionManager_Busy_Applying' 'Updating... Please do not close this window.'
             }
             else {
                 T 'Helper_VersionManager_Busy_InstallingSelected' 'Installing the selected version. Please do not close this window.'
             }
-            & $showBusyOverlay $busyMessage
+            $operationStartedAtUtc = [datetime]::UtcNow
+            $progressToken = if ($isInstalled) { '' } else { & $newVersionImportProgressToken 'version-manager-install' }
+            $busyTitle = if ($isInstalled) {
+                T 'Helper_VersionManager_Action_UseVersion' 'Use this skin'
+            }
+            elseif ($SkipInitialConfirm) {
+                T 'Helper_VersionManager_Action_ApplyUpdate' 'Apply update'
+            }
+            else {
+                T 'Helper_VersionManager_Action_InstallVersion' 'Install this version'
+            }
+            & $showBusyOverlay $busyMessage $busyTitle $progressToken $operationStartedAtUtc
             try {
                 $result = if ($isInstalled) {
                     Invoke-VersionReleaseInstall -Root $ui.Root -SelectedTargetRoot $installedPath -ExpectedReleaseVariant $releaseVariant
                 }
                 else {
-                    Invoke-VersionReleaseInstall -Root $ui.Root -PackageUrl $assetUrl -ExpectedVersion $expectedVersion -ExpectedReleaseVariant $releaseVariant
+                    Invoke-VersionReleaseInstall -Root $ui.Root -PackageUrl $assetUrl -ExpectedVersion $expectedVersion -ExpectedReleaseVariant $releaseVariant -ProgressOwnerRoot $ui.Root -ProgressToken $progressToken
                 }
             }
             finally {
                 & $hideBusyOverlay
             }
-            if ([string]::Equals([string]$result.Status, 'WARN', [System.StringComparison]::OrdinalIgnoreCase) -and -not $isInstalled) {
+            $repairPlanId = ([string]$result.RepairPlanId).Trim()
+            $isRepairableWarning = ([string]::Equals([string]$result.Status, 'WARN', [System.StringComparison]::OrdinalIgnoreCase) -and
+                [string]::Equals([string]$result.Compatibility, 'REPAIRABLE', [System.StringComparison]::OrdinalIgnoreCase) -and
+                $repairPlanId -match '^[0-9A-Fa-f]{64}$')
+            if ($isRepairableWarning -and -not $isInstalled) {
                 $warningMessage = if ([string]::IsNullOrWhiteSpace([string]$result.Message)) {
-                    (T 'Helper_VersionManager_Update_CompatibilityWarn' (U '\uD604\uC7AC \uB370\uC774\uD130\uC640 \uC120\uD0DD\uD55C \uBC84\uC804\uC758 \uC5F0\uB3D9\uC774 \uC644\uC804\uD788 \uD638\uD658\uB418\uC9C0 \uC54A\uC744 \uC218 \uC788\uC2B5\uB2C8\uB2E4. \uB370\uC774\uD130 \uC190\uC2E4\uC774 \uBC1C\uC0DD\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.'))
+                    $fallbackSummary = ([string]$result.RepairSummary).Trim()
+                    if ($fallbackSummary.Length -gt 480) {
+                        $fallbackSummary = $fallbackSummary.Substring(0, 480).Trim() + '...'
+                    }
+                    (TF 'Helper_VersionManager_Update_CompatibilityRepairWarning' @([string]$result.RepairCount, $fallbackSummary) 'Some item image references cannot be imported. Only those image fields will be cleared; all other current data will be imported. Repair count: %1. %2')
                 }
                 else {
                     [string]$result.Message
@@ -1131,13 +1258,17 @@ function Start-VersionManager {
                 if (-not (Confirm-Dialog -Owner $form -Message ([string]::Join("`r`n", @(
                     $warningMessage,
                     '',
-                    (T 'Helper_VersionManager_Update_CompatibilityWarnProceed' (U '\uADF8\uB798\uB3C4 \uC124\uCE58\uB97C \uACC4\uC18D\uD560\uAE4C\uC694?'))
+                    (T 'Helper_VersionManager_Update_CompatibilityRepairProceed' 'Clear only the unusable image fields listed above, import all other current data, and continue installing?')
                 ))))) {
                     return
                 }
-                & $showBusyOverlay (T 'Helper_VersionManager_Busy_InstallingSelected' 'Installing the selected version. Please do not close this window.')
+                & $showBusyOverlay `
+                    $busyMessage `
+                    $busyTitle `
+                    $progressToken `
+                    $operationStartedAtUtc
                 try {
-                    $result = Invoke-VersionReleaseInstall -Root $ui.Root -PackageUrl $assetUrl -ExpectedVersion $expectedVersion -ExpectedReleaseVariant $releaseVariant -AllowCompatibilityWarning
+                    $result = Invoke-VersionReleaseInstall -Root $ui.Root -PackageUrl $assetUrl -ExpectedVersion $expectedVersion -ExpectedReleaseVariant $releaseVariant -AllowCompatibilityWarning -ExpectedRepairPlanId $repairPlanId -ProgressOwnerRoot $ui.Root -ProgressToken $progressToken
                 }
                 finally {
                     & $hideBusyOverlay
@@ -1174,27 +1305,26 @@ function Start-VersionManager {
             Show-VersionManagerMessageBox -Owner $form -Message $dialogMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon $dialogIcon | Out-Null
         }
         catch {
-            Write-Log ("Version catalog install failed: {0}" -f $_.Exception.ToString()) 'ERROR'
+            Write-Log ("Verified latest-version install failed: {0}" -f $_.Exception.ToString()) 'ERROR'
             $errorCode = Get-UpdateConfigurationErrorCode -Exception $_.Exception
             $dialogMessage = Get-UpdateFriendlyMessage -ErrorCode $errorCode -DefaultMessage ([string]$_.Exception.Message) -Surface 'dialog'
             Show-VersionManagerMessageBox -Owner $form -Message $dialogMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
         finally {
             & $hideBusyOverlay
-            $ui.VersionCatalogOperationInProgress = $false
-            & $syncVersionCatalogSelectionState
+            $ui.LatestInstallInProgress = $false
+            & $syncInstallationSelectionState
+            & $syncCurrentSkinResetState
             if (-not $ui.CloseAfterSwitch) {
-                & $refreshVersionCatalog
+                & $refreshInstallations
+                & $refreshSummary
                 & $refreshSettingsTab
             }
         }
     }
 
-    $versionCatalogInstallButton.Add_Click({
-        & $installVersionCatalogEntry $ui.SelectedVersionCatalogEntry
-    })
-
     $installButtons.Import.Add_Click({
+        & $ensureInteractiveModules
         try {
             $entry = $ui.SelectedInstallation
             if ($null -eq $entry -or -not $entry.ImportAllowed) {
@@ -1208,7 +1338,23 @@ function Start-VersionManager {
                 return
             }
 
-            $result = Invoke-ImportFromInstallation -Root $ui.Root -SourcePath ([string]$entry.Path)
+            $progressToken = & $newVersionImportProgressToken 'version-manager-import'
+            $operationStartedAtUtc = [datetime]::UtcNow
+            $ui.InstallationOperationInProgress = $true
+            & $syncInstallationSelectionState
+            & $showBusyOverlay `
+                (T 'Helper_VersionManager_Busy_BackingUpLocalData' 'Backing up local data.') `
+                (T 'Helper_VersionManager_Action_ImportData' 'Import data') `
+                $progressToken `
+                $operationStartedAtUtc
+            try {
+                $result = Invoke-ImportFromInstallation -Root $ui.Root -SourcePath ([string]$entry.Path) -ProgressOwnerRoot $ui.Root -ProgressToken $progressToken
+            }
+            finally {
+                & $hideBusyOverlay
+                $ui.InstallationOperationInProgress = $false
+                & $syncInstallationSelectionState
+            }
             $installResult.Text = [string]$result.Message
             if ($result.Status -eq 'OK') {
                 if (-not [string]::IsNullOrWhiteSpace($result.SourcePath)) {
@@ -1235,6 +1381,7 @@ function Start-VersionManager {
     })
 
     $installButtons.Delete.Add_Click({
+        & $ensureInteractiveModules
         try {
             $entry = $ui.SelectedInstallation
             if ($null -eq $entry -or [bool]$entry.IsCurrent) {
@@ -1273,6 +1420,127 @@ function Start-VersionManager {
         }
     })
 
+    $currentSkinResetButton.Add_Click({
+        if ($ui.UpdateCheckInProgress -or $ui.LatestInstallInProgress -or $ui.InstallationOperationInProgress) {
+            return
+        }
+
+        & $ensureInteractiveModules
+        try {
+            $ui.TargetVersionText = Get-SkinMetadataVersion -Root $ui.Root
+            $ui.TargetVersion = Convert-ToVersion -VersionText $ui.TargetVersionText
+            if ($null -eq $ui.TargetVersion) {
+                throw (New-UpdateOperationException -ErrorCode 'reset-current-version-invalid' -Message 'The current skin version could not be validated.')
+            }
+            $ui.UpdateConfig = Get-UpdateConfiguration -Root $ui.Root
+            $profile = Get-VersionManagerBadgeProfile -Config $ui.UpdateConfig
+            $variant = [string]$ui.UpdateConfig.ReleaseVariant
+            $assetName = Get-BlockHudFixedUpdateZipAssetName -ReleaseVariant $variant -LanguageCode $script:LanguageCode
+            $currentTag = ([string]$ui.TargetVersionText).Trim()
+            if (-not $currentTag.StartsWith('v', [System.StringComparison]::OrdinalIgnoreCase)) {
+                $currentTag = 'v' + $currentTag
+            }
+            if ($null -eq (ConvertTo-VersionManagerStableComparableVersion -VersionText $currentTag)) {
+                throw (New-UpdateOperationException -ErrorCode 'reset-current-version-invalid' -Message 'The current skin version is not a stable semantic version.')
+            }
+
+            $confirmMessage = [string]::Join("`r`n", @(
+                (TF 'Helper_VersionManager_Reset_ConfirmIntro' @($currentTag) (U '\uD604\uC7AC \uC124\uCE58\uB41C %1 \uBC84\uC804\uC744 \uC0C8\uB85C \uB0B4\uB824\uBC1B\uC544 \uD604\uC7AC \uC2A4\uD0A8\uC744 \uC644\uC804\uD788 \uCD08\uAE30\uD654\uD569\uB2C8\uB2E4.')),
+                '',
+                (T 'Helper_VersionManager_Reset_ConfirmDataLoss' (U '\uC124\uC815, \uC0AC\uC6A9\uC790 \uC774\uBBF8\uC9C0\u00B7\uC74C\uC6D0, \uC544\uC774\uD15C, \uD3B8\uC9D1 \uB370\uC774\uD130, \uC7AC\uC0DD \uC124\uC815, \uB85C\uADF8\uC640 \uCE90\uC2DC\uB97C \uD3EC\uD568\uD55C \uD604\uC7AC \uC2A4\uD0A8\uC758 \uBAA8\uB4E0 \uB370\uC774\uD130\uAC00 \uC601\uAD6C\uC801\uC73C\uB85C \uC0AD\uC81C\uB418\uBA70 \uBCF5\uAD6C\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.')),
+                '',
+                (T 'Helper_VersionManager_Reset_ConfirmOtherInstallations' (U '\uB2E4\uB978 \uC124\uCE58\uB41C \uC2A4\uD0A8\uC740 \uBCC0\uACBD\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uACC4\uC18D\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?'))
+            ))
+            $confirmation = Show-VersionManagerMessageBox `
+                -Owner $form `
+                -Message $confirmMessage `
+                -Title (T 'Helper_VersionManager_Reset_CurrentGroup' (U '\uD604\uC7AC \uC2A4\uD0A8 \uCD08\uAE30\uD654')) `
+                -Buttons ([System.Windows.Forms.MessageBoxButtons]::YesNo) `
+                -Icon ([System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($confirmation -ne [System.Windows.Forms.DialogResult]::Yes) {
+                return
+            }
+
+            $packageUrl = 'https://github.com/{0}/releases/download/{1}/{2}' -f `
+                [string]$profile.RepositorySlug,
+                [uri]::EscapeDataString($currentTag),
+                [uri]::EscapeDataString($assetName)
+            $ui.InstallationOperationInProgress = $true
+            & $syncInstallationSelectionState
+            & $syncCurrentSkinResetState
+            & $showBusyOverlay `
+                (T 'Helper_VersionManager_Reset_BusyDownload' (U '\uB3D9\uC77C\uD55C \uBC84\uC804\uC744 \uC0C8\uB85C \uB0B4\uB824\uBC1B\uB294 \uC911\uC785\uB2C8\uB2E4... \uCC3D\uC744 \uB2EB\uC9C0 \uB9C8\uC138\uC694.')) `
+                (T 'Helper_VersionManager_Reset_CurrentGroup' (U '\uD604\uC7AC \uC2A4\uD0A8 \uCD08\uAE30\uD654'))
+            $resetStageChanged = {
+                param([string]$Stage)
+
+                switch ($Stage) {
+                    'validating' {
+                        & $setBusyOverlayMessage (T 'Helper_VersionManager_Reset_BusyValidate' (U '\uB2E4\uC6B4\uB85C\uB4DC\uD55C \uC2A4\uD0A8\uC744 \uAC80\uC99D\uD558\uB294 \uC911\uC785\uB2C8\uB2E4... \uCC3D\uC744 \uB2EB\uC9C0 \uB9C8\uC138\uC694.'))
+                    }
+                    'applying' {
+                        & $setBusyOverlayMessage (T 'Helper_VersionManager_Reset_BusyApply' (U '\uD604\uC7AC \uC2A4\uD0A8\uC744 \uCD08\uAE30\uD654\uD558\uB294 \uC911\uC785\uB2C8\uB2E4... \uCC3D\uC744 \uB2EB\uC9C0 \uB9C8\uC138\uC694.'))
+                    }
+                    default {
+                        & $setBusyOverlayMessage (T 'Helper_VersionManager_Reset_BusyDownload' (U '\uB3D9\uC77C\uD55C \uBC84\uC804\uC744 \uC0C8\uB85C \uB0B4\uB824\uBC1B\uB294 \uC911\uC785\uB2C8\uB2E4... \uCC3D\uC744 \uB2EB\uC9C0 \uB9C8\uC138\uC694.'))
+                    }
+                }
+                $busyOverlayMessage.Refresh()
+            }.GetNewClosure()
+            $result = Invoke-CurrentSkinReset `
+                -Root $ui.Root `
+                -PackageUrl $packageUrl `
+                -ExpectedVersion $currentTag `
+                -ExpectedReleaseVariant $variant `
+                -OnStageChanged $resetStageChanged
+            $successLikeReset = (
+                [string]::Equals([string]$result.Status, 'OK', [System.StringComparison]::OrdinalIgnoreCase) -or
+                [string]::Equals([string]$result.Status, 'NOOP', [System.StringComparison]::OrdinalIgnoreCase) -or
+                ([string]::Equals([string]$result.Status, 'WARN', [System.StringComparison]::OrdinalIgnoreCase) -and
+                 -not [string]::IsNullOrWhiteSpace([string]$result.SourcePath)))
+            if ($successLikeReset) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$result.SourcePath)) {
+                    Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value ([string]$result.SourcePath)
+                }
+                if (-not [string]::IsNullOrWhiteSpace([string]$result.LogPath)) {
+                    Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value ([string]$result.LogPath)
+                }
+                Set-ResultPairValue -Key 'DMEL_STATUS' -Value ([string]$result.Status)
+                if ([string]::Equals([string]$result.Status, 'WARN', [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $warningMessage = [string]$result.Message
+                    if (-not [string]::IsNullOrWhiteSpace([string]$result.LogPath)) {
+                        $warningMessage += "`r`n`r`n" + [string]$result.LogPath
+                    }
+                    Show-VersionManagerMessageBox -Owner $form -Message $warningMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+                }
+                $ui.CloseAfterSwitch = $true
+                $form.Close()
+                return
+            }
+
+            $failureMessage = if ([string]::IsNullOrWhiteSpace([string]$result.Message)) {
+                T 'Helper_VersionManager_Reset_Failed' (U '\uD604\uC7AC \uC2A4\uD0A8\uC744 \uCD08\uAE30\uD654\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uB85C\uADF8 \uD30C\uC77C\uC744 \uD655\uC778\uD558\uC138\uC694.')
+            }
+            else {
+                [string]$result.Message
+            }
+            if (-not [string]::IsNullOrWhiteSpace([string]$result.LogPath)) {
+                $failureMessage += "`r`n`r`n" + [string]$result.LogPath
+            }
+            Show-VersionManagerMessageBox -Owner $form -Message $failureMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        }
+        catch {
+            Write-Log ("Current skin reset failed: {0}" -f $_.Exception.ToString()) 'ERROR'
+            Show-VersionManagerMessageBox -Owner $form -Message ([string]$_.Exception.Message) -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        }
+        finally {
+            & $hideBusyOverlay
+            $ui.InstallationOperationInProgress = $false
+            & $syncInstallationSelectionState
+            & $syncCurrentSkinResetState
+        }
+    })
+
     $footerRefresh.Add_Click({
         & $refreshAll
     })
@@ -1283,6 +1551,7 @@ function Start-VersionManager {
         & $installLatestVersion
     })
     $settingsOpenLogButton.Add_Click({
+        & $ensureInteractiveModules
         $logFolder = Split-Path -Parent (Get-LatestHelperLogPath -Root $ui.Root)
         if ([string]::IsNullOrWhiteSpace($logFolder)) {
             $logFolder = Get-VersionManagerLogsRoot -Root $ui.Root
@@ -1290,12 +1559,15 @@ function Start-VersionManager {
         Open-FolderPath -Path $logFolder
     })
     $footerOpenDownloadPage.Add_Click({
+        & $ensureInteractiveModules
         Start-Process -FilePath (Get-VersionManagerDownloadPageUrl)
     })
     $footerOpenRepositoryPage.Add_Click({
+        & $ensureInteractiveModules
         Start-Process -FilePath (Get-VersionManagerRepositoryUrl -Root $ui.Root)
     })
     $settingsOpenSkinButton.Add_Click({
+        & $ensureInteractiveModules
         Open-FolderPath -Path $ui.Root
     })
     $settingsLogCopyButton.Add_Click({
@@ -1307,6 +1579,7 @@ function Start-VersionManager {
             [System.Windows.Forms.Clipboard]::SetText([string]$settingsLogText.Text)
         }
         catch {
+            & $ensureInteractiveModules
             Show-VersionManagerMessageBox -Owner $form -Message (T 'Helper_VersionManager_Log_CopyFailed' 'Could not copy the log text.') -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
     })
@@ -1314,6 +1587,8 @@ function Start-VersionManager {
         if (-not $ui.SettingsLogHasContent) {
             return
         }
+
+        & $ensureInteractiveModules
 
         if (-not (Confirm-Dialog -Owner $form -Message (T 'Helper_VersionManager_Log_ClearConfirm' 'Delete the skin log file contents and clear the current session log view?'))) {
             return
@@ -1334,7 +1609,7 @@ function Start-VersionManager {
     $footerRefresh.Enabled = $false
     $footerCheckLatest.Enabled = $false
     $footerInstallLatest.Enabled = $false
-    $versionCatalogInstallButton.Enabled = $false
+    $currentSkinResetButton.Enabled = $false
     $installButtons.UseVersion.Enabled = $false
     $installButtons.Import.Enabled = $false
     $installButtons.Delete.Enabled = $false
@@ -1343,21 +1618,7 @@ function Start-VersionManager {
     [void](Start-VersionManagerTabLoad -TabStates $ui.TabStates -TabName 'installations')
     [void](Start-VersionManagerTabLoad -TabStates $ui.TabStates -TabName 'settingsLog')
     [void]$otherInstallList.Items.Add((& $loadingListItem (T 'Helper_VersionManager_Common_Loading' 'Loading...')))
-    [void]$versionCatalogList.Items.Add((& $loadingListItem (T 'Helper_VersionManager_Common_Loading' 'Loading...')))
     $settingsLogText.Text = T 'Helper_VersionManager_Common_Loading' 'Loading...'
-
-    $autoCheckTimer = New-Object System.Windows.Forms.Timer
-    $autoCheckTimer.Interval = 200
-    $autoCheckTimer.Add_Tick({
-        $autoCheckTimer.Stop()
-        & $runLatestCheck $true
-    })
-
-    $startAutoCheck = {
-        if (-not $ui.HasSessionUpdateStatus -and -not $ui.UpdateCheckInProgress) {
-            $autoCheckTimer.Start()
-        }
-    }
 
     $initialHydrationStages = @(
         [PSCustomObject]@{
@@ -1371,14 +1632,11 @@ function Start-VersionManager {
             Action = {
                 $ui.InitialHydrationCompleted = $true
                 $footerRefresh.Enabled = $true
-                $footerCheckLatest.Enabled = $true
                 if ($deferredHydrationStages.Count -gt 0) {
                     $deferredHydrationTimer.Start()
                 }
                 else {
-                    if (-not (& $runInitialAction)) {
-                        & $startAutoCheck
-                    }
+                    [void](& $runInitialAction)
                 }
             }
         }
@@ -1386,15 +1644,15 @@ function Start-VersionManager {
 
     $deferredHydrationStages = @(
         [PSCustomObject]@{
-            Name = 'versionCatalog'
-            Action = {
-                & $refreshVersionCatalog
-            }
-        },
-        [PSCustomObject]@{
             Name = 'installations'
             Action = {
                 & $refreshInstallations
+            }
+        },
+        [PSCustomObject]@{
+            Name = 'badge'
+            Action = {
+                [void](& $runLatestCheck $true)
             }
         },
         [PSCustomObject]@{
@@ -1452,14 +1710,15 @@ function Start-VersionManager {
                 $deferredHydrationTimer.Start()
             }
             else {
-                if (-not (& $runInitialAction)) {
-                    & $startAutoCheck
-                }
+                [void](& $runInitialAction)
             }
         }
     })
 
     $form.Add_Shown({
+        $form.TopMost = $true
+        $form.BringToFront()
+        $form.Activate()
         Save-VersionManagerLaunchState -Root $ui.Root -Status 'shown' -LaunchTokenValue $LaunchToken
         $initialHydrationTimer.Start()
     })
@@ -1472,14 +1731,14 @@ function Start-VersionManager {
     $form.Add_FormClosing({
         param($sender, [System.Windows.Forms.FormClosingEventArgs]$eventArgs)
 
-        if ($ui.InstallationOperationInProgress -and -not $ui.CloseAfterSwitch) {
+        if (($ui.InstallationOperationInProgress -or $ui.LatestInstallInProgress) -and -not $ui.CloseAfterSwitch) {
             $eventArgs.Cancel = $true
             $script:VersionManagerWindowClosing = $false
             return
         }
 
         $script:VersionManagerWindowClosing = $true
-        foreach ($timer in @($initialHydrationTimer, $deferredHydrationTimer, $autoCheckTimer)) {
+        foreach ($timer in @($initialHydrationTimer, $deferredHydrationTimer, $busyOverlayTimer)) {
             try {
                 if ($null -ne $timer) {
                     $timer.Stop()

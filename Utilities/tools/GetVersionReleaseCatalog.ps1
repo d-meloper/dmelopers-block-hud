@@ -6,6 +6,8 @@ param(
     [switch]$EmitResultPairs,
     [switch]$SyncUpdateCache,
     [switch]$PreferFreshCache,
+    [switch]$RequireLiveCatalog,
+    [switch]$PassThruCatalog,
     [int]$CatalogCacheMaxAgeSeconds = 900
 )
 
@@ -16,6 +18,7 @@ $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $script:LogStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 try {
     [Console]::OutputEncoding = $script:Utf8NoBom
+    $OutputEncoding = $script:Utf8NoBom
 }
 catch {
 }
@@ -41,6 +44,10 @@ $script:ResultPairs = [ordered]@{
     DMEL_CACHEERRORCODE = ''
     DMEL_CACHEFAILUREHINT = ''
     DMEL_CACHELASTCHECKEDATUTC = ''
+}
+
+if ($PreferFreshCache -and $RequireLiveCatalog) {
+    throw 'PreferFreshCache and RequireLiveCatalog cannot be used together.'
 }
 $script:ShouldOutputJson = $OutputJson -or (-not $EmitResultPairs)
 
@@ -533,6 +540,7 @@ function Save-CatalogUpdateCache {
     $cache = [PSCustomObject]@{
         LastCheckedAtUtc = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
         LatestVersion = [string]$latest.tag
+        RepositorySlug = '{0}/{1}' -f [string]$Catalog.owner, [string]$Catalog.repo
         ReleaseName = [string]$latest.release_name
         ReleaseUrl = if ([string]::IsNullOrWhiteSpace([string]$latest.tag)) { '' } else { 'https://github.com/{0}/{1}/releases/tag/{2}' -f [string]$Catalog.owner, [string]$Catalog.repo, [System.Uri]::EscapeDataString([string]$latest.tag) }
         AssetName = [string]$latest.asset_name
@@ -565,6 +573,7 @@ function Save-CatalogUpdateFailureCache {
     $cache = Update-VersionManagerUpdateCache -Root $Root -Patch ([PSCustomObject]@{
         LastCheckedAtUtc = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
         LatestVersion = ''
+        RepositorySlug = ''
         ReleaseName = ''
         ReleaseUrl = ''
         AssetName = ''
@@ -720,7 +729,9 @@ function Get-VersionReleaseCatalog {
         throw "Unsupported update provider: $($config.Provider)"
     }
 
-    $script:CompatibleCachedCatalog = Get-CompatibleReleaseCatalogCache -Root $resolvedRoot -Config $config -MaxAgeSeconds $CatalogCacheMaxAgeSeconds -AllowStale
+    if (-not $RequireLiveCatalog) {
+        $script:CompatibleCachedCatalog = Get-CompatibleReleaseCatalogCache -Root $resolvedRoot -Config $config -MaxAgeSeconds $CatalogCacheMaxAgeSeconds -AllowStale
+    }
     if ($PreferFreshCache) {
         $freshCachedCatalog = Get-CompatibleReleaseCatalogCache -Root $resolvedRoot -Config $config -MaxAgeSeconds $CatalogCacheMaxAgeSeconds
         if ($null -ne $freshCachedCatalog) {
@@ -863,11 +874,16 @@ finally {
     Save-Log
 }
 
-if ($script:ShouldOutputJson) {
+if ($PassThruCatalog) {
+    Write-Output $catalog
+}
+elseif ($script:ShouldOutputJson) {
     Write-JsonStdout -Value $catalog
 }
-Emit-ResultPairs
+if (-not $PassThruCatalog) {
+    Emit-ResultPairs
+}
 
-if ([string]::Equals([string]$script:ResultPairs['DMEL_STATUS'], 'ERROR', [System.StringComparison]::OrdinalIgnoreCase)) {
+if (-not $PassThruCatalog -and [string]::Equals([string]$script:ResultPairs['DMEL_STATUS'], 'ERROR', [System.StringComparison]::OrdinalIgnoreCase)) {
     exit 1
 }

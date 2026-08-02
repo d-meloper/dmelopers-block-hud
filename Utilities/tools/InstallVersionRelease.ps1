@@ -9,8 +9,13 @@ param(
     [ValidateRange(5, 3600)][int]$PackageDownloadTimeoutSeconds = 1800,
     [ValidateRange(0, 5)][int]$PackageDownloadRetryCount = 2,
     [switch]$AllowCompatibilityWarning,
+    [string]$ExpectedRepairPlanId = '',
+    [string]$LatestUpdateLaunchToken = '',
+    [string]$ProgressOwnerRoot = '',
+    [string]$ProgressToken = '',
     [switch]$NonInteractive,
-    [switch]$EmitResultPairs
+    [switch]$EmitResultPairs,
+    [switch]$PassThruResultObject
 )
 
 Set-StrictMode -Version 2.0
@@ -20,12 +25,13 @@ $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $script:LogStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 try {
     [Console]::OutputEncoding = $script:Utf8NoBom
+    $OutputEncoding = $script:Utf8NoBom
 }
 catch {
 }
 
 . (Join-Path $PSScriptRoot 'Localization.Common.ps1')
-. (Join-Path $PSScriptRoot 'VersionManager.ReleaseCatalog.ps1')
+. (Join-Path $PSScriptRoot 'VersionManager.ReleaseIdentity.ps1')
 
 $script:LogMessages = New-Object System.Collections.Generic.List[string]
 $script:LogPath = Get-BlockHudCanonicalLogPath -ScriptRoot $PSScriptRoot
@@ -38,12 +44,17 @@ $script:DestinationCreated = $false
 $script:DestinationReplacementBackupRoot = ''
 $script:ImportStarted = $false
 $script:SwitchSucceeded = $false
+$script:ExtractRoot = ''
 $script:ResultPairs = [ordered]@{
     DMEL_STATUS = ''
     DMEL_SOURCEPATH = ''
     DMEL_BACKUPPATH = ''
     DMEL_LOGPATH = ''
     DMEL_MESSAGE = ''
+    DMEL_COMPATIBILITY = ''
+    DMEL_REPAIRCOUNT = '0'
+    DMEL_REPAIRSUMMARY = ''
+    DMEL_REPAIRPLANID = ''
 }
 
 function T {
@@ -128,7 +139,17 @@ function Emit-ResultPairs {
     }
 
     Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value $script:LogPath
-    foreach ($key in @('DMEL_STATUS', 'DMEL_SOURCEPATH', 'DMEL_BACKUPPATH', 'DMEL_LOGPATH', 'DMEL_MESSAGE')) {
+    foreach ($key in @(
+        'DMEL_STATUS',
+        'DMEL_SOURCEPATH',
+        'DMEL_BACKUPPATH',
+        'DMEL_LOGPATH',
+        'DMEL_MESSAGE',
+        'DMEL_COMPATIBILITY',
+        'DMEL_REPAIRCOUNT',
+        'DMEL_REPAIRSUMMARY',
+        'DMEL_REPAIRPLANID'
+    )) {
         Write-OutputPair -Key $key -Value $script:ResultPairs[$key]
     }
 }
@@ -594,75 +615,6 @@ function Resolve-VersionDestinationRoot {
     return (Resolve-FullPath -Path (Join-Path $SkinsRoot $folderName) -AllowMissing)
 }
 
-function Get-UrlFileName {
-    param([Parameter(Mandatory = $true)][string]$Url)
-
-    try {
-        $uri = [System.Uri]$Url
-        $fileName = [System.IO.Path]::GetFileName($uri.LocalPath)
-    }
-    catch {
-        $fileName = ''
-    }
-
-    if ([string]::IsNullOrWhiteSpace($fileName)) {
-        $fileName = 'release.zip'
-    }
-
-    $extension = [System.IO.Path]::GetExtension($fileName)
-    if ([string]::IsNullOrWhiteSpace($extension)) {
-        $fileName += '.zip'
-    }
-    elseif (-not [string]::Equals($extension, '.zip', [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw 'PackageUrl must resolve to a ZIP release package.'
-    }
-
-    return (Convert-ToSafeFolderName -Name $fileName)
-}
-
-function Invoke-ReleasePackageDownload {
-    param(
-        [Parameter(Mandatory = $true)][string]$Url,
-        [Parameter(Mandatory = $true)][string]$DestinationPath
-    )
-
-    $maxAttempts = [Math]::Max(1, $PackageDownloadRetryCount + 1)
-    $lastMessage = ''
-    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-        if ($attempt -gt 1) {
-            if (Test-Path -LiteralPath $DestinationPath -PathType Leaf) {
-                Remove-Item -LiteralPath $DestinationPath -Force -ErrorAction SilentlyContinue
-            }
-            Write-Log ("Retrying release package download: attempt {0}/{1}" -f $attempt, $maxAttempts) 'WARN'
-        }
-
-        try {
-            Invoke-BlockHudGitHubReleaseAssetDownload -Uri $Url -OutFile $DestinationPath -TimeoutSeconds $PackageDownloadTimeoutSeconds
-            if (-not (Test-Path -LiteralPath $DestinationPath -PathType Leaf)) {
-                throw 'The download completed without creating the ZIP file.'
-            }
-            $downloadedFile = Get-Item -LiteralPath $DestinationPath -Force
-            if ($downloadedFile.Length -le 0) {
-                throw 'The downloaded ZIP file is empty.'
-            }
-            return
-        }
-        catch {
-            $lastMessage = [string]$_.Exception.Message
-            if (Test-Path -LiteralPath $DestinationPath -PathType Leaf) {
-                Remove-Item -LiteralPath $DestinationPath -Force -ErrorAction SilentlyContinue
-            }
-            if ($attempt -lt $maxAttempts) {
-                Write-Log ("Release package download attempt {0}/{1} failed: {2}" -f $attempt, $maxAttempts, $lastMessage) 'WARN'
-                Start-Sleep -Seconds ([Math]::Min(15, 3 * $attempt))
-                continue
-            }
-        }
-    }
-
-    throw ("Release package download failed after {0} attempt(s). Each attempt allows up to {1} seconds. Last error: {2}" -f $maxAttempts, $PackageDownloadTimeoutSeconds, $lastMessage)
-}
-
 function Resolve-ReleasePackagePath {
     param([Parameter(Mandatory = $true)][string]$CurrentRoot)
 
@@ -686,22 +638,31 @@ function Resolve-ReleasePackagePath {
         return $resolvedPath
     }
 
-    $downloadRoot = Join-RootPath -Root $CurrentRoot -RelativePath '@Resources\Customs\Data\VersionManagerDownloads'
-    Ensure-Directory -Path $downloadRoot
-    $fileName = Get-UrlFileName -Url $PackageUrl
-    $downloadPath = Join-Path $downloadRoot $fileName
-    if (Test-Path -LiteralPath $downloadPath -PathType Leaf) {
-        $baseName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
-        $downloadPath = Join-Path $downloadRoot ("{0}_{1}.zip" -f $baseName, $script:LogStamp)
+    $transportPath = Join-Path $PSScriptRoot 'InstallVersionRelease.PackageTransport.ps1'
+    if (-not (Test-Path -LiteralPath $transportPath -PathType Leaf)) {
+        throw "PackageUrl transport module was not found: $transportPath"
     }
+    . $transportPath
+    return (Resolve-DownloadedInstallReleasePackagePath `
+        -CurrentRoot $CurrentRoot `
+        -Url $PackageUrl `
+        -TimeoutSeconds $PackageDownloadTimeoutSeconds `
+        -RetryCount $PackageDownloadRetryCount `
+        -LogStamp $script:LogStamp)
+}
 
-    Write-Log ("Downloading PackageUrl to: {0} (timeout={1}s retries={2})" -f $downloadPath, $PackageDownloadTimeoutSeconds, $PackageDownloadRetryCount)
-    Invoke-ReleasePackageDownload -Url $PackageUrl -DestinationPath $downloadPath
-    if (-not [string]::Equals([System.IO.Path]::GetExtension($downloadPath), '.zip', [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Downloaded package path must be a ZIP release package.'
+function Get-ReleasePackageIdentity {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return (($sha256.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) -join '')
     }
-
-    return (Resolve-FullPath -Path $downloadPath)
+    finally {
+        $sha256.Dispose()
+        $stream.Dispose()
+    }
 }
 
 function Copy-PackageToDestination {
@@ -763,6 +724,32 @@ function Remove-RootBestEffort {
     catch {
         Write-Log ("Best-effort cleanup failed for {0}: {1}" -f $Root, $_.Exception.Message) 'WARN'
     }
+}
+
+function Remove-ExtractRootBestEffort {
+    if ([string]::IsNullOrWhiteSpace($script:ExtractRoot)) {
+        return
+    }
+
+    $resolvedTempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\', '/')
+    $resolvedExtractRoot = [System.IO.Path]::GetFullPath($script:ExtractRoot).TrimEnd('\', '/')
+    $leaf = Split-Path -Leaf $resolvedExtractRoot
+    if (-not $resolvedExtractRoot.StartsWith($resolvedTempRoot + '\', [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not $leaf.StartsWith('DMeloperReleaseExtract_', [System.StringComparison]::Ordinal)) {
+        Write-Log ("Refusing unexpected extraction cleanup path: {0}" -f $resolvedExtractRoot) 'WARN'
+        return
+    }
+
+    if (Test-Path -LiteralPath $resolvedExtractRoot -PathType Container) {
+        try {
+            Remove-Item -LiteralPath $resolvedExtractRoot -Recurse -Force -ErrorAction Stop
+            Write-Log ("Removed temporary release extraction root: {0}" -f $resolvedExtractRoot)
+        }
+        catch {
+            Write-Log ("Best-effort extraction cleanup failed for {0}: {1}" -f $resolvedExtractRoot, $_.Exception.Message) 'WARN'
+        }
+    }
+    $script:ExtractRoot = ''
 }
 
 function Complete-DestinationReplacement {
@@ -837,18 +824,17 @@ function Convert-OutputToResultPairs {
 }
 
 function Get-InstallRuntimePowerShellPath {
-    $runtimeHost = [Environment]::GetEnvironmentVariable('DMEL_POWERSHELL_HOST')
-    if (-not [string]::IsNullOrWhiteSpace($runtimeHost) -and (Test-Path -LiteralPath $runtimeHost -PathType Leaf)) {
-        return $runtimeHost
+    $candidate = Join-Path $PSHOME 'powershell.exe'
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return [System.IO.Path]::GetFullPath($candidate)
     }
 
-    $skinRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-    $packagedHost = Join-Path $skinRoot '@Resources\Defaults\Runtime\helpers\BlockHudPowerShellHost.exe'
-    if (Test-Path -LiteralPath $packagedHost -PathType Leaf) {
-        return $packagedHost
+    $command = Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue
+    if ($command -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
+        return [System.IO.Path]::GetFullPath($command.Source)
     }
 
-    throw 'BlockHudPowerShellHost.exe could not be located.'
+    throw 'powershell.exe could not be located.'
 }
 
 function Invoke-HelperScript {
@@ -859,9 +845,61 @@ function Invoke-HelperScript {
     )
 
     Write-Log ("Starting {0}: {1}" -f $Operation, $ScriptPath)
-    $output = @(& (Get-InstallRuntimePowerShellPath) -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments 2>&1)
-    $exitCode = $LASTEXITCODE
-    $pairs = Convert-OutputToResultPairs -Output $output
+    $output = @()
+    $exitCode = $null
+    $pairs = @{}
+    if (Test-ScriptSupportsParameter -ScriptPath $ScriptPath -ParameterName 'PassThruResultObject') {
+        $parameterMap = [ordered]@{}
+        for ($index = 0; $index -lt $Arguments.Count; $index++) {
+            $token = [string]$Arguments[$index]
+            if (-not $token.StartsWith('-', [System.StringComparison]::Ordinal) -or $token.Length -lt 2) {
+                throw ("Unsupported positional helper argument for {0}: {1}" -f $Operation, $token)
+            }
+            $name = $token.Substring(1)
+            $value = $true
+            if (($index + 1) -lt $Arguments.Count -and -not ([string]$Arguments[$index + 1]).StartsWith('-', [System.StringComparison]::Ordinal)) {
+                $index += 1
+                $value = [string]$Arguments[$index]
+            }
+            $parameterMap[$name] = $value
+        }
+        $parameterMap['PassThruResultObject'] = $true
+
+        $pipeline = [PowerShell]::Create()
+        try {
+            [void]$pipeline.AddCommand($ScriptPath)
+            foreach ($entry in $parameterMap.GetEnumerator()) {
+                if ($entry.Value -is [bool] -and [bool]$entry.Value) {
+                    [void]$pipeline.AddParameter([string]$entry.Key)
+                }
+                else {
+                    [void]$pipeline.AddParameter([string]$entry.Key, $entry.Value)
+                }
+            }
+            $output = @($pipeline.Invoke())
+            $resultObject = @($output | Where-Object { $null -ne $_.PSObject.Properties['DMEL_STATUS'] } | Select-Object -Last 1)
+            if ($resultObject.Count -gt 0) {
+                foreach ($property in $resultObject[0].PSObject.Properties) {
+                    if ([string]$property.Name -match '^DMEL_[A-Z]+$') {
+                        $pairs[[string]$property.Name] = [string]$property.Value
+                    }
+                }
+            }
+            if ($pipeline.HadErrors) {
+                $output += @($pipeline.Streams.Error | ForEach-Object { [string]$_ })
+            }
+            $exitCode = if ($pipeline.HadErrors) { 1 } else { 0 }
+        }
+        finally {
+            $pipeline.Dispose()
+        }
+    }
+    else {
+        Write-Log ("{0} uses the legacy external-process compatibility path." -f $Operation) 'WARN'
+        $output = @(& (Get-InstallRuntimePowerShellPath) -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+        $pairs = Convert-OutputToResultPairs -Output $output
+    }
     $status = [string]($pairs['DMEL_STATUS'])
     $message = [string]($pairs['DMEL_MESSAGE'])
     if ([string]::IsNullOrWhiteSpace($status)) {
@@ -892,6 +930,10 @@ function Invoke-HelperScript {
         Message = $message
         SourcePath = [string]($pairs['DMEL_SOURCEPATH'])
         LogPath = [string]($pairs['DMEL_LOGPATH'])
+        Compatibility = [string]($pairs['DMEL_COMPATIBILITY'])
+        RepairCount = [string]($pairs['DMEL_REPAIRCOUNT'])
+        RepairSummary = [string]($pairs['DMEL_REPAIRSUMMARY'])
+        RepairPlanId = [string]($pairs['DMEL_REPAIRPLANID'])
         Output = ($output | Out-String)
     }
 }
@@ -908,18 +950,97 @@ function Assert-HelperOk {
     }
 }
 
+function Copy-CompatibilityResultPairs {
+    param([Parameter(Mandatory = $true)]$Result)
+
+    $repairCount = ([string]$Result.RepairCount).Trim()
+    if ([string]::IsNullOrWhiteSpace($repairCount)) {
+        $repairCount = '0'
+    }
+    Set-ResultPairValue -Key 'DMEL_COMPATIBILITY' -Value ([string]$Result.Compatibility).Trim().ToUpperInvariant()
+    Set-ResultPairValue -Key 'DMEL_REPAIRCOUNT' -Value $repairCount
+    Set-ResultPairValue -Key 'DMEL_REPAIRSUMMARY' -Value ([string]$Result.RepairSummary)
+    Set-ResultPairValue -Key 'DMEL_REPAIRPLANID' -Value ([string]$Result.RepairPlanId)
+}
+
+function Get-ValidatedCompatibilityStatus {
+    param([Parameter(Mandatory = $true)]$Result)
+
+    $compatibility = ([string]$Result.Compatibility).Trim().ToUpperInvariant()
+    if ([string]::IsNullOrWhiteSpace($compatibility)) {
+        if ($Result.ExitCode -eq 0 -and [string]::Equals([string]$Result.Status, 'OK', [System.StringComparison]::OrdinalIgnoreCase)) {
+            return 'OK'
+        }
+        return 'FATAL'
+    }
+    if ($compatibility -notin @('OK', 'REPAIRABLE', 'FATAL')) {
+        throw ("Legacy import validation emitted unsupported DMEL_COMPATIBILITY '{0}'." -f $compatibility)
+    }
+    return $compatibility
+}
+
+function Set-CompatibilityPreflightResult {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('WARN', 'ERROR')][string]$Status,
+        [Parameter(Mandatory = $true)][string]$CurrentRoot,
+        [Parameter(Mandatory = $true)]$ValidationResult
+    )
+
+    $validationDetail = Convert-ResultPairValueToSingleLine -Value ([string]$ValidationResult.Message)
+    if ([string]::IsNullOrWhiteSpace($validationDetail)) {
+        $validationDetail = Convert-ResultPairValueToSingleLine -Value ([string]$ValidationResult.RepairSummary)
+    }
+    if ([string]::IsNullOrWhiteSpace($validationDetail)) {
+        $validationDetail = T 'Helper_VersionManager_Update_HelperLogHint' 'See the helper log for details.'
+    }
+    elseif ($validationDetail.Length -gt 480) {
+        $validationDetail = $validationDetail.Substring(0, 480).Trim() + '...'
+    }
+
+    Set-ResultPairValue -Key 'DMEL_STATUS' -Value $Status
+    Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $CurrentRoot
+    Set-ResultPairValue -Key 'DMEL_BACKUPPATH' -Value ''
+    if ([string]::Equals($Status, 'WARN', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $repairCount = Convert-ResultPairValueToSingleLine -Value ([string]$ValidationResult.RepairCount)
+        $repairSummary = Convert-ResultPairValueToSingleLine -Value ([string]$ValidationResult.RepairSummary)
+        if ([string]::IsNullOrWhiteSpace($repairSummary)) {
+            $repairSummary = $validationDetail
+        }
+        elseif ($repairSummary.Length -gt 480) {
+            $repairSummary = $repairSummary.Substring(0, 480).Trim() + '...'
+        }
+        Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value (TF 'Helper_VersionManager_Update_CompatibilityRepairWarning' @($repairCount, $repairSummary) 'Some item image references cannot be imported. Only those image fields will be cleared; all other current data will be imported. Repair count: %1. %2')
+    }
+    else {
+        Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value (TF 'Helper_VersionManager_Update_CompatibilityFatal' @($validationDetail) 'Current data cannot be imported safely, so installation was not started. %1')
+    }
+}
+
 function Invoke-ImportValidation {
     param(
         [Parameter(Mandatory = $true)][string]$ImportScript,
         [Parameter(Mandatory = $true)][string]$TargetRoot,
-        [Parameter(Mandatory = $true)][string]$SourceRoot
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$PackageIdentity
     )
 
     if (-not (Test-ScriptSupportsParameter -ScriptPath $ImportScript -ParameterName 'ValidateOnly')) {
         throw 'ImportFromOldVersion.ps1 does not expose the required -ValidateOnly validation contract.'
     }
 
+    $supportsRepair = Test-ScriptSupportsParameter -ScriptPath $ImportScript -ParameterName 'AllowItemImageRepair'
+    $supportsPackageIdentity = Test-ScriptSupportsParameter -ScriptPath $ImportScript -ParameterName 'PackageIdentity'
+    if ($supportsRepair -xor $supportsPackageIdentity) {
+        throw 'ImportFromOldVersion.ps1 exposes an incomplete compatibility-repair validation contract.'
+    }
+
     $arguments = @('-TargetRoot', $TargetRoot, '-SourceRoot', $SourceRoot, '-NonInteractive', '-EmitResultPairs', '-ValidateOnly')
+    if ($supportsRepair) {
+        $arguments += @('-AllowItemImageRepair', '-PackageIdentity', $PackageIdentity)
+    }
+    else {
+        Write-Log 'Package import helper uses the legacy strict compatibility validation contract.' 'WARN'
+    }
     return (Invoke-HelperScript -ScriptPath $ImportScript -Arguments $arguments -Operation 'legacy import validation')
 }
 
@@ -927,13 +1048,54 @@ function Invoke-RealImport {
     param(
         [Parameter(Mandatory = $true)][string]$ImportScript,
         [Parameter(Mandatory = $true)][string]$TargetRoot,
-        [Parameter(Mandatory = $true)][string]$SourceRoot
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$PackageIdentity,
+        [string]$RepairPlanId = '',
+        [string]$ImportProgressOwnerRoot = '',
+        [string]$ImportProgressToken = ''
     )
 
     $arguments = @('-TargetRoot', $TargetRoot, '-SourceRoot', $SourceRoot, '-NonInteractive', '-EmitResultPairs')
+    $supportsPackageIdentity = Test-ScriptSupportsParameter -ScriptPath $ImportScript -ParameterName 'PackageIdentity'
+    if ($supportsPackageIdentity) {
+        $arguments += @('-PackageIdentity', $PackageIdentity)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RepairPlanId)) {
+        if (-not (Test-ScriptSupportsParameter -ScriptPath $ImportScript -ParameterName 'AllowItemImageRepair') -or
+            -not (Test-ScriptSupportsParameter -ScriptPath $ImportScript -ParameterName 'ExpectedRepairPlanId') -or
+            -not $supportsPackageIdentity) {
+            throw 'ImportFromOldVersion.ps1 does not expose the required item-image repair execution contract.'
+        }
+        $arguments += @('-AllowItemImageRepair', '-ExpectedRepairPlanId', $RepairPlanId)
+    }
+    $progressRequested = (-not [string]::IsNullOrWhiteSpace($ImportProgressOwnerRoot) -or
+        -not [string]::IsNullOrWhiteSpace($ImportProgressToken))
+    if ($progressRequested -and ([string]::IsNullOrWhiteSpace($ImportProgressOwnerRoot) -or
+        [string]::IsNullOrWhiteSpace($ImportProgressToken))) {
+        throw 'ProgressOwnerRoot and ProgressToken must be supplied together.'
+    }
+    if ($progressRequested) {
+        $supportsProgressOwner = Test-ScriptSupportsParameter -ScriptPath $ImportScript -ParameterName 'ProgressOwnerRoot'
+        $supportsProgressToken = Test-ScriptSupportsParameter -ScriptPath $ImportScript -ParameterName 'ProgressToken'
+        if ($supportsProgressOwner -and $supportsProgressToken) {
+            $arguments += @('-ProgressOwnerRoot', $ImportProgressOwnerRoot, '-ProgressToken', $ImportProgressToken)
+        }
+        elseif ($supportsProgressOwner -xor $supportsProgressToken) {
+            Write-Log 'Installed import helper exposes an incomplete progress contract; using the legacy non-determinate UI.' 'WARN'
+        }
+        else {
+            Write-Log 'Installed import helper does not expose the optional progress contract; using the legacy non-determinate UI.' 'WARN'
+        }
+    }
     $script:ImportStarted = $true
     $result = Invoke-HelperScript -ScriptPath $ImportScript -Arguments $arguments -Operation 'legacy import'
     Assert-HelperOk -Result $result -Operation 'Legacy import'
+    if (-not [string]::IsNullOrWhiteSpace($RepairPlanId)) {
+        if (-not [string]::Equals([string]$result.Compatibility, 'REPAIRABLE', [System.StringComparison]::OrdinalIgnoreCase) -or
+            -not [string]::Equals(([string]$result.RepairPlanId).Trim(), $RepairPlanId.Trim(), [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Legacy import completed without confirming the approved item-image repair plan.'
+        }
+    }
 }
 
 function Resolve-SwitchScript {
@@ -972,6 +1134,33 @@ function Invoke-VersionSwitch {
     Assert-HelperOk -Result $result -Operation 'Active version switch'
     $script:SwitchSucceeded = $true
     return $result
+}
+
+function Publish-LatestUpdateSwitchingState {
+    param([Parameter(Mandatory = $true)][string]$CurrentRoot)
+
+    if ([string]::IsNullOrWhiteSpace($LatestUpdateLaunchToken)) {
+        return
+    }
+    $commonPath = Join-Path $PSScriptRoot 'LatestUpdate.Common.ps1'
+    if (-not (Test-Path -LiteralPath $commonPath -PathType Leaf)) {
+        throw 'LatestUpdate.Common.ps1 is required for the latest-update progress handoff.'
+    }
+    . $commonPath
+    $resolvedRoot = Resolve-LatestUpdateTargetRoot -Path $CurrentRoot
+    [void](Assert-LatestUpdateToken -LaunchToken $LatestUpdateLaunchToken)
+    $rawIntent = Read-LatestUpdateJson -Path (Get-LatestUpdateIntentPath -Root $resolvedRoot)
+    if ($null -eq $rawIntent) {
+        throw 'Latest update intent was not found before active version switch.'
+    }
+    $intent = Assert-LatestUpdateIntent -Intent $rawIntent -ExpectedLaunchToken $LatestUpdateLaunchToken
+    [void](Save-LatestUpdateState `
+        -Root $resolvedRoot `
+        -Intent $intent `
+        -Status 'switching' `
+        -SessionPid $PID `
+        -Message 'Switching to the newly installed version.' `
+        -LogPath $script:LogPath)
 }
 
 function Assert-SwitchResultForSelectedRoot {
@@ -1028,6 +1217,7 @@ function Invoke-SelectedRootSwitch {
     Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $switchSourcePath
     Set-ResultPairValue -Key 'DMEL_BACKUPPATH' -Value ''
     Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value ([string]$switchResult.Message)
+    Set-ResultPairValue -Key 'DMEL_COMPATIBILITY' -Value 'OK'
 }
 
 function Invoke-PackageInstall {
@@ -1037,7 +1227,12 @@ function Invoke-PackageInstall {
     )
 
     $resolvedPackagePath = Resolve-ReleasePackagePath -CurrentRoot $ResolvedCurrentRoot
+    $packageIdentity = Get-ReleasePackageIdentity -Path $resolvedPackagePath
+    if ($packageIdentity -notmatch '^[0-9a-f]{64}$') {
+        throw 'Could not compute a valid SHA-256 identity for the release package.'
+    }
     $extractRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("DMeloperReleaseExtract_{0}_{1}" -f $script:LogStamp, ([guid]::NewGuid().ToString('N')))
+    $script:ExtractRoot = $extractRoot
     Ensure-Directory -Path $extractRoot
     Expand-Archive -LiteralPath $resolvedPackagePath -DestinationPath $extractRoot -Force
     $packageRoot = Resolve-PackageRoot -ExtractRoot $extractRoot
@@ -1064,6 +1259,7 @@ function Invoke-PackageInstall {
 
     Write-Log ("CurrentTargetRoot: {0}" -f $ResolvedCurrentRoot)
     Write-Log ("PackagePath: {0}" -f $resolvedPackagePath)
+    Write-Log ("PackageIdentity: {0}" -f $packageIdentity)
     Write-Log ("PackageRoot: {0}" -f $packageRoot)
     Write-Log ("PackageVersion: {0}" -f [string]$packageMetadata.Version)
     Write-Log ("PackageReleaseVariant: {0}" -f $packageReleaseVariant)
@@ -1075,25 +1271,64 @@ function Invoke-PackageInstall {
         throw 'Package is missing Utilities\tools\ImportFromOldVersion.ps1.'
     }
 
-    $validationResult = Invoke-ImportValidation -ImportScript $packageImportScript -TargetRoot $packageRoot -SourceRoot $ResolvedCurrentRoot
-    $validationOk = ($validationResult.ExitCode -eq 0 -and [string]::Equals([string]$validationResult.Status, 'OK', [System.StringComparison]::OrdinalIgnoreCase))
-    if (-not $validationOk -and -not $AllowCompatibilityWarning) {
-        $validationDetail = Convert-ResultPairValueToSingleLine -Value ([string]$validationResult.Message)
-        if ([string]::IsNullOrWhiteSpace($validationDetail)) {
-            $validationDetail = T 'Helper_VersionManager_Update_HelperLogHint' 'See the helper log for details.'
-        }
-        elseif ($validationDetail.Length -gt 240) {
-            $validationDetail = $validationDetail.Substring(0, 240).Trim() + '...'
-        }
-        Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'WARN'
-        Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $ResolvedCurrentRoot
-        Set-ResultPairValue -Key 'DMEL_BACKUPPATH' -Value ''
-        Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value (TF 'Helper_VersionManager_Update_CompatibilityValidationFailed' @($validationDetail) 'Release compatibility validation failed; install was not started. %1')
-        Write-Log ("Validation warning detail: {0}" -f (Convert-ResultPairValueToSingleLine -Value ([string]$validationResult.Message))) 'WARN'
+    $validationResult = Invoke-ImportValidation -ImportScript $packageImportScript -TargetRoot $packageRoot -SourceRoot $ResolvedCurrentRoot -PackageIdentity $packageIdentity
+    $compatibility = Get-ValidatedCompatibilityStatus -Result $validationResult
+    $validationResult.Compatibility = $compatibility
+    Copy-CompatibilityResultPairs -Result $validationResult
+
+    $validationSucceeded = ($validationResult.ExitCode -eq 0 -and [string]::Equals([string]$validationResult.Status, 'OK', [System.StringComparison]::OrdinalIgnoreCase))
+    if (-not $validationSucceeded -or [string]::Equals($compatibility, 'FATAL', [System.StringComparison]::OrdinalIgnoreCase)) {
+        Set-ResultPairValue -Key 'DMEL_COMPATIBILITY' -Value 'FATAL'
+        Set-ResultPairValue -Key 'DMEL_REPAIRCOUNT' -Value '0'
+        Set-ResultPairValue -Key 'DMEL_REPAIRSUMMARY' -Value ''
+        Set-ResultPairValue -Key 'DMEL_REPAIRPLANID' -Value ''
+        Set-CompatibilityPreflightResult -Status 'ERROR' -CurrentRoot $ResolvedCurrentRoot -ValidationResult $validationResult
+        Write-Log ("Fatal compatibility validation detail: {0}" -f (Convert-ResultPairValueToSingleLine -Value ([string]$validationResult.Message))) 'ERROR'
         return
     }
-    elseif (-not $validationOk) {
-        Write-Log ("Compatibility warning allowed: {0}" -f (Convert-ResultPairValueToSingleLine -Value ([string]$validationResult.Message))) 'WARN'
+
+    $repairPlanId = ''
+    if ([string]::Equals($compatibility, 'REPAIRABLE', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $repairPlanId = ([string]$validationResult.RepairPlanId).Trim()
+        $repairCountValue = 0
+        if ($repairPlanId -notmatch '^[0-9A-Fa-f]{64}$' -or
+            -not [int]::TryParse(([string]$validationResult.RepairCount), [ref]$repairCountValue) -or
+            $repairCountValue -le 0) {
+            Set-ResultPairValue -Key 'DMEL_COMPATIBILITY' -Value 'FATAL'
+            Set-ResultPairValue -Key 'DMEL_REPAIRCOUNT' -Value '0'
+            Set-ResultPairValue -Key 'DMEL_REPAIRSUMMARY' -Value ''
+            Set-ResultPairValue -Key 'DMEL_REPAIRPLANID' -Value ''
+            Set-CompatibilityPreflightResult -Status 'ERROR' -CurrentRoot $ResolvedCurrentRoot -ValidationResult $validationResult
+            Write-Log 'Repairable compatibility validation did not provide a valid repair count and SHA-256 plan id.' 'ERROR'
+            return
+        }
+
+        $expectedPlanMatches = (-not [string]::IsNullOrWhiteSpace($ExpectedRepairPlanId) -and
+            [string]::Equals($repairPlanId, $ExpectedRepairPlanId.Trim(), [System.StringComparison]::OrdinalIgnoreCase))
+        if (-not $AllowCompatibilityWarning -or -not $expectedPlanMatches) {
+            Set-CompatibilityPreflightResult -Status 'WARN' -CurrentRoot $ResolvedCurrentRoot -ValidationResult $validationResult
+            if ($AllowCompatibilityWarning -and -not $expectedPlanMatches) {
+                Write-Log 'Compatibility repair approval was rejected because the expected repair plan did not match the current preflight.' 'WARN'
+            }
+            else {
+                Write-Log ("Repairable compatibility validation requires approval: {0}" -f (Convert-ResultPairValueToSingleLine -Value ([string]$validationResult.RepairSummary))) 'WARN'
+            }
+            return
+        }
+
+        Write-Log ("Approved compatibility repair plan: {0} count={1} summary={2}" -f $repairPlanId, $repairCountValue, (Convert-ResultPairValueToSingleLine -Value ([string]$validationResult.RepairSummary))) 'WARN'
+    }
+    elseif ($AllowCompatibilityWarning -and -not [string]::IsNullOrWhiteSpace($ExpectedRepairPlanId)) {
+        Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'ERROR'
+        Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $ResolvedCurrentRoot
+        Set-ResultPairValue -Key 'DMEL_BACKUPPATH' -Value ''
+        Set-ResultPairValue -Key 'DMEL_COMPATIBILITY' -Value 'FATAL'
+        Set-ResultPairValue -Key 'DMEL_REPAIRCOUNT' -Value '0'
+        Set-ResultPairValue -Key 'DMEL_REPAIRSUMMARY' -Value ''
+        Set-ResultPairValue -Key 'DMEL_REPAIRPLANID' -Value ''
+        Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value (T 'Helper_VersionManager_Update_CompatibilityRepairChanged' 'Current data or package changed after approval. Installation was not started. Review compatibility and approve again.')
+        Write-Log 'Compatibility repair approval became stale because the current preflight no longer requires that repair.' 'ERROR'
+        return
     }
 
     try {
@@ -1102,17 +1337,13 @@ function Invoke-PackageInstall {
         $script:DestinationCreated = $true
         Use-CanonicalHelperLogPath -Root $destinationRoot -Prefix 'InstallVersionRelease'
 
-        if ($validationOk) {
-            $installedImportScript = Get-BlockHudRuntimeToolPath -Root $destinationRoot -RelativeToolPath 'ImportFromOldVersion.ps1'
-            if (-not (Test-Path -LiteralPath $installedImportScript -PathType Leaf)) {
-                throw (T 'Helper_VersionManager_Update_InstalledImportHelperMissing' 'The installed root is missing Utilities\tools\ImportFromOldVersion.ps1.')
-            }
-            Invoke-RealImport -ImportScript $installedImportScript -TargetRoot $destinationRoot -SourceRoot $ResolvedCurrentRoot
+        $installedImportScript = Get-BlockHudRuntimeToolPath -Root $destinationRoot -RelativeToolPath 'ImportFromOldVersion.ps1'
+        if (-not (Test-Path -LiteralPath $installedImportScript -PathType Leaf)) {
+            throw (T 'Helper_VersionManager_Update_InstalledImportHelperMissing' 'The installed root is missing Utilities\tools\ImportFromOldVersion.ps1.')
         }
-        else {
-            Set-ResultPairValue -Key 'DMEL_BACKUPPATH' -Value ''
-        }
+        Invoke-RealImport -ImportScript $installedImportScript -TargetRoot $destinationRoot -SourceRoot $ResolvedCurrentRoot -PackageIdentity $packageIdentity -RepairPlanId $repairPlanId -ImportProgressOwnerRoot $ProgressOwnerRoot -ImportProgressToken $ProgressToken
 
+        Publish-LatestUpdateSwitchingState -CurrentRoot $ResolvedCurrentRoot
         Invoke-InstalledRootRefresh -Root $destinationRoot
         Invoke-VersionSwitch -SelectedRoot $destinationRoot -CurrentRoot $ResolvedCurrentRoot | Out-Null
         Complete-DestinationReplacement -DestinationRoot $destinationRoot
@@ -1125,12 +1356,11 @@ function Invoke-PackageInstall {
 
     Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'OK'
     Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $destinationRoot
-    if (-not $validationOk) {
-        Set-ResultPairValue -Key 'DMEL_BACKUPPATH' -Value ''
-        Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value (T 'Helper_VersionManager_Update_InstalledWithoutImport' 'Installed the selected release without importing current data, then switched active configs.')
+    Set-ResultPairValue -Key 'DMEL_BACKUPPATH' -Value ''
+    if ([string]::Equals($compatibility, 'REPAIRABLE', [System.StringComparison]::OrdinalIgnoreCase)) {
+        Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value (TF 'Helper_VersionManager_Update_InstalledWithRepair' @([string]$validationResult.RepairCount) 'Installed the selected release after clearing only the %1 approved unusable image field(s), imported all other current data, and switched active configs.')
     }
     else {
-        Set-ResultPairValue -Key 'DMEL_BACKUPPATH' -Value ''
         Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value (T 'Helper_VersionManager_Update_InstalledWithImport' 'Installed the selected release, imported current data, and switched active configs.')
     }
 }
@@ -1143,6 +1373,28 @@ function Invoke-InstallVersionRelease {
     $script:ResolvedCurrentRoot = $resolvedCurrentRoot
     Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $resolvedCurrentRoot
     Use-CanonicalHelperLogPath -Root $resolvedCurrentRoot -Prefix 'InstallVersionRelease'
+
+    $progressRequested = (-not [string]::IsNullOrWhiteSpace($ProgressOwnerRoot) -or
+        -not [string]::IsNullOrWhiteSpace($ProgressToken))
+    if ($progressRequested -and ([string]::IsNullOrWhiteSpace($ProgressOwnerRoot) -or
+        [string]::IsNullOrWhiteSpace($ProgressToken))) {
+        throw 'ProgressOwnerRoot and ProgressToken must be supplied together.'
+    }
+    if ($progressRequested) {
+        if ($ProgressToken -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+            throw 'ProgressToken contains unsupported characters or exceeds the supported length.'
+        }
+        $resolvedProgressOwner = Resolve-FullPath -Path $ProgressOwnerRoot
+        if (-not [string]::Equals($resolvedProgressOwner, $resolvedCurrentRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw 'ProgressOwnerRoot must resolve exactly to CurrentTargetRoot.'
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $resolvedProgressOwner '@Resources\Customs\Data') -PathType Container)) {
+            throw 'ProgressOwnerRoot does not contain the required @Resources\Customs\Data directory.'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($SelectedTargetRoot)) {
+            throw 'ProgressOwnerRoot and ProgressToken are supported only for package installation.'
+        }
+    }
 
     $skinsRoot = Get-RainmeterSkinsRoot -CurrentRoot $resolvedCurrentRoot
     if (-not (Test-Path -LiteralPath $skinsRoot -PathType Container)) {
@@ -1168,6 +1420,10 @@ catch {
     }
 
     Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'ERROR'
+    if ([string]::IsNullOrWhiteSpace([string]$script:ResultPairs['DMEL_COMPATIBILITY']) -or
+        [string]::Equals([string]$script:ResultPairs['DMEL_COMPATIBILITY'], 'OK', [System.StringComparison]::OrdinalIgnoreCase)) {
+        Set-ResultPairValue -Key 'DMEL_COMPATIBILITY' -Value 'FATAL'
+    }
     if (-not [string]::IsNullOrWhiteSpace($script:ResolvedCurrentRoot)) {
         Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $script:ResolvedCurrentRoot
         if (-not $script:SwitchSucceeded) {
@@ -1187,6 +1443,12 @@ catch {
     }
 }
 finally {
+    Remove-ExtractRootBestEffort
     Save-Log
-    Emit-ResultPairs
+    if ($PassThruResultObject) {
+        Write-Output ([PSCustomObject]$script:ResultPairs)
+    }
+    else {
+        Emit-ResultPairs
+    }
 }

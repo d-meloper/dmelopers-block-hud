@@ -27,132 +27,7 @@ $script:LoadImageImportHelpers = {
     $script:ImageImportHelpersLoaded = $true
 }.GetNewClosure()
 $script:LoadAppPickerIconSupport = {
-    Add-Type -AssemblyName WindowsBase
-    Add-Type -AssemblyName PresentationCore
-    Add-Type -AssemblyName System.Xaml
-
-    if (-not ('ShellAppIconProvider' -as [type])) {
-        Add-Type -TypeDefinition @"
-using System;
-using System.Drawing;
-using System.IO;
-using System.Runtime.InteropServices;
-using System.Windows;
-using System.Windows.Interop;
-using System.Windows.Media.Imaging;
-
-[ComImport]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-[Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE")]
-public interface IShellItem
-{
-}
-
-[ComImport]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-[Guid("BCC18B79-BA16-442F-80C4-8A59C30C463B")]
-public interface IShellItemImageFactory
-{
-    void GetImage(SIZE size, SIIGBF flags, out IntPtr phbm);
-}
-
-[StructLayout(LayoutKind.Sequential)]
-public struct SIZE
-{
-    public int cx;
-    public int cy;
-
-    public SIZE(int x, int y)
-    {
-        cx = x;
-        cy = y;
-    }
-}
-
-[Flags]
-public enum SIIGBF
-{
-    ResizeToFit = 0x0,
-    BiggerSizeOk = 0x1,
-    MemoryOnly = 0x2,
-    IconOnly = 0x4,
-    ThumbnailOnly = 0x8,
-    InCacheOnly = 0x10,
-    CropToSquare = 0x20,
-    WideGamut = 0x40,
-    IconBackground = 0x80,
-    ScaleUp = 0x100
-}
-
-public static class ShellAppIconProvider
-{
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
-    private static extern void SHCreateItemFromParsingName(
-        string path,
-        IntPtr pbc,
-        [MarshalAs(UnmanagedType.LPStruct)] Guid riid,
-        out IShellItem shellItem);
-
-    [DllImport("gdi32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool DeleteObject(IntPtr hObject);
-
-    private static Bitmap ConvertHBitmapToBitmapPreserveAlpha(IntPtr hBitmap)
-    {
-        var source = Imaging.CreateBitmapSourceFromHBitmap(
-            hBitmap,
-            IntPtr.Zero,
-            Int32Rect.Empty,
-            BitmapSizeOptions.FromEmptyOptions());
-
-        var encoder = new PngBitmapEncoder();
-        encoder.Frames.Add(BitmapFrame.Create(source));
-
-        using (var stream = new MemoryStream())
-        {
-            encoder.Save(stream);
-            stream.Position = 0;
-            using (var bitmap = new Bitmap(stream))
-            {
-                return new Bitmap(bitmap);
-            }
-        }
-    }
-
-    public static Bitmap GetBitmap(string path, int size)
-    {
-        IShellItem shellItem = null;
-        IntPtr hBitmap = IntPtr.Zero;
-
-        try
-        {
-            SHCreateItemFromParsingName(path, IntPtr.Zero, typeof(IShellItem).GUID, out shellItem);
-            var factory = (IShellItemImageFactory)shellItem;
-            factory.GetImage(new SIZE(size, size), SIIGBF.IconOnly | SIIGBF.BiggerSizeOk, out hBitmap);
-            if (hBitmap == IntPtr.Zero)
-            {
-                throw new InvalidOperationException("Shell icon extraction returned no bitmap.");
-            }
-
-            return ConvertHBitmapToBitmapPreserveAlpha(hBitmap);
-        }
-        finally
-        {
-            if (hBitmap != IntPtr.Zero)
-            {
-                DeleteObject(hBitmap);
-            }
-
-            if (shellItem != null && Marshal.IsComObject(shellItem))
-            {
-                Marshal.ReleaseComObject(shellItem);
-            }
-        }
-    }
-}
-"@ -ReferencedAssemblies 'System.Drawing', 'WindowsBase', 'PresentationCore', 'System.Xaml'
-    }
-
+    Add-Type -AssemblyName System.Drawing
     $script:AppPickerIconSupportLoaded = $true
 }.GetNewClosure()
 
@@ -160,6 +35,7 @@ $script:ModuleRoot = Join-Path $PSScriptRoot 'PickPathFlow'
 . (Join-Path $script:ModuleRoot 'CoreFavoritesAndDebug.ps1')
 . (Join-Path $script:ModuleRoot 'FavoritePickerUi.ps1')
 . (Join-Path $script:ModuleRoot 'AppPickerUi.ps1')
+
 
 
 
@@ -288,6 +164,9 @@ try {
     $pickerForm.AcceptButton = $buttonApp
     $pickerForm.CancelButton = $buttonClose
     $pickerForm.Add_Shown({
+        $pickerForm.TopMost = $true
+        $pickerForm.BringToFront()
+        $pickerForm.Activate()
         $buttonApp.Focus()
     }.GetNewClosure())
 

@@ -160,7 +160,7 @@ function Get-AllPublishedReleases {
 function Get-SemanticVersionKey {
     param([Parameter(Mandatory = $true)][string]$TagName)
 
-    if ($TagName -notmatch '^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+.*)?$') {
+    if ($TagName -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
         return $null
     }
     return [PSCustomObject]@{

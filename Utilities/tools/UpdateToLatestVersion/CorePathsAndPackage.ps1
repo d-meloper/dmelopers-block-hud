@@ -301,6 +301,137 @@ function ConvertTo-SkinVersion {
     }
 }
 
+function ConvertTo-StableSkinVersionTag {
+    param(
+        [AllowNull()][string]$VersionText,
+        [Parameter(Mandatory = $true)][string]$Context
+    )
+
+    $value = ([string]$VersionText).Trim()
+    if ($value -notmatch '^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+        throw "$Context must be a stable semantic version with exactly three numeric components: '$VersionText'."
+    }
+
+    return ('v{0}.{1}.{2}' -f $matches[1], $matches[2], $matches[3])
+}
+
+function Assert-ZipPackageSafeToExtract {
+    param(
+        [Parameter(Mandatory = $true)][string]$PackagePath,
+        [Parameter(Mandatory = $true)][string]$ExtractRoot
+    )
+
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+
+    $resolvedExtractRoot = Resolve-FullPath -Path $ExtractRoot -AllowMissing
+    $extractPrefix = $resolvedExtractRoot.TrimEnd('\', '/') + '\'
+    $seenEntries = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($PackagePath)
+    try {
+        foreach ($entry in $archive.Entries) {
+            $entryName = ([string]$entry.FullName).Replace('/', '\')
+            if ([string]::IsNullOrWhiteSpace($entryName)) {
+                throw 'ZIP package contains an empty entry name.'
+            }
+            if ([System.IO.Path]::IsPathRooted($entryName) -or $entryName.StartsWith('\') -or $entryName.Contains(':')) {
+                throw "ZIP package contains a rooted entry: $entryName"
+            }
+
+            $segments = @($entryName.Split([char[]]@('\'), [System.StringSplitOptions]::RemoveEmptyEntries))
+            if ($segments.Count -eq 0 -or @($segments | Where-Object { $_ -eq '.' -or $_ -eq '..' }).Count -gt 0) {
+                throw "ZIP package contains an unsafe path segment: $entryName"
+            }
+
+            $entryKey = $entryName.TrimEnd('\')
+            if (-not $seenEntries.Add($entryKey)) {
+                throw "ZIP package contains a duplicate case-insensitive entry: $entryName"
+            }
+
+            $destination = [System.IO.Path]::GetFullPath((Join-Path $resolvedExtractRoot $entryName))
+            if (-not $destination.StartsWith($extractPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "ZIP package entry escapes the extraction root: $entryName"
+            }
+
+            $unixFileType = (($entry.ExternalAttributes -shr 16) -band 0xF000)
+            if ($unixFileType -eq 0xA000) {
+                throw "ZIP package contains a symbolic-link entry: $entryName"
+            }
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
+}
+
+function Assert-NoReparsePoints {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Context
+    )
+
+    $rootItem = Get-Item -LiteralPath $Root -Force
+    $items = @($rootItem) + @(Get-ChildItem -LiteralPath $Root -Recurse -Force -ErrorAction Stop)
+    foreach ($item in $items) {
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Context contains a reparse point: $($item.FullName)"
+        }
+    }
+}
+
+function Remove-SafeUpdateTempRootBestEffort {
+    param(
+        [AllowNull()][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Reason
+    )
+
+    if ([string]::IsNullOrWhiteSpace([string]$Root) -or -not (Test-Path -LiteralPath $Root)) {
+        return
+    }
+
+    try {
+        $resolvedRoot = Resolve-FullPath -Path $Root
+        $tempRoot = Resolve-FullPath -Path ([System.IO.Path]::GetTempPath())
+        if (-not (Test-PathWithinRoot -Root $tempRoot -Path $resolvedRoot) -or
+            [string]::Equals($resolvedRoot, $tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to clean a non-TEMP update path: $resolvedRoot"
+        }
+        Remove-Item -LiteralPath $resolvedRoot -Recurse -Force
+        Write-Log ("Cleaned temporary update root after {0}: {1}" -f $Reason, $resolvedRoot)
+    }
+    catch {
+        Write-Log ("Failed to clean temporary update root after {0}: {1} ({2})" -f $Reason, [string]$Root, $_.Exception.Message) 'WARN'
+    }
+}
+
+function Remove-UpdateExtractRootBestEffort {
+    Remove-SafeUpdateTempRootBestEffort -Root $script:ExtractRoot -Reason 'package extraction'
+    $script:ExtractRoot = ''
+}
+
+function Remove-UpdateStageParentBestEffort {
+    if ($script:StageRootCreated -and
+        -not [string]::IsNullOrWhiteSpace($script:ResolvedStageRoot) -and
+        -not (Test-Path -LiteralPath $script:ResolvedStageRoot)) {
+        $script:StageRootCreated = $false
+    }
+    if (-not $script:StageRootCreated) {
+        Remove-SafeUpdateTempRootBestEffort -Root $script:StageParentRoot -Reason 'staging'
+        $script:StageParentRoot = ''
+    }
+}
+
+function Remove-UpdateFailedRootBestEffort {
+    if ([string]::IsNullOrWhiteSpace($script:FailedLatestRoot)) {
+        return
+    }
+    if ((Test-Path -LiteralPath $script:ResolvedCurrentRoot -PathType Container) -and
+        -not (Test-Path -LiteralPath $script:ReplacementRollbackRoot)) {
+        Remove-SafeUpdateTempRootBestEffort -Root (Split-Path -Parent $script:FailedLatestRoot) -Reason 'restored failed replacement'
+        $script:FailedLatestRoot = ''
+    }
+}
+
 function Test-SkinRoot {
     param([Parameter(Mandatory = $true)][string]$Root)
 

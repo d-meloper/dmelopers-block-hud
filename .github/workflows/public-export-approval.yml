@@ -78,8 +78,6 @@ jobs:
           $metadataOnlyAllowedFiles = @(
             'README.md',
             'README.ko-KR.md',
-            'ANTIVIRUS.md',
-            'ANTIVIRUS.ko-KR.md',
             'LICENSE',
             'THIRD_PARTY_NOTICES.md',
             'THIRD_PARTY_NOTICES.ko-KR.md',
@@ -121,8 +119,6 @@ jobs:
           $requiredFiles = @(
             'README.md',
             'README.ko-KR.md',
-            'ANTIVIRUS.md',
-            'ANTIVIRUS.ko-KR.md',
             'LICENSE',
             'THIRD_PARTY_NOTICES.md',
             'THIRD_PARTY_NOTICES.ko-KR.md',

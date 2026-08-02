@@ -84,6 +84,9 @@ function Sync-VersionManagerUpdateCacheVariables {
 
     Set-VersionManagerSettingsCacheVariables -Root $Root -Values ([ordered]@{
         VersionManagerCacheLatestVersion = [string](Get-VersionManagerObjectPropertyValue -Object $Cache -Name 'LatestVersion' -DefaultValue '')
+        VersionManagerCacheRepositorySlug = [string](Get-VersionManagerObjectPropertyValue -Object $Cache -Name 'RepositorySlug' -DefaultValue '')
+        VersionManagerCacheReleaseVariant = [string](Get-VersionManagerObjectPropertyValue -Object $Cache -Name 'ReleaseVariant' -DefaultValue '')
+        VersionManagerCacheAssetName = [string](Get-VersionManagerObjectPropertyValue -Object $Cache -Name 'AssetName' -DefaultValue '')
         VersionManagerCacheStatus = [string](Get-VersionManagerObjectPropertyValue -Object $Cache -Name 'Status' -DefaultValue '')
         VersionManagerCacheErrorCode = [string](Get-VersionManagerObjectPropertyValue -Object $Cache -Name 'ErrorCode' -DefaultValue '')
         VersionManagerCacheFailureHint = [string](Get-VersionManagerObjectPropertyValue -Object $Cache -Name 'FailureHint' -DefaultValue '')
@@ -209,6 +212,7 @@ function Get-VersionManagerUpdateCacheDefaults {
     return [ordered]@{
         LastCheckedAtUtc = ''
         LatestVersion = ''
+        RepositorySlug = ''
         ReleaseName = ''
         ReleaseUrl = ''
         AssetName = ''

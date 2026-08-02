@@ -95,7 +95,45 @@ function Write-CachedStartAppEntries($Entries) {
     }
 }
 
-function Show-AppDialog([System.Windows.Forms.IWin32Window]$Owner) {
+function Get-StartAppRefreshResult($CachedEntries) {
+    # The cache is only a fast first paint. It cannot be the catalog truth because
+    # Lua cache cleanup is intentionally unavailable on non-ASCII installation roots.
+    $fallbackEntries = @()
+    if ($null -ne $CachedEntries) {
+        $fallbackEntries = @($CachedEntries)
+    }
+
+    try {
+        $liveEntries = @(Get-StartAppEntries)
+        if ($liveEntries.Count -gt 0) {
+            Write-CachedStartAppEntries -Entries $liveEntries
+            return [PSCustomObject]@{
+                Entries = $liveEntries
+                UsedLiveEntries = $true
+                ErrorRecord = $null
+            }
+        }
+
+        return [PSCustomObject]@{
+            Entries = $fallbackEntries
+            UsedLiveEntries = $false
+            ErrorRecord = $null
+        }
+    }
+    catch {
+        return [PSCustomObject]@{
+            Entries = $fallbackEntries
+            UsedLiveEntries = $false
+            ErrorRecord = $_
+        }
+    }
+}
+
+function Show-AppDialog {
+    param(
+        [System.Windows.Forms.IWin32Window]$Owner
+    )
+
     if (-not $script:AppPickerIconSupportLoaded) {
         . $script:LoadAppPickerIconSupport
     }
@@ -149,21 +187,23 @@ function Show-AppDialog([System.Windows.Forms.IWin32Window]$Owner) {
         DisplayedItemsByAppId = @{}
         PendingIconAppIds = New-Object System.Collections.Generic.Queue[string]
     }
+    $cachedEntries = Read-CachedStartAppEntries
     $loadTimer = New-Object System.Windows.Forms.Timer
-    $loadTimer.Interval = 10
+    $loadTimer.Interval = if ($null -ne $cachedEntries) { 100 } else { 10 }
     $searchTimer = New-Object System.Windows.Forms.Timer
     $searchTimer.Interval = 100
     $iconTimer = New-Object System.Windows.Forms.Timer
     $iconTimer.Interval = 15
-    $cachedEntries = Read-CachedStartAppEntries
     $searchBox.Enabled = $false
     $listView.Enabled = $false
     $getStartAppEntriesInvoker = ${function:Get-StartAppEntries}
-    $writeCachedStartAppEntriesInvoker = ${function:Write-CachedStartAppEntries}
+    $getStartAppRefreshResultInvoker = ${function:Get-StartAppRefreshResult}
+    $writeEditorPickerDebugLogInvoker = ${function:Write-EditorPickerDebugLogBestEffort}
     $getAppPickerImageIndexInvoker = ${function:Get-AppPickerImageIndex}
     $dialogState = [pscustomobject]@{
         EnumerationComplete = $false
         EnumerationStarted = $false
+        LiveRefreshStarted = $false
         PendingSearchRefresh = $false
         LastSearchInputAt = [DateTime]::MinValue
         LastAppliedFilterText = $null
@@ -232,11 +272,14 @@ function Show-AppDialog([System.Windows.Forms.IWin32Window]$Owner) {
         }
 
         $populateVisibleList = {
+            param([string]$PreferredAppID = '')
+
             $iconTimer.Stop()
             $iconState.DisplayedItemsByAppId = @{}
             $iconState.PendingIconAppIds = New-Object System.Collections.Generic.Queue[string]
             $listView.BeginUpdate()
             $listView.Items.Clear()
+            $preferredItem = $null
             $filterText = ([string]$searchBox.Text).Trim().ToLowerInvariant()
             foreach ($app in $allApps) {
                 if ([string]::IsNullOrEmpty($filterText) -eq $false) {
@@ -254,12 +297,23 @@ function Show-AppDialog([System.Windows.Forms.IWin32Window]$Owner) {
                 $item = New-Object System.Windows.Forms.ListViewItem(([string]$app.Name), $imageIndex)
                 $item.Tag = $app
                 [void]$listView.Items.Add($item)
+                if (
+                    $null -eq $preferredItem -and
+                    [string]::IsNullOrWhiteSpace($PreferredAppID) -eq $false -and
+                    [string]::Equals($appId, $PreferredAppID, [System.StringComparison]::OrdinalIgnoreCase)
+                ) {
+                    $preferredItem = $item
+                }
                 $iconState.DisplayedItemsByAppId[$appId] = $item
                 if ($imageIndex -eq $fallbackImageIndex) {
                     $iconState.PendingIconAppIds.Enqueue($appId)
                 }
             }
             $listView.EndUpdate()
+            if ($null -ne $preferredItem) {
+                $preferredItem.Selected = $true
+                $preferredItem.Focused = $true
+            }
             & $ensureSelection
             & $updateStatus
             & $updateButtonState
@@ -272,21 +326,43 @@ function Show-AppDialog([System.Windows.Forms.IWin32Window]$Owner) {
         }
 
         $beginLoad = {
-            if ($dialogState.EnumerationStarted) {
+            if ($dialogState.LiveRefreshStarted) {
                 return
             }
-            $dialogState.EnumerationStarted = $true
-            & $updateStatus
-            $allApps.Clear()
-            $loadedApps = & $getStartAppEntriesInvoker
-            & $writeCachedStartAppEntriesInvoker $loadedApps
-            foreach ($app in @($loadedApps)) {
-                $allApps.Add($app)
+            $dialogState.LiveRefreshStarted = $true
+
+            $preferredAppID = ''
+            if ($listView.SelectedItems.Count -gt 0) {
+                $selectedApp = $listView.SelectedItems[0].Tag
+                if ($null -ne $selectedApp) {
+                    $preferredAppID = [string]$selectedApp.AppID
+                }
             }
-            $dialogState.EnumerationComplete = $true
+
+            if (-not $dialogState.CacheHit) {
+                $dialogState.EnumerationStarted = $true
+                & $updateStatus
+            }
+
+            $refreshResult = & $getStartAppRefreshResultInvoker $cachedEntries
+            if ($null -ne $refreshResult.ErrorRecord) {
+                & $writeEditorPickerDebugLogInvoker -Context 'Picker.ProgramCache.Refresh' -ErrorRecord $refreshResult.ErrorRecord -State @{
+                    CacheHit = $dialogState.CacheHit
+                }
+            }
+
+            if ($refreshResult.UsedLiveEntries -or -not $dialogState.CacheHit) {
+                $allApps.Clear()
+                foreach ($app in @($refreshResult.Entries)) {
+                    $allApps.Add($app)
+                }
+                $dialogState.EnumerationStarted = $true
+                $dialogState.EnumerationComplete = $true
+                & $populateVisibleList $preferredAppID
+            }
+
             $searchBox.Enabled = $true
             $listView.Enabled = $true
-            & $populateVisibleList
             $searchTimer.Start()
             $searchBox.Focus()
         }
@@ -370,6 +446,9 @@ function Show-AppDialog([System.Windows.Forms.IWin32Window]$Owner) {
             }
         }.GetNewClosure())
         $form.Add_Shown({
+            $form.TopMost = $true
+            $form.BringToFront()
+            $form.Activate()
             $searchBox.Focus()
             if ($dialogState.CacheHit) {
                 $allApps.Clear()
@@ -382,6 +461,7 @@ function Show-AppDialog([System.Windows.Forms.IWin32Window]$Owner) {
                 $listView.Enabled = $true
                 & $populateVisibleList
                 $searchTimer.Start()
+                $loadTimer.Start()
             }
             else {
                 $loadTimer.Start()
@@ -434,5 +514,6 @@ function Show-AppDialog([System.Windows.Forms.IWin32Window]$Owner) {
         $loadTimer.Dispose()
         $smallImageList.Dispose()
         $form.Dispose()
+        Close-AppPickerIconResolver
     }
 }

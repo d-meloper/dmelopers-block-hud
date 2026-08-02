@@ -1,4 +1,11 @@
-$SupportedExtensions = @('.png', '.jpg', '.jpeg', '.jpe', '.bmp', '.gif', '.tif', '.tiff', '.ico', '.jxr', '.wdp', '.dds')
+$EditorSkinRoot = [System.IO.Directory]::GetParent([System.IO.Directory]::GetParent($PSScriptRoot).FullName).FullName
+$ItemImageAssetPolicyPath = [System.IO.Path]::Combine($EditorSkinRoot, 'Utilities', 'tools', 'ItemImageAsset.Policy.ps1')
+if (-not [System.IO.File]::Exists($ItemImageAssetPolicyPath)) {
+    throw "Shared item-image asset policy was not found: $ItemImageAssetPolicyPath"
+}
+. $ItemImageAssetPolicyPath
+
+$SupportedExtensions = @(Get-BlockHudSupportedItemImageExtensions)
 $ResizableExtensions = @('.png', '.jpg', '.jpeg', '.jpe', '.bmp', '.gif', '.tif', '.tiff')
 $MaxLongEdge = 64
 $ReservedRuntimeAssetName = 'more.png'
@@ -55,8 +62,7 @@ function Get-EditorImageImportAssets {
     return @(
         Get-ChildItem -LiteralPath $ItemImageDirectory |
             Where-Object { -not $_.PSIsContainer } |
-            Where-Object { Test-SupportedImageExtension $_.FullName } |
-            Where-Object { -not [string]::Equals($_.Name, $ReservedRuntimeAssetName, [System.StringComparison]::OrdinalIgnoreCase) } |
+            Where-Object { Test-BlockHudItemImageAssetName -Value $_.Name } |
             Sort-Object Name |
             ForEach-Object { $_.Name }
     )
@@ -147,10 +153,14 @@ function Get-SafeAssetFileName {
 
     $candidate = $safeName + $extension
     if ([string]::Equals($candidate, $ReservedRuntimeAssetName, [System.StringComparison]::OrdinalIgnoreCase)) {
-        return 'item_more.png'
+        $candidate = 'item_more.png'
     }
 
-    return $candidate
+    $policyName = ConvertTo-BlockHudItemImageAssetName -Value $candidate
+    if ([string]::IsNullOrWhiteSpace($policyName)) {
+        $policyName = ConvertTo-BlockHudItemImageAssetName -Value ('item' + $extension)
+    }
+    return $policyName
 }
 
 function Get-UniqueAssetDestinationPath {
@@ -165,7 +175,7 @@ function Get-UniqueAssetDestinationPath {
         $baseName = 'item'
     }
 
-    $candidatePath = [System.IO.Path]::Combine($ItemImageDirectory, $PreferredFileName)
+    $candidatePath = Resolve-BlockHudItemImageAssetPath -ItemImageDirectory $ItemImageDirectory -AssetName $PreferredFileName
     if (-not [System.IO.File]::Exists($candidatePath)) {
         return $candidatePath
     }
@@ -176,13 +186,13 @@ function Get-UniqueAssetDestinationPath {
             continue
         }
 
-        $candidatePath = [System.IO.Path]::Combine($ItemImageDirectory, $candidateName)
+        $candidatePath = Resolve-BlockHudItemImageAssetPath -ItemImageDirectory $ItemImageDirectory -AssetName $candidateName
         if (-not [System.IO.File]::Exists($candidatePath)) {
             return $candidatePath
         }
     }
 
-    return [System.IO.Path]::Combine($ItemImageDirectory, ($baseName + '-' + [System.Guid]::NewGuid().ToString('N') + $extension))
+    return (Resolve-BlockHudItemImageAssetPath -ItemImageDirectory $ItemImageDirectory -AssetName ($baseName + '-' + [System.Guid]::NewGuid().ToString('N') + $extension))
 }
 
 function Write-ItemImageManifest {
@@ -348,7 +358,8 @@ function Import-EditorItemImageFromFileDetailed {
     $itemImageDirectory = [System.IO.Path]::GetFullPath($ItemImageDirectory)
     $selectedDirectory = [System.IO.Path]::GetDirectoryName($selectedPath)
     $safeFileName = Get-SafeAssetFileName -Path $selectedPath -PreferredBaseName $PreferredBaseName
-    if ([string]::Equals($safeFileName, $ReservedRuntimeAssetName, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ([string]::IsNullOrWhiteSpace($safeFileName) -or
+        [string]::Equals($safeFileName, $ReservedRuntimeAssetName, [System.StringComparison]::OrdinalIgnoreCase)) {
         return $null
     }
 
@@ -372,7 +383,7 @@ function Import-EditorItemImageFromFileDetailed {
         }
     }
 
-    $targetPath = [System.IO.Path]::Combine($itemImageDirectory, $safeFileName)
+    $targetPath = Resolve-BlockHudItemImageAssetPath -ItemImageDirectory $itemImageDirectory -AssetName $safeFileName
     $selectedIsTarget = [string]::Equals($selectedPath, [System.IO.Path]::GetFullPath($targetPath), [System.StringComparison]::OrdinalIgnoreCase)
     $needsMaterialize = ((-not $sameDirectory) -or (-not $sameSafeName) -or $requiresResize) -and (-not $selectedIsTarget)
     $finalPath = $selectedPath

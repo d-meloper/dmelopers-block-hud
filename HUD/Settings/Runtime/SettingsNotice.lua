@@ -5,9 +5,10 @@ return function(app)
     local trim = app.trim
     local setVariable = app.setVariable
     local versionUpdateNotice = app.loadSharedLuaModule('VersionUpdateNotice.lua')
+    local versionBadgeFeed = app.loadSharedLuaModule('VersionBadgeFeed.lua')
+    local latestUpdateClientModule = app.loadSharedLuaModule('LatestUpdateClient.lua')
     local configState = app.loadSharedLuaModule('RainmeterConfigState.lua')
 
-    local VERSION_MANAGER_LAUNCH_TIMEOUT_SECONDS = 20
     local VERSION_STATUS_CACHE_SECONDS = 1
     local VERSION_STATUS_VISUAL_METERS = {
         'MeterSettingsNoticeBarBG',
@@ -18,6 +19,13 @@ return function(app)
     }
 
     local VERSION_STATUS = {
+        checking = {
+            iconText = '...',
+            bgColor = '74,109,167,255',
+            textColor = '255,255,255,255',
+            tooltipKey = 'Helper_VersionManager_Summary_UpdateChecking',
+            tooltipFallback = 'Update status: checking latest version...',
+        },
         latest = {
             iconText = '✓',
             bgColor = '64,158,83,255',
@@ -50,6 +58,8 @@ return function(app)
 
     local cachedVersionStatus = nil
     local updateNotice = nil
+    local versionBadgeController = nil
+    local latestUpdateClient = nil
 
     local function localizedVariableOrText(key, fallback)
         local variableRef = methods.localizationVariableRef and methods.localizationVariableRef(key) or ''
@@ -61,6 +71,16 @@ return function(app)
 
     local function nowWallClockSeconds()
         return tonumber(os.time() or 0) or 0
+    end
+
+    local function versionManagerLoadingText()
+        local localizedDetail = methods.localizeFormat(
+            'Settings_Notice_VersionManagerOpeningDetail',
+            { '0' },
+            'Opening the Skin manager.'
+        )
+        local normalizedDetail = tostring(localizedDetail or ''):gsub('\r\n', '\n'):gsub('\r', '\n')
+        return normalizedDetail:match('^(.-)\n\n') or normalizedDetail
     end
 
     local function refreshVersionStatusAndLoadingVisuals()
@@ -89,10 +109,16 @@ return function(app)
     local function readVersionManagerCache()
         return {
             latestVersion = readCacheVariable('VersionManagerCacheLatestVersion'),
+            repositorySlug = readCacheVariable('VersionManagerCacheRepositorySlug'),
+            releaseVariant = readCacheVariable('VersionManagerCacheReleaseVariant'),
+            assetName = readCacheVariable('VersionManagerCacheAssetName'),
             status = readCacheVariable('VersionManagerCacheStatus'),
             errorCode = string.lower(readCacheVariable('VersionManagerCacheErrorCode')),
             failureHint = string.lower(readCacheVariable('VersionManagerCacheFailureHint')),
             lastCheckedAtUtc = readCacheVariable('VersionManagerCacheLastCheckedAtUtc'),
+            lastAttemptAtUtc = readCacheVariable('VersionManagerCacheLastAttemptAtUtc'),
+            lastNoticeAtUtc = readCacheVariable('VersionManagerCacheLastNoticeAtUtc'),
+            lastNoticeVersion = readCacheVariable('VersionManagerCacheLastNoticeVersion'),
         }
     end
 
@@ -120,14 +146,30 @@ return function(app)
         local versionText = methods.appVersionDisplayValue()
         local cache = readVersionManagerCache()
         local comparison = versionUpdateNotice.CompareVersions(currentVersion, cache.latestVersion)
+        local releaseVariant = trim(SKIN:GetVariable('UpdateReleaseVariant', ''))
+        local repository = latestUpdateClientModule.ResolveRepository(
+            SKIN:GetVariable('UpdateGithubOwner', ''),
+            SKIN:GetVariable('UpdateGithubRepo', ''))
+        local cacheProvenanceValid = repository ~= nil
+            and latestUpdateClientModule.CacheProvenanceMatches(
+                cache, releaseVariant, repository.slug)
         local resolvedStatus = VERSION_STATUS.unknown
 
-        if comparison == 0 or comparison == 1 then
+        if state.versionBadgeCheckState == 'checking' then
+            resolvedStatus = VERSION_STATUS.checking
+        elseif state.versionBadgeCheckState == 'network-error'
+            or cache.failureHint == 'offline' or cache.errorCode == 'badge-feed-network'
+            or cache.errorCode == 'update-network-offline' then
+            resolvedStatus = VERSION_STATUS.offline
+        elseif state.versionBadgeCheckState == 'format-error'
+            or cache.status == 'error' or cache.errorCode ~= '' then
+            resolvedStatus = VERSION_STATUS.unknown
+        elseif not cacheProvenanceValid then
+            resolvedStatus = VERSION_STATUS.unknown
+        elseif comparison == 0 or comparison == 1 then
             resolvedStatus = VERSION_STATUS.latest
         elseif comparison == -1 then
             resolvedStatus = VERSION_STATUS.outdated
-        elseif cache.failureHint == 'offline' or cache.errorCode == 'update-network-offline' then
-            resolvedStatus = VERSION_STATUS.offline
         end
 
         cachedVersionStatus = {
@@ -167,6 +209,70 @@ return function(app)
         return updateNotice
     end
 
+    local function latestUpdateHelper()
+        if latestUpdateClient then
+            return latestUpdateClient
+        end
+        latestUpdateClient = latestUpdateClientModule.Create({
+            skin = SKIN,
+            configState = configState,
+            deferredVariable = 'BlockHudSettingsLatestUpdateDeferredStart',
+            deferredMeasure = 'MeasureSettingsLatestUpdateDeferredStart',
+        })
+        return latestUpdateClient
+    end
+
+    local function refreshVersionBadgeState()
+        invalidateVersionStatusCache()
+        if methods.renderVersionStatusState then
+            methods.renderVersionStatusState()
+        end
+        refreshVersionStatusAndLoadingVisuals()
+    end
+
+    local function ensureVersionBadgeController()
+        if versionBadgeController then
+            return versionBadgeController
+        end
+        versionBadgeController = versionBadgeFeed.Create({
+            skin = SKIN,
+            currentVersion = function()
+                return methods.readSettingsMetadataVersion()
+            end,
+            variant = function()
+                return SKIN:GetVariable('UpdateReleaseVariant', '')
+            end,
+            repositorySlug = function()
+                local repository = latestUpdateClientModule.ResolveRepository(
+                    SKIN:GetVariable('UpdateGithubOwner', ''),
+                    SKIN:GetVariable('UpdateGithubRepo', ''))
+                return repository and repository.slug or ''
+            end,
+            cachePath = function()
+                return methods.cachePath()
+            end,
+            onCacheChanged = function()
+                invalidateVersionStatusCache()
+            end,
+            onStateChanged = function(stateName, detail)
+                if stateName == 'checking' then
+                    state.versionBadgeCheckState = 'checking'
+                elseif stateName == 'error' and detail == 'network' then
+                    state.versionBadgeCheckState = 'network-error'
+                elseif stateName == 'error' then
+                    state.versionBadgeCheckState = 'format-error'
+                else
+                    state.versionBadgeCheckState = ''
+                end
+                refreshVersionBadgeState()
+            end,
+            onOutdated = function(currentVersion, latestVersion)
+                return versionNoticeHelper():QueueOutdated(currentVersion, latestVersion)
+            end,
+        })
+        return versionBadgeController
+    end
+
     function methods.isVersionManagerLaunchPending()
         return state.versionManagerLaunchPending == true
     end
@@ -174,13 +280,12 @@ return function(app)
     function methods.beginVersionManagerLaunchPending()
         local token = tostring(os.time() or 0) .. '-' .. tostring(math.floor((os.clock() or 0) * 1000))
         state.versionManagerLaunchPending = true
-        state.versionManagerLaunchStartedAt = nowWallClockSeconds()
         state.versionManagerLaunchToken = token
         state.versionManagerLaunchLastStatus = ''
         state.versionManagerLaunchLastObservedToken = ''
         writeVersionManagerLaunchState(token, 'launching', '')
         if methods.setLoadingVisible then
-            methods.setLoadingVisible(true, methods.localize('Settings_Notice_VersionManagerOpening', 'Opening Skins...\nPlease wait.'))
+            methods.setLoadingVisible(true, versionManagerLoadingText())
         end
         if methods.renderVersionStatusState then
             methods.renderVersionStatusState()
@@ -193,7 +298,6 @@ return function(app)
     function methods.clearVersionManagerLaunchPending(options)
         local token = trim(state.versionManagerLaunchToken or '')
         state.versionManagerLaunchPending = false
-        state.versionManagerLaunchStartedAt = 0
         state.versionManagerLaunchToken = ''
         state.versionManagerLaunchLastStatus = ''
         state.versionManagerLaunchLastObservedToken = ''
@@ -214,13 +318,6 @@ return function(app)
     function methods.RunPendingVersionManagerLaunch()
         if methods.isVersionManagerLaunchPending() ~= true then
             methods.SetUpdateJob('versionManager', false)
-            return
-        end
-
-        local now = nowWallClockSeconds()
-        local startedAt = tonumber(state.versionManagerLaunchStartedAt) or 0
-        if startedAt > 0 and (now - startedAt) >= VERSION_MANAGER_LAUNCH_TIMEOUT_SECONDS then
-            methods.clearVersionManagerLaunchPending()
             return
         end
 
@@ -268,12 +365,15 @@ return function(app)
     end
 
     function methods.TryOpenLatestVersionNotice()
-        local currentVersion = trim(methods.readSettingsMetadataVersion())
-        local cache = readVersionManagerCache()
-        if trim(cache.status):lower() ~= 'ready' then
-            return false
-        end
-        return versionNoticeHelper():QueueOutdated(currentVersion, cache.latestVersion)
+        return ensureVersionBadgeController():StartManual()
+    end
+
+    function methods.HandleVersionBadgeFeedSuccess()
+        return ensureVersionBadgeController():CompleteFromMeasure()
+    end
+
+    function methods.HandleVersionBadgeFeedError(kind)
+        return ensureVersionBadgeController():CompleteError(kind)
     end
 
     function methods.OpenPendingVersionNotice()
@@ -285,19 +385,30 @@ return function(app)
         return true
     end
 
-    function methods.StartLatestVersionUpdate()
-        if methods.startOpenVersionManagerHelper then
-            return methods.startOpenVersionManagerHelper('InstallLatest')
-        end
-        return false
+    function methods.StartLatestVersionUpdate(token)
+        return latestUpdateHelper():Request(
+            token,
+            methods.readSettingsMetadataVersion(),
+            readCacheVariable('VersionManagerCacheLatestVersion'),
+            SKIN:GetVariable('UpdateReleaseVariant', ''),
+            SKIN:GetVariable('UpdateGithubOwner', ''),
+            SKIN:GetVariable('UpdateGithubRepo', ''),
+            readCacheVariable('VersionManagerCacheRepositorySlug'),
+            readCacheVariable('VersionManagerCacheReleaseVariant'),
+            readCacheVariable('VersionManagerCacheAssetName'))
+    end
+
+    function methods.OpenPendingLatestUpdate()
+        return latestUpdateHelper():DispatchPending()
     end
 
     function methods.HandleExternalVersionCatalogRefreshComplete()
-        invalidateVersionStatusCache()
-        if methods.renderVersionStatusState then
-            methods.renderVersionStatusState()
+        if versionBadgeController and versionBadgeController:IsRunning() then
+            state.versionBadgeCheckState = 'checking'
+        else
+            state.versionBadgeCheckState = ''
         end
-        refreshVersionStatusAndLoadingVisuals()
+        refreshVersionBadgeState()
     end
 
 end

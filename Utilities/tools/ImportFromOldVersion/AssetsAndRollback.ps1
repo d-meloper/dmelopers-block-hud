@@ -19,36 +19,34 @@ function New-CaseInsensitiveHashtable {
 function Normalize-ImageAssetForMigration {
     param([AllowNull()][string]$Value)
 
-    $asset = ([string]$Value).Trim().Replace('/', '\')
-    if ($asset.Length -eq 0) {
-        return ''
-    }
-
-    if ($asset.Contains('..') -or $asset -match '[\\#\[\]";|:<>?*]') {
-        return ''
-    }
-
-    if ($asset -notmatch '\.[^\.]+$') {
-        $asset = "$asset.png"
-    }
-
-    $extension = [System.IO.Path]::GetExtension($asset).TrimStart('.').ToLowerInvariant()
-    if ($extension.Length -eq 0 -or @('png', 'jpg', 'jpeg', 'jpe', 'bmp', 'gif', 'tif', 'tiff', 'ico', 'jxr', 'wdp', 'dds') -notcontains $extension) {
-        return ''
-    }
-
-    return $asset
+    return (ConvertTo-BlockHudItemImageAssetName -Value $Value -AppendDefaultExtension -AllowReservedRuntimeAsset)
 }
 
 function Get-ImageAdjustmentKeyForMigration {
     param([AllowNull()][string]$Value)
 
     $asset = Normalize-ImageAssetForMigration -Value $Value
-    if ($asset.Length -eq 0) {
+    if ($asset.Length -gt 0) {
+        return [System.IO.Path]::GetFileNameWithoutExtension($asset)
+    }
+
+    $candidate = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($candidate) -or $candidate -eq '.' -or $candidate -eq '..') {
+        return ''
+    }
+    if ([System.IO.Path]::IsPathRooted($candidate) -or $candidate.IndexOfAny([char[]]@('/', '\')) -ge 0) {
         return ''
     }
 
-    return [System.IO.Path]::GetFileNameWithoutExtension($asset)
+    # Image adjustment keys intentionally omit the final image extension. Appending
+    # a known-safe extension validates the complete basename without interpreting a
+    # suffix such as ".part" as an unsupported image extension.
+    $validatedAsset = ConvertTo-BlockHudItemImageAssetName -Value ($candidate + '.png') -AllowReservedRuntimeAsset
+    if ([string]::IsNullOrWhiteSpace($validatedAsset)) {
+        return ''
+    }
+
+    return [System.IO.Path]::GetFileNameWithoutExtension($validatedAsset)
 }
 
 function Add-ImageRenameMapEntry {
@@ -108,8 +106,23 @@ function Repair-ImportImageValue {
     param(
         [AllowNull()]
         [string]$Value,
-        [hashtable]$ImageRenameMap
+        [hashtable]$ImageRenameMap,
+        [string]$RepairContext = '',
+        [string]$RepairKey = ''
     )
+
+    $approvedByKey = ($script:ApprovedItemImageRepairKeys -and
+        -not [string]::IsNullOrWhiteSpace($RepairContext) -and
+        -not [string]::IsNullOrWhiteSpace($RepairKey) -and
+        $script:ApprovedItemImageRepairKeys.ContainsKey((Get-ItemImageRepairEntryId -Context $RepairContext -Key $RepairKey)))
+    if ($approvedByKey) {
+        if (-not $script:AppliedItemImageRepairKeys) {
+            $script:AppliedItemImageRepairKeys = New-CaseInsensitiveHashtable
+        }
+        $repairEntryId = Get-ItemImageRepairEntryId -Context $RepairContext -Key $RepairKey
+        $script:AppliedItemImageRepairKeys[$repairEntryId] = $true
+        return ''
+    }
 
     return (Rename-ImageValue -Value $Value -RenameMap $ImageRenameMap)
 }
@@ -318,7 +331,11 @@ function Preflight-SourceState {
         '@Resources\Customs\Data\ImageAdjustments.inc',
         '@Resources\Customs\Data\HerobrineStats.inc',
         '@Resources\Customs\Data\HerobrineState.inc',
-        '@Resources\Customs\Data\EditorFavoritesCatalog.txt'
+        '@Resources\Customs\Data\EditorFavoritesCatalog.txt',
+        '@Resources\Customs\Data\JukeboxDiscSlots.json',
+        '@Resources\Customs\Data\JukeboxPlaybackState.inc',
+        '@Resources\Customs\Data\ProgramActionLabels.txt',
+        '@Resources\Customs\Data\MinecraftSkinHistory.txt'
     )) {
         $probePath = Join-RootPath -Root $SourceRoot -RelativePath $optionalFile
         Invoke-OptionalSourceProbe -Path $probePath -Description $optionalFile -Probe {
@@ -328,7 +345,8 @@ function Preflight-SourceState {
 
     foreach ($optionalDirectory in @(
         '@Resources\Customs\Images\Items',
-        '@Resources\Customs\Images\Player'
+        '@Resources\Customs\Images\Player',
+        '@Resources\Customs\Audios\Jukebox Disc'
     )) {
         Invoke-OptionalSourceDirectoryProbe -Path (Join-RootPath -Root $SourceRoot -RelativePath $optionalDirectory) -Description $optionalDirectory
     }
@@ -393,20 +411,7 @@ function Backup-TargetStateToTemporaryRollback {
         Ensure-Directory -Path $rollbackRoot
         $script:EphemeralRollbackRoot = Resolve-FullPath -Path $rollbackRoot
 
-        foreach ($relativePath in (Get-TemporaryRollbackScopeRelativePaths -Root $TargetRoot)) {
-            $sourcePath = Join-RootPath -Root $TargetRoot -RelativePath $relativePath
-            if (-not (Test-Path -LiteralPath $sourcePath)) {
-                continue
-            }
-
-            $destinationPath = Join-Path $script:EphemeralRollbackRoot $relativePath
-            $parent = Split-Path -Parent $destinationPath
-            if (-not [string]::IsNullOrWhiteSpace($parent)) {
-                Ensure-Directory -Path $parent
-            }
-
-            Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force -Recurse
-        }
+        Copy-TargetStateToTemporaryRollbackWithProgress -TargetRoot $TargetRoot -RollbackRoot $script:EphemeralRollbackRoot
 
         Write-Log ("Prepared temporary rollback workspace: {0}" -f $script:EphemeralRollbackRoot)
     }
