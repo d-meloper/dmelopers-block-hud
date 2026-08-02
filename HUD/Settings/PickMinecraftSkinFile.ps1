@@ -224,8 +224,14 @@ function Resolve-SelectedSkinPath {
     $ownerForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedToolWindow
     $ownerForm.Opacity = 0
     $ownerForm.TopMost = $true
+    $ownerForm.Add_Shown({
+        $ownerForm.TopMost = $true
+        $ownerForm.BringToFront()
+        $ownerForm.Activate()
+    })
     try {
         $ownerForm.Show()
+        $ownerForm.BringToFront()
         $ownerForm.Activate()
         if ($dialog.ShowDialog($ownerForm) -ne [System.Windows.Forms.DialogResult]::OK) {
             return ''

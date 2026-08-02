@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$CurrentTargetRoot,
     [Parameter(Mandatory = $true)][string]$SelectedTargetRoot,
-    [switch]$EmitResultPairs
+    [switch]$EmitResultPairs,
+    [switch]$PassThruResultObject
 )
 
 Set-StrictMode -Version 2.0
@@ -12,6 +13,7 @@ $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $script:LogStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 try {
     [Console]::OutputEncoding = $script:Utf8NoBom
+    $OutputEncoding = $script:Utf8NoBom
 }
 catch {
 }
@@ -265,6 +267,7 @@ function Test-ConfigFileExists {
 
 function Get-CurrentRootDeactivateSpecs {
     @(
+        [PSCustomObject]@{ RelativePath = 'Bootstrap'; FileName = 'ZPosBootstrap.ini' }
         [PSCustomObject]@{ RelativePath = 'Hotbar'; FileName = 'Hotbar.ini' }
         [PSCustomObject]@{ RelativePath = 'Clock'; FileName = 'Clock.ini' }
         [PSCustomObject]@{ RelativePath = 'ClockSprite'; FileName = 'ClockSprite.ini' }
@@ -277,12 +280,13 @@ function Get-CurrentRootDeactivateSpecs {
         [PSCustomObject]@{ RelativePath = 'Editor'; FileName = 'Editor.ini' }
         [PSCustomObject]@{ RelativePath = 'Inventory'; FileName = 'Inventory.ini' }
         [PSCustomObject]@{ RelativePath = 'InventoryBG'; FileName = 'InventoryBG.ini' }
-        [PSCustomObject]@{ RelativePath = 'Modal'; FileName = 'Modal.ini' }
         [PSCustomObject]@{ RelativePath = 'Diagnostics'; FileName = 'Diagnostics.ini' }
         [PSCustomObject]@{ RelativePath = 'ExtraContent\Jukebox'; FileName = 'Jukebox.ini' }
         [PSCustomObject]@{ RelativePath = 'ExtraContent\Jukebox\DiscSlot'; FileName = 'JukeboxDiscSlot.ini' }
         [PSCustomObject]@{ RelativePath = 'ExtraContent\Jukebox\WebNowPlayingBridge'; FileName = 'WebNowPlayingBridge.ini' }
         [PSCustomObject]@{ RelativePath = 'ExtraContent\Jukebox\Jukebox_minimized'; FileName = 'Jukebox_minimized.ini' }
+        [PSCustomObject]@{ RelativePath = 'ExtraContent\Herobrine'; FileName = 'Herobrine.ini' }
+        [PSCustomObject]@{ RelativePath = 'Activities\Herobrine'; FileName = 'Herobrine.ini' }
         [PSCustomObject]@{ RelativePath = 'Activities\Jukebox\Jukebox_minimized'; FileName = 'Jukebox_minimized.ini' }
         [PSCustomObject]@{ RelativePath = 'Contents\Jukebox'; FileName = 'Jukebox.ini' }
         [PSCustomObject]@{ RelativePath = 'Contents\Jukebox\DiscSlot'; FileName = 'JukeboxDiscSlot.ini' }
@@ -291,6 +295,13 @@ function Get-CurrentRootDeactivateSpecs {
         [PSCustomObject]@{ RelativePath = 'JukeboxDiscSlot'; FileName = 'JukeboxDiscSlot.ini' }
         [PSCustomObject]@{ RelativePath = 'Jukebox_minimized'; FileName = 'Jukebox_minimized.ini' }
         [PSCustomObject]@{ RelativePath = 'JukeboxMinimized'; FileName = 'JukeboxMinimized.ini' }
+    )
+}
+
+function Get-CurrentLatestUpdateHandoffDeactivateSpecs {
+    @(
+        [PSCustomObject]@{ RelativePath = 'Utilities\LatestUpdate'; FileName = 'LatestUpdate.ini' }
+        [PSCustomObject]@{ RelativePath = 'Modal'; FileName = 'Modal.ini' }
     )
 }
 
@@ -429,6 +440,10 @@ function Invoke-VersionSwitch {
     try {
         Invoke-DeactivateConfigList -Root $resolvedCurrentRoot -Specs $currentDeactivateSpecs
         Invoke-ActivateZPosBootstrap -Root $resolvedSelectedRoot
+        # Keep the progress owner alive until the selected bootstrap activation
+        # command succeeds. If activation throws, rollback can still surface the
+        # detached session's terminal error through the current-root utility.
+        Invoke-DeactivateConfigList -Root $resolvedCurrentRoot -Specs @(Get-CurrentLatestUpdateHandoffDeactivateSpecs)
 
         Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'OK'
         Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $resolvedSelectedRoot
@@ -474,5 +489,10 @@ catch {
 }
 finally {
     Save-Log
-    Emit-ResultPairs
+    if ($PassThruResultObject) {
+        Write-Output ([PSCustomObject]$script:ResultPairs)
+    }
+    else {
+        Emit-ResultPairs
+    }
 }

@@ -407,7 +407,7 @@ function HudActionFileExists(path)
 end
 
 function ResolveHudActionPowerShellProgramPath()
-    return '"' .. tostring(SKIN:GetVariable('@', '') or '') .. 'Defaults\\Runtime\\helpers\\BlockHudPowerShellHost.exe"'
+    return 'powershell'
 end
 
 function SyncHudActionPowerShellProgramPath()
@@ -752,7 +752,7 @@ local function startHudOpenLogFolderHelper()
         return false
     end
     local helperPath = rootPath .. 'Utilities\\tools\\OpenSettingsLogFolder.ps1'
-    local parameter = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ' .. PowerShellSingleQuoted(helperPath)
+    local parameter = '-NoProfile -ExecutionPolicy Bypass -File ' .. PowerShellSingleQuoted(helperPath)
         .. ' -TargetRoot ' .. PowerShellSingleQuoted(rootPath)
     SyncHudActionPowerShellProgramPath()
     SKIN:Bang('!SetOption', 'MeasureHudActionRun', 'Parameter', parameter)

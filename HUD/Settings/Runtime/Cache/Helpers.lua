@@ -6,6 +6,7 @@ return function(app)
     local setVariable = app.setVariable
     local logNotice = app.logNotice
     local helperResult = app.helperResult
+    local configState = app.loadSharedLuaModule('RainmeterConfigState.lua')
     local helpers = app.cacheHelpers or {}
     local normalizeStartupAutoRunOutput = helpers.normalizeStartupAutoRunOutput
     local parseStartupAutoRunResult = helpers.parseStartupAutoRunResult
@@ -135,7 +136,7 @@ return function(app)
 
         options = options or {}
 
-        local command = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        local command = '-NoProfile -ExecutionPolicy Bypass -File '
 
             .. methods.escapeCommandArgument(methods.computerInfoHelperScriptPath())
 
@@ -233,7 +234,7 @@ return function(app)
             resolvedModel = 'slim'
         end
 
-        return '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        return '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File '
 
             .. methods.escapeCommandArgument(methods.fetchMinecraftSkinScriptPath())
 
@@ -286,7 +287,7 @@ return function(app)
             resolvedModel = 'slim'
         end
 
-        local command = '-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        local command = '-NoProfile -STA -ExecutionPolicy Bypass -File '
             .. methods.escapeCommandArgument(methods.minecraftSkinFilePickerScriptPath())
             .. ' -OutputDirectory '
             .. methods.escapeCommandArgument(methods.playerSkinImageDirectoryPath())
@@ -328,7 +329,7 @@ return function(app)
 
     function methods.startupAutoRunHelperArguments(mode)
 
-        return '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        return '-NoProfile -ExecutionPolicy Bypass -File '
 
             .. methods.escapeCommandArgument('.\\StartupAutoRun.ps1')
 
@@ -395,7 +396,7 @@ return function(app)
     end
 
     function methods.openVersionManagerHelperArguments(launchToken, initialAction)
-        local args = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        local args = '-NoProfile -ExecutionPolicy Bypass -File '
             .. methods.escapeCommandArgument(methods.openVersionManagerScriptPath())
             .. ' -TargetRoot '
             .. methods.escapeCommandArgument('..\\..')
@@ -410,6 +411,12 @@ return function(app)
     end
 
     function methods.startOpenVersionManagerHelper(initialAction)
+        local rootConfig = trim(SKIN:GetVariable('ROOTCONFIG', ''))
+        local latestUpdateConfig = rootConfig ~= '' and (rootConfig .. '\\Utilities\\LatestUpdate') or ''
+        if latestUpdateConfig ~= '' and configState.IsActive(SKIN, latestUpdateConfig) then
+            SKIN:Bang('!CommandMeasure', 'MeasureLatestUpdate', 'Present()', latestUpdateConfig)
+            return true
+        end
         if methods.isVersionManagerLaunchPending and methods.isVersionManagerLaunchPending() then
             return false
         end
@@ -441,7 +448,7 @@ return function(app)
     end
 
     function methods.openLogFolderHelperArguments()
-        return '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        return '-NoProfile -ExecutionPolicy Bypass -File '
             .. methods.escapeCommandArgument(methods.openLogFolderScriptPath())
             .. ' -TargetRoot '
             .. methods.escapeCommandArgument('..\\..')

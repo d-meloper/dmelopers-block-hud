@@ -123,7 +123,7 @@ return function(app)
             return false
         end
         local skinRoot = resolveSkinRootFromCurrentPath()
-        local args = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        local args = '-NoProfile -ExecutionPolicy Bypass -File '
             .. quoteCommandArgument(methods.defaultItemLabelsScriptPath())
             .. ' -SkinRoot '
             .. quoteCommandArgument(skinRoot)
@@ -243,7 +243,7 @@ return function(app)
             return false
         end
         local skinRoot = resolveSkinRootFromCurrentPath()
-        local args = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '
+        local args = '-NoProfile -ExecutionPolicy Bypass -File '
             .. quoteCommandArgument(methods.helperLocalizationCacheScriptPath())
             .. ' -SkinRoot '
             .. quoteCommandArgument(skinRoot)

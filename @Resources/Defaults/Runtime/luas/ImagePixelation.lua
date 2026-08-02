@@ -306,7 +306,6 @@ end
 function Pixelator:buildArgs(request)
     local args = {
         '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quotePowerShellArgument(self.helperPath),
         '-RequestJsonBase64', quotePowerShellArgument(self:buildRequestPayload(request)),

@@ -224,6 +224,8 @@ return function(tabCount, contentTabCount)
 
         versionManagerLaunchToken = '',
 
+        versionManagerLaunchLastRenderedElapsed = -1,
+
 
 
         tabCount = resolvedTabCount,

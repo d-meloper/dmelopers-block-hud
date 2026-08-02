@@ -30,8 +30,10 @@ function New-StagedLatestRoot {
     $stageParent = Join-Path ([System.IO.Path]::GetTempPath()) ("DMeloperLatestStage_{0}_{1}" -f $script:LogStamp, ([guid]::NewGuid().ToString('N')))
     $stageRoot = Join-Path $stageParent (Convert-ToSafeFolderName -Name $IdentityName)
     Ensure-Directory -Path $stageParent
+    $script:StageParentRoot = (Resolve-FullPath -Path $stageParent)
     Copy-Item -LiteralPath $PackageRoot -Destination $stageRoot -Recurse -Force
     $script:ResolvedStageRoot = (Resolve-FullPath -Path $stageRoot)
+    Assert-NoReparsePoints -Root $script:ResolvedStageRoot -Context 'Staged update package'
     $script:StageRootCreated = $true
     Write-Log ("StagedLatestRoot: {0}" -f $script:ResolvedStageRoot)
     return $script:ResolvedStageRoot
@@ -279,7 +281,8 @@ function Invoke-FixedRootReplacement {
     param(
         [Parameter(Mandatory = $true)][string]$CurrentRoot,
         [Parameter(Mandatory = $true)][string]$StagedRoot,
-        [Parameter(Mandatory = $true)][string]$SkinsRoot
+        [Parameter(Mandatory = $true)][string]$SkinsRoot,
+        [string]$PreparedRollbackRoot = ''
     )
 
     $resolvedCurrentRoot = Resolve-FullPath -Path $CurrentRoot
@@ -295,9 +298,24 @@ function Invoke-FixedRootReplacement {
         throw 'Fixed-root replacement requires separate current and staged roots.'
     }
 
-    $rollbackParent = Join-Path ([System.IO.Path]::GetTempPath()) ("DMeloperLatestRollback_{0}_{1}" -f $script:LogStamp, ([guid]::NewGuid().ToString('N')))
+    if ([string]::IsNullOrWhiteSpace($PreparedRollbackRoot)) {
+        $rollbackParent = Join-Path ([System.IO.Path]::GetTempPath()) ("DMeloperLatestRollback_{0}_{1}" -f $script:LogStamp, ([guid]::NewGuid().ToString('N')))
+        $rollbackRoot = Join-Path $rollbackParent ([System.IO.Path]::GetFileName($resolvedCurrentRoot))
+    }
+    else {
+        $rollbackRoot = Resolve-FullPath -Path $PreparedRollbackRoot -AllowMissing
+        $rollbackParent = Split-Path -Parent $rollbackRoot
+        $tempRoot = Resolve-FullPath -Path ([System.IO.Path]::GetTempPath())
+        if (-not (Test-PathWithinRoot -Root $tempRoot -Path $rollbackRoot) -or
+            [string]::Equals($rollbackRoot, $tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Prepared rollback root must be a transaction-owned path under TEMP: $rollbackRoot"
+        }
+        if (Test-Path -LiteralPath $rollbackRoot) {
+            throw "Prepared rollback root already exists: $rollbackRoot"
+        }
+    }
     Ensure-Directory -Path $rollbackParent
-    $rollbackRoot = Join-Path $rollbackParent ([System.IO.Path]::GetFileName($resolvedCurrentRoot))
+    $script:ReplacementRollbackParent = $rollbackParent
     $script:ReplacementRollbackRoot = $rollbackRoot
     Write-Log ("ReplacementRollbackRoot: {0}" -f $rollbackRoot)
 
@@ -374,26 +392,17 @@ function Convert-OutputToResultPairs {
 }
 
 function Get-UpdateRuntimePowerShellPath {
-    $runtimeHost = [Environment]::GetEnvironmentVariable('DMEL_POWERSHELL_HOST')
-    if (-not [string]::IsNullOrWhiteSpace($runtimeHost) -and (Test-Path -LiteralPath $runtimeHost -PathType Leaf)) {
-        return $runtimeHost
+    $candidate = Join-Path $PSHOME 'powershell.exe'
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return [System.IO.Path]::GetFullPath($candidate)
     }
 
-    $moduleRootVariable = Get-Variable -Scope Script -Name 'ModuleRoot' -ErrorAction SilentlyContinue
-    $moduleRoot = if ($null -ne $moduleRootVariable -and -not [string]::IsNullOrWhiteSpace([string]$moduleRootVariable.Value)) {
-        [string]$moduleRootVariable.Value
-    }
-    else {
-        $PSScriptRoot
-    }
-    $toolsRoot = Split-Path -Parent $moduleRoot
-    $skinRoot = [System.IO.Path]::GetFullPath((Join-Path $toolsRoot '..\..'))
-    $packagedHost = Join-Path $skinRoot '@Resources\Defaults\Runtime\helpers\BlockHudPowerShellHost.exe'
-    if (Test-Path -LiteralPath $packagedHost -PathType Leaf) {
-        return $packagedHost
+    $command = Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue
+    if ($command -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
+        return [System.IO.Path]::GetFullPath($command.Source)
     }
 
-    throw 'BlockHudPowerShellHost.exe could not be located.'
+    throw 'powershell.exe could not be located.'
 }
 
 function ConvertTo-WindowsCommandLineArgument {
@@ -453,6 +462,7 @@ function Start-DetachedRuntimeHostScript {
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = Get-UpdateRuntimePowerShellPath
     $startInfo.Arguments = Join-WindowsCommandLineArguments -Arguments $argumentList
+    $startInfo.WorkingDirectory = [System.IO.Path]::GetTempPath()
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $process = [System.Diagnostics.Process]::Start($startInfo)
@@ -583,6 +593,25 @@ function Resolve-SwitchScript {
     throw 'SwitchActiveSkinVersion.ps1 was not found in the selected or current root.'
 }
 
+function Resolve-UpdateCleanupHelperPath {
+    param([Parameter(Mandatory = $true)][ValidateSet('CleanupOldRoot.ps1', 'CleanupTempRoot.ps1')][string]$FileName)
+
+    foreach ($root in @($script:ResolvedLatestRoot, $script:ResolvedCurrentRoot)) {
+        if ([string]::IsNullOrWhiteSpace([string]$root)) {
+            continue
+        }
+
+        $candidate = Get-BlockHudRuntimeToolPath `
+            -Root ([string]$root) `
+            -RelativeToolPath (Join-Path 'UpdateToLatestVersion' $FileName)
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return [System.IO.Path]::GetFullPath($candidate)
+        }
+    }
+
+    throw "Packaged update cleanup helper was not found: $FileName"
+}
+
 function Invoke-DetachedOldRootCleanup {
     param(
         [Parameter(Mandatory = $true)][string]$OldRoot,
@@ -591,98 +620,10 @@ function Invoke-DetachedOldRootCleanup {
         [int]$ResultTimeoutSeconds = 30
     )
 
-    $cleanupRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("DMeloperLatestCleanup_{0}_{1}" -f $script:LogStamp, ([guid]::NewGuid().ToString('N')))
-    Ensure-Directory -Path $cleanupRoot
-    $runnerPath = Join-Path $cleanupRoot 'CleanupOldRoot.ps1'
-    $resultPath = Join-Path $cleanupRoot 'CleanupResult.json'
-
-    $runner = @'
-param(
-    [Parameter(Mandatory = $true)][string]$OldRoot,
-    [Parameter(Mandatory = $true)][string]$SkinsRoot,
-    [Parameter(Mandatory = $true)][string]$ResultPath,
-    [int]$CleanupTimeoutSeconds = 20
-)
-
-Set-StrictMode -Version 2.0
-$ErrorActionPreference = 'Stop'
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-
-function Resolve-FullPath {
-    param([Parameter(Mandatory = $true)][string]$Path, [switch]$AllowMissing)
-    $expanded = [Environment]::ExpandEnvironmentVariables($Path)
-    if ([System.IO.Path]::IsPathRooted($expanded)) {
-        $full = [System.IO.Path]::GetFullPath($expanded)
-    }
-    else {
-        $full = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $expanded))
-    }
-    $full = $full.TrimEnd('\', '/')
-    if (-not $AllowMissing -and -not (Test-Path -LiteralPath $full)) {
-        throw "Path does not exist: $full"
-    }
-    return $full
-}
-
-function Test-PathWithinRoot {
-    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$Path)
-    $rootFull = (Resolve-FullPath -Path $Root).TrimEnd('\', '/').ToLowerInvariant()
-    $pathFull = (Resolve-FullPath -Path $Path -AllowMissing).TrimEnd('\', '/').ToLowerInvariant()
-    return ($pathFull -eq $rootFull -or $pathFull.StartsWith($rootFull + '\'))
-}
-
-function Write-Result {
-    param([Parameter(Mandatory = $true)][string]$Status, [Parameter(Mandatory = $true)][string]$Message)
-    $parent = Split-Path -Parent $ResultPath
-    if (-not [string]::IsNullOrWhiteSpace($parent) -and -not (Test-Path -LiteralPath $parent)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    }
-    $payload = [PSCustomObject]@{
-        Status = $Status
-        Message = $Message
-        OldRoot = $OldRoot
-        CompletedAtUtc = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
-    }
-    [System.IO.File]::WriteAllText($ResultPath, ($payload | ConvertTo-Json -Depth 3), $utf8NoBom)
-}
-
-try {
-    $resolvedOldRoot = Resolve-FullPath -Path $OldRoot -AllowMissing
-    $resolvedSkinsRoot = Resolve-FullPath -Path $SkinsRoot
-    if (-not (Test-PathWithinRoot -Root $resolvedSkinsRoot -Path $resolvedOldRoot) -or
-        [string]::Equals($resolvedOldRoot, $resolvedSkinsRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to delete a path outside the Rainmeter skins root: $resolvedOldRoot"
-    }
-
-    # Do not wait on the helper parent here: Version Manager waits for this helper's
-    # result, so waiting on that UI process makes successful cleanup impossible.
-    # The detached runner owns deletion from TEMP and reports a bounded result instead.
-    Set-Location ([System.IO.Path]::GetTempPath())
-    $deadline = [DateTime]::UtcNow.AddSeconds($CleanupTimeoutSeconds)
-    $lastError = $null
-    do {
-        try {
-            if (Test-Path -LiteralPath $resolvedOldRoot) {
-                Remove-Item -LiteralPath $resolvedOldRoot -Force -Recurse
-            }
-            Write-Result -Status 'OK' -Message 'Old root deleted.'
-            exit 0
-        }
-        catch {
-            $lastError = $_.Exception.Message
-            Start-Sleep -Milliseconds 250
-        }
-    }
-    while ([DateTime]::UtcNow -lt $deadline)
-
-    Write-Result -Status 'TIMEOUT' -Message ("Old-root cleanup did not finish within {0} seconds. Last error: {1}" -f $CleanupTimeoutSeconds, $lastError)
-}
-catch {
-    Write-Result -Status 'ERROR' -Message $_.Exception.Message
-}
-'@
-
-    [System.IO.File]::WriteAllText($runnerPath, $runner, $script:Utf8NoBom)
+    $resultRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("DMeloperLatestCleanup_{0}_{1}" -f $script:LogStamp, ([guid]::NewGuid().ToString('N')))
+    Ensure-Directory -Path $resultRoot
+    $runnerPath = Resolve-UpdateCleanupHelperPath -FileName 'CleanupOldRoot.ps1'
+    $resultPath = Join-Path $resultRoot 'CleanupResult.json'
 
     Start-DetachedRuntimeHostScript -ScriptPath $runnerPath -Arguments @(
         '-OldRoot', $OldRoot,
@@ -726,97 +667,10 @@ function Invoke-DetachedTempRootCleanup {
         throw "Refusing detached cleanup outside TEMP for $($Reason): $resolvedRoot"
     }
 
-    $cleanupRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("DMeloperLatestCleanup_{0}_{1}" -f $script:LogStamp, ([guid]::NewGuid().ToString('N')))
-    Ensure-Directory -Path $cleanupRoot
-    $runnerPath = Join-Path $cleanupRoot 'CleanupTempRoot.ps1'
-    $resultPath = Join-Path $cleanupRoot 'CleanupResult.json'
-
-    $runner = @'
-param(
-    [Parameter(Mandatory = $true)][string]$Root,
-    [Parameter(Mandatory = $true)][string]$TempRoot,
-    [Parameter(Mandatory = $true)][string]$Reason,
-    [Parameter(Mandatory = $true)][string]$ResultPath,
-    [int]$CleanupTimeoutSeconds = 20
-)
-
-Set-StrictMode -Version 2.0
-$ErrorActionPreference = 'Stop'
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-
-function Resolve-FullPath {
-    param([Parameter(Mandatory = $true)][string]$Path, [switch]$AllowMissing)
-    $expanded = [Environment]::ExpandEnvironmentVariables($Path)
-    if ([System.IO.Path]::IsPathRooted($expanded)) {
-        $full = [System.IO.Path]::GetFullPath($expanded)
-    }
-    else {
-        $full = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $expanded))
-    }
-    $full = $full.TrimEnd('\', '/')
-    if (-not $AllowMissing -and -not (Test-Path -LiteralPath $full)) {
-        throw "Path does not exist: $full"
-    }
-    return $full
-}
-
-function Test-PathWithinRoot {
-    param([Parameter(Mandatory = $true)][string]$ParentRoot, [Parameter(Mandatory = $true)][string]$ChildPath)
-    $rootFull = (Resolve-FullPath -Path $ParentRoot).TrimEnd('\', '/').ToLowerInvariant()
-    $pathFull = (Resolve-FullPath -Path $ChildPath -AllowMissing).TrimEnd('\', '/').ToLowerInvariant()
-    return ($pathFull -eq $rootFull -or $pathFull.StartsWith($rootFull + '\'))
-}
-
-function Write-Result {
-    param([Parameter(Mandatory = $true)][string]$Status, [Parameter(Mandatory = $true)][string]$Message)
-    $parent = Split-Path -Parent $ResultPath
-    if (-not [string]::IsNullOrWhiteSpace($parent) -and -not (Test-Path -LiteralPath $parent)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    }
-    $payload = [PSCustomObject]@{
-        Status = $Status
-        Message = $Message
-        Root = $Root
-        Reason = $Reason
-        CompletedAtUtc = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
-    }
-    [System.IO.File]::WriteAllText($ResultPath, ($payload | ConvertTo-Json -Depth 3), $utf8NoBom)
-}
-
-try {
-    $resolvedRoot = Resolve-FullPath -Path $Root -AllowMissing
-    $resolvedTempRoot = Resolve-FullPath -Path $TempRoot
-    if (-not (Test-PathWithinRoot -ParentRoot $resolvedTempRoot -ChildPath $resolvedRoot) -or
-        [string]::Equals($resolvedRoot, $resolvedTempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to delete a path outside TEMP: $resolvedRoot"
-    }
-
-    Set-Location ([System.IO.Path]::GetTempPath())
-    $deadline = [DateTime]::UtcNow.AddSeconds($CleanupTimeoutSeconds)
-    $lastError = $null
-    do {
-        try {
-            if (Test-Path -LiteralPath $resolvedRoot) {
-                Remove-Item -LiteralPath $resolvedRoot -Force -Recurse
-            }
-            Write-Result -Status 'OK' -Message 'Temporary old root deleted.'
-            exit 0
-        }
-        catch {
-            $lastError = $_.Exception.Message
-            Start-Sleep -Milliseconds 250
-        }
-    }
-    while ([DateTime]::UtcNow -lt $deadline)
-
-    Write-Result -Status 'TIMEOUT' -Message ("Temporary old-root cleanup did not finish within {0} seconds. Last error: {1}" -f $CleanupTimeoutSeconds, $lastError)
-}
-catch {
-    Write-Result -Status 'ERROR' -Message $_.Exception.Message
-}
-'@
-
-    [System.IO.File]::WriteAllText($runnerPath, $runner, $script:Utf8NoBom)
+    $resultRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("DMeloperLatestCleanup_{0}_{1}" -f $script:LogStamp, ([guid]::NewGuid().ToString('N')))
+    Ensure-Directory -Path $resultRoot
+    $runnerPath = Resolve-UpdateCleanupHelperPath -FileName 'CleanupTempRoot.ps1'
+    $resultPath = Join-Path $resultRoot 'CleanupResult.json'
 
     Start-DetachedRuntimeHostScript -ScriptPath $runnerPath -Arguments @(
         '-Root', $resolvedRoot,
@@ -855,6 +709,20 @@ function Invoke-UpdateToLatest {
     Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $resolvedCurrentRoot
     Use-CanonicalHelperLogPath -Root $resolvedCurrentRoot -Prefix 'UpdateToLatestVersion'
 
+    if ($ResetCurrentVersion) {
+        if ([string]::IsNullOrWhiteSpace($ExpectedVersion)) {
+            throw 'ExpectedVersion is required when ResetCurrentVersion is used.'
+        }
+        [void](ConvertTo-StableSkinVersionTag -VersionText $ExpectedVersion -Context 'ExpectedVersion')
+        if ([string]::IsNullOrWhiteSpace($ExpectedReleaseVariant) -or
+            ($ExpectedReleaseVariant -notin @('Korea', 'Global'))) {
+            throw 'ExpectedReleaseVariant must be explicitly set to Korea or Global when ResetCurrentVersion is used.'
+        }
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($ExpectedVersion)) {
+        [void](ConvertTo-StableSkinVersionTag -VersionText $ExpectedVersion -Context 'ExpectedVersion')
+    }
+
     $resolvedPackagePath = Resolve-FullPath -Path $PackagePath
     if (-not (Test-Path -LiteralPath $resolvedPackagePath -PathType Leaf)) {
         throw 'PackagePath was not found.'
@@ -874,8 +742,11 @@ function Invoke-UpdateToLatest {
     }
 
     $extractRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("DMeloperLatestExtract_{0}_{1}" -f $script:LogStamp, ([guid]::NewGuid().ToString('N')))
+    $script:ExtractRoot = (Resolve-FullPath -Path $extractRoot -AllowMissing)
+    Assert-ZipPackageSafeToExtract -PackagePath $resolvedPackagePath -ExtractRoot $script:ExtractRoot
     Ensure-Directory -Path $extractRoot
     Expand-Archive -LiteralPath $resolvedPackagePath -DestinationPath $extractRoot -Force
+    Assert-NoReparsePoints -Root $extractRoot -Context 'Extracted update package'
     $packageRoot = Resolve-PackageRoot -ExtractRoot $extractRoot
 
     $currentMetadata = Get-SkinMetadata -Root $resolvedCurrentRoot
@@ -892,8 +763,26 @@ function Invoke-UpdateToLatest {
     Assert-ExpectedReleaseVariant -ActualReleaseVariant $packageReleaseVariant -ExpectedReleaseVariant $effectiveExpectedReleaseVariant -Context 'Package'
     $currentVersion = ConvertTo-SkinVersion -VersionText ([string]$currentMetadata.Version) -Context 'CurrentTargetRoot'
     $packageVersion = ConvertTo-SkinVersion -VersionText ([string]$packageMetadata.Version) -Context 'Package'
-    if ($packageVersion -le $currentVersion) {
-        throw "Package version must be newer than current target version. current=$($currentMetadata.Version) package=$($packageMetadata.Version)"
+    if ($ResetCurrentVersion) {
+        $expectedStableTag = ConvertTo-StableSkinVersionTag -VersionText $ExpectedVersion -Context 'ExpectedVersion'
+        $currentStableTag = ConvertTo-StableSkinVersionTag -VersionText ([string]$currentMetadata.Version) -Context 'CurrentTargetRoot'
+        $packageStableTag = ConvertTo-StableSkinVersionTag -VersionText ([string]$packageMetadata.Version) -Context 'Package'
+        if (-not [string]::Equals($currentStableTag, $expectedStableTag, [System.StringComparison]::Ordinal) -or
+            -not [string]::Equals($packageStableTag, $expectedStableTag, [System.StringComparison]::Ordinal)) {
+            throw ("Current-version reset requires current, expected, and package versions to match exactly. current={0} expected={1} package={2}" -f $currentStableTag, $expectedStableTag, $packageStableTag)
+        }
+    }
+    else {
+        if ($packageVersion -le $currentVersion) {
+            throw "Package version must be newer than current target version. current=$($currentMetadata.Version) package=$($packageMetadata.Version)"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion)) {
+            $expectedStableTag = ConvertTo-StableSkinVersionTag -VersionText $ExpectedVersion -Context 'ExpectedVersion'
+            $packageStableTag = ConvertTo-StableSkinVersionTag -VersionText ([string]$packageMetadata.Version) -Context 'Package'
+            if (-not [string]::Equals($packageStableTag, $expectedStableTag, [System.StringComparison]::Ordinal)) {
+                throw "Package version did not match ExpectedVersion. expected=$expectedStableTag package=$packageStableTag"
+            }
+        }
     }
 
     $identityName = Get-PackageIdentityName -PackageRoot $packageRoot -PackageMetadata $packageMetadata -ExtractRoot $extractRoot
@@ -901,7 +790,12 @@ function Invoke-UpdateToLatest {
     if (-not [string]::Equals($identityName, $fixedRootName, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Package identity must resolve to the fixed installed root '$fixedRootName', but was '$identityName'."
     }
-    $latestRoot = Resolve-LatestDestinationRoot -SkinsRoot $skinsRoot -IdentityName $identityName
+    $latestRoot = if ($ResetCurrentVersion) {
+        $resolvedCurrentRoot
+    }
+    else {
+        Resolve-LatestDestinationRoot -SkinsRoot $skinsRoot -IdentityName $identityName
+    }
     $script:ResolvedLatestRoot = $latestRoot
 
     Write-Log ("CurrentTargetRoot: {0}" -f $resolvedCurrentRoot)
@@ -914,7 +808,12 @@ function Invoke-UpdateToLatest {
     Write-Log ("ExpectedReleaseVariant: {0}" -f $effectiveExpectedReleaseVariant)
     Write-Log ("PackageIdentity: {0}" -f $identityName)
     Write-Log ("DestinationRoot: {0}" -f $latestRoot)
-    Write-Log 'DestinationRoot policy: fixed package identity root; version-suffixed side-by-side update roots are disabled.'
+    if ($ResetCurrentVersion) {
+        Write-Log 'DestinationRoot policy: exact CurrentTargetRoot replacement for explicit same-version reset; current data import is disabled.'
+    }
+    else {
+        Write-Log 'DestinationRoot policy: fixed package identity root; version-suffixed side-by-side update roots are disabled.'
+    }
 
     if (-not (Test-PathWithinRoot -Root $skinsRoot -Path $latestRoot)) {
         throw "Destination root is outside the Rainmeter skins root: $latestRoot"
@@ -926,37 +825,86 @@ function Invoke-UpdateToLatest {
         }
     }
 
-    $packageImportScript = Get-BlockHudRuntimeToolPath -Root $packageRoot -RelativeToolPath 'ImportFromOldVersion.ps1'
-    if (-not (Test-Path -LiteralPath $packageImportScript -PathType Leaf)) {
-        throw 'Package is missing Utilities\tools\ImportFromOldVersion.ps1.'
+    if (-not $ResetCurrentVersion) {
+        $packageImportScript = Get-BlockHudRuntimeToolPath -Root $packageRoot -RelativeToolPath 'ImportFromOldVersion.ps1'
+        if (-not (Test-Path -LiteralPath $packageImportScript -PathType Leaf)) {
+            throw 'Package is missing Utilities\tools\ImportFromOldVersion.ps1.'
+        }
+        Invoke-ImportValidation -ImportScript $packageImportScript -TargetRoot $packageRoot -SourceRoot $resolvedCurrentRoot
     }
-    Invoke-ImportValidation -ImportScript $packageImportScript -TargetRoot $packageRoot -SourceRoot $resolvedCurrentRoot
+    else {
+        Write-Log 'Current-version reset preflight intentionally skipped legacy import validation because no live data may be imported.'
+    }
 
     if (Test-Path -LiteralPath $latestRoot) {
         Write-Log 'Fixed-root update path: destination resolves to the current active root; staging latest package before replacement.'
 
         $stageRoot = New-StagedLatestRoot -PackageRoot $packageRoot -IdentityName $identityName
-        $stageImportScript = Get-BlockHudRuntimeToolPath -Root $stageRoot -RelativeToolPath 'ImportFromOldVersion.ps1'
-        if (-not (Test-Path -LiteralPath $stageImportScript -PathType Leaf)) {
-            throw 'Staged latest root is missing Utilities\tools\ImportFromOldVersion.ps1.'
+        if (-not $ResetCurrentVersion) {
+            $stageImportScript = Get-BlockHudRuntimeToolPath -Root $stageRoot -RelativeToolPath 'ImportFromOldVersion.ps1'
+            if (-not (Test-Path -LiteralPath $stageImportScript -PathType Leaf)) {
+                throw 'Staged latest root is missing Utilities\tools\ImportFromOldVersion.ps1.'
+            }
+            Invoke-RealImport -ImportScript $stageImportScript -TargetRoot $stageRoot -SourceRoot $resolvedCurrentRoot
+        }
+        else {
+            $stagedMetadata = Get-SkinMetadata -Root $stageRoot
+            $stagedStableTag = ConvertTo-StableSkinVersionTag -VersionText ([string]$stagedMetadata.Version) -Context 'Staged reset package'
+            if (-not [string]::Equals($stagedStableTag, $expectedStableTag, [System.StringComparison]::Ordinal)) {
+                throw "Staged reset package version changed unexpectedly. expected=$expectedStableTag actual=$stagedStableTag"
+            }
+            $stagedReleaseVariant = Get-SkinRootReleaseVariant -Root $stageRoot
+            Assert-ExpectedReleaseVariant -ActualReleaseVariant $stagedReleaseVariant -ExpectedReleaseVariant $effectiveExpectedReleaseVariant -Context 'Staged reset package'
+            Write-Log 'Current-version reset staged a pristine package without importing any current-root data.'
+
+            $script:ResetRecoveryTransaction = New-ResetRecoveryTransaction `
+                -CurrentRoot $resolvedCurrentRoot `
+                -SkinsRoot $skinsRoot `
+                -StageParentRoot $script:StageParentRoot `
+                -ExtractRoot $script:ExtractRoot
+            Start-ResetRecoveryGuard -Transaction $script:ResetRecoveryTransaction
         }
 
-        Invoke-RealImport -ImportScript $stageImportScript -TargetRoot $stageRoot -SourceRoot $resolvedCurrentRoot
-
         Invoke-RetiredCurrentRootConfigCleanup -Root $resolvedCurrentRoot
-        $rollbackRoot = Invoke-FixedRootReplacement -CurrentRoot $resolvedCurrentRoot -StagedRoot $stageRoot -SkinsRoot $skinsRoot
+        $replacementParameters = @{
+            CurrentRoot = $resolvedCurrentRoot
+            StagedRoot = $stageRoot
+            SkinsRoot = $skinsRoot
+        }
+        if ($ResetCurrentVersion) {
+            $replacementParameters['PreparedRollbackRoot'] = [string]$script:ResetRecoveryTransaction.RollbackRoot
+        }
+        $rollbackRoot = Invoke-FixedRootReplacement @replacementParameters
+        if ($ResetCurrentVersion) {
+            Set-ResetRecoveryPhase -Phase 'NewRootInstalled'
+        }
         Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $resolvedCurrentRoot
         Set-ResultPairValue -Key 'DMEL_BACKUPPATH' -Value ''
         Use-CanonicalHelperLogPath -Root $resolvedCurrentRoot -Prefix 'UpdateToLatestVersion'
 
         try {
+            if ($ResetCurrentVersion) {
+                Set-ResetRecoveryPhase -Phase 'Activating'
+            }
             Invoke-PostUpdateRefresh -Root $resolvedCurrentRoot
+            if ($ResetCurrentVersion) {
+                Set-ResetRecoveryPhase -Phase 'Activated'
+            }
+            $script:PostUpdateActivationSucceeded = $true
         }
         catch {
             $refreshFailure = $_.Exception.Message
             Write-Log ("Post-update refresh failed after fixed-root replacement: {0}" -f $refreshFailure) 'ERROR'
             try {
                 Restore-InstalledFixedRootBestEffort -FinalRoot $resolvedCurrentRoot -RollbackRoot $rollbackRoot -Reason 'post-update refresh failure'
+                if ($ResetCurrentVersion) {
+                    try {
+                        Set-ResetRecoveryPhase -Phase 'Restored'
+                    }
+                    catch {
+                        Write-Log ("Restored the previous root, but could not acknowledge recovery in the journal: {0}" -f $_.Exception.Message) 'WARN'
+                    }
+                }
             }
             catch {
                 throw ("Post-update refresh failed and automatic fixed-root restore also failed. refresh_error={0}; restore_error={1}" -f $refreshFailure, $_.Exception.Message)
@@ -965,17 +913,54 @@ function Invoke-UpdateToLatest {
             throw ("Post-update refresh failed; restored the previous fixed root. {0}" -f $refreshFailure)
         }
 
-        $cleanupResult = Invoke-DetachedTempRootCleanup -Root $rollbackRoot -Reason 'successful fixed-root update'
+        if ($ResetCurrentVersion) {
+            # The manager-local helper set may be newer than the same-version package
+            # that just replaced CurrentTargetRoot. Keep reset cleanup owned by this
+            # already-loaded process and its recovery guard, not by package-local code.
+            $cleanupResult = Remove-RootWithResult -Root $script:ReplacementRollbackParent -Reason 'successful current-version reset'
+        }
+        else {
+            $cleanupResult = Invoke-DetachedTempRootCleanup -Root $rollbackRoot -Reason 'successful fixed-root update'
+        }
         if ([string]::Equals([string]$cleanupResult.Status, 'OK', [System.StringComparison]::OrdinalIgnoreCase)) {
             Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'OK'
-            Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value 'Updated to the latest version, imported data, and replaced the fixed install root.'
+            if ($ResetCurrentVersion) {
+                Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value 'Reset the current skin to a pristine package of the same version and replaced the exact active install root.'
+                try {
+                    Set-ResetRecoveryPhase -Phase 'Committed'
+                }
+                catch {
+                    Write-Log ("Current-version reset completed, but the recovery journal could not be finalized: {0}" -f $_.Exception.Message) 'WARN'
+                    Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'WARN'
+                    Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value 'Reset the current skin successfully, but temporary recovery metadata cleanup is still pending.'
+                }
+            }
+            else {
+                Remove-SafeUpdateTempRootBestEffort -Root $script:ReplacementRollbackParent -Reason 'fixed-root rollback parent'
+                Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value 'Updated to the latest version, imported data, and replaced the fixed install root.'
+            }
         }
         else {
             Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'WARN'
-            Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value ("Updated to the latest version and replaced the fixed install root, but temporary rollback-root cleanup did not complete: {0}" -f [string]$cleanupResult.Message)
+            if ($ResetCurrentVersion) {
+                Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value ("Reset the current skin and activated the pristine same-version package, but rollback-root cleanup is still pending: {0}" -f [string]$cleanupResult.Message)
+                try {
+                    Set-ResetRecoveryPhase -Phase 'CleanupPending'
+                }
+                catch {
+                    Write-Log ("Could not hand pending rollback cleanup to the recovery guard: {0}" -f $_.Exception.Message) 'WARN'
+                }
+            }
+            else {
+                Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value ("Updated to the latest version and replaced the fixed install root, but temporary rollback-root cleanup did not complete: {0}" -f [string]$cleanupResult.Message)
+            }
         }
 
         return
+    }
+
+    if ($ResetCurrentVersion) {
+        throw 'Current-version reset must replace the exact existing CurrentTargetRoot and cannot use a side-by-side destination.'
     }
 
     try {

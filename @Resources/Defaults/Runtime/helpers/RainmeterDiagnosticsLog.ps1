@@ -20,6 +20,7 @@ $ErrorActionPreference = 'Stop'
 $PendingKey = 'BlockHudDiagnosticsLoggingRefreshPending'
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $Utf8NoBom
+$OutputEncoding = $Utf8NoBom
 
 function Write-DmelPair {
     param(

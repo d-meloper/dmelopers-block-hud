@@ -303,7 +303,7 @@ local function quoteCommandLineArgument(value)
 end
 
 local function resolvePowerShellProgramPath()
-    return '"' .. trim(SKIN:GetVariable('@', '')) .. 'Defaults\\Runtime\\helpers\\BlockHudPowerShellHost.exe"'
+    return 'powershell'
 end
 
 local function pixelationHelperPath()
@@ -397,7 +397,6 @@ function JukeboxDiscSlotBuildOpenAudioFolderArgs(path)
 
     return table.concat({
         '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quoteCommandLineArgument(helperPath),
         '-Path', quoteCommandLineArgument(path),
@@ -426,7 +425,6 @@ end
 local function buildScannerArgs()
     return table.concat({
         '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quotePowerShellArgument(scannerScriptPath()),
         '-AudioDirectory', quotePowerShellArgument(audioDirectoryPath()),

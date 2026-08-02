@@ -335,7 +335,7 @@ local function quotePowerShellArgument(value)
 end
 
 local function resolvePowerShellProgramPath()
-    return '"' .. trim(SKIN:GetVariable('@', '')) .. 'Defaults\\Runtime\\helpers\\BlockHudPowerShellHost.exe"'
+    return 'powershell'
 end
 
 local function rollingHash(text)
@@ -385,7 +385,6 @@ local function buildArgs(command, audioOverride, requestPath, loopEnabled, volum
     local resolvedAudioPath = audioOverride or ''
     local args = {
         '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-STA',
         '-ExecutionPolicy', 'Bypass',
         '-File', quotePowerShellArgument(scriptPath()),
@@ -423,7 +422,6 @@ function webNowPlayingInstallState.buildArgs(action)
     end
     local args = {
         '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quotePowerShellArgument(webNowPlayingInstallState.scriptPath()),
         '-Action', quotePowerShellArgument(normalizedAction),
@@ -444,7 +442,6 @@ local function buildOpenLogFolderArgs()
     return table.concat({
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
-        '-WindowStyle', 'Hidden',
         '-File', quotePowerShellArgument(helperPath),
         '-TargetRoot', quotePowerShellArgument(rootPath),
         '-EmitResultPairs',
@@ -478,7 +475,6 @@ end
 local function buildEmergencyStopArgs()
     local args = {
         '-NoProfile',
-        '-WindowStyle', 'Hidden',
         '-ExecutionPolicy', 'Bypass',
         '-File', quotePowerShellArgument(emergencyStopScriptPath()),
         '-InstanceKey', quotePowerShellArgument(instanceKey()),

@@ -1,6 +1,7 @@
 local M = {}
 
 local RELEASE_NOTES_URL = 'https://github.com/d-meloper/dmelopers-block-hud/releases'
+M.SNOOZE_SECONDS = 24 * 60 * 60
 
 local function trim(value)
     return tostring(value or ''):match('^%s*(.-)%s*$')
@@ -11,6 +12,11 @@ local function resolveValue(value, ...)
         return value(...)
     end
     return value
+end
+
+local function asBoolean(value)
+    local normalized = trim(value):lower()
+    return normalized == '1' or normalized == 'true' or normalized == 'yes' or normalized == 'on'
 end
 
 local function luaString(value)
@@ -101,6 +107,24 @@ function M.IsOutdated(currentVersion, latestVersion)
     return M.CompareVersions(currentVersion, latestVersion) == -1
 end
 
+function M.EvaluateSnooze(enabled, recordedAt, currentTime)
+    if not asBoolean(enabled) then
+        return false, false
+    end
+
+    local recorded = tonumber(trim(recordedAt))
+    local current = tonumber(trim(currentTime)) or tonumber(os.time())
+    if not recorded or recorded <= 0 or not current or current < recorded then
+        return false, true
+    end
+
+    if current - recorded >= M.SNOOZE_SECONDS then
+        return false, true
+    end
+
+    return true, false
+end
+
 function M.ReleaseNotesUrl()
     return RELEASE_NOTES_URL
 end
@@ -137,6 +161,42 @@ function M.Create(options)
 
     local function deferredMeasure()
         return trim(resolveValue(options.deferredMeasure, helper) or '')
+    end
+
+    local function primaryKey()
+        local key = trim(resolveValue(options.primaryKey, helper) or '')
+        if key == '' then
+            return 'Loc_Hotbar_UpdateNotice_Update'
+        end
+        return key
+    end
+
+    local function primaryCallback()
+        local callback = trim(resolveValue(options.primaryCallback, helper) or '')
+        if callback ~= '' then
+            return callback
+        end
+        return trim(resolveValue(options.updateCallback, helper) or 'StartLatestVersionUpdate')
+    end
+
+    local function secondaryKey()
+        local key = trim(resolveValue(options.secondaryKey, helper) or '')
+        if key == '' then
+            return 'Loc_Common_Close'
+        end
+        return key
+    end
+
+    local function secondaryCallback()
+        return trim(resolveValue(options.secondaryCallback, helper) or '')
+    end
+
+    local function modalMode()
+        local mode = trim(resolveValue(options.modalMode, helper) or '')
+        if mode == '' then
+            return 'two-top-action'
+        end
+        return mode
     end
 
     local function token()
@@ -179,13 +239,13 @@ function M.Create(options)
             .. luaString('Loc_Hotbar_UpdateNotice_Title') .. ','
             .. luaString('Loc_Hotbar_UpdateNotice_Message') .. ','
             .. luaString('Loc_Hotbar_UpdateNotice_ReleaseNotes') .. ','
-            .. luaString('Loc_Hotbar_UpdateNotice_Update') .. ','
-            .. luaString('Loc_Common_Close') .. ','
+            .. luaString(primaryKey()) .. ','
+            .. luaString(secondaryKey()) .. ','
             .. luaString(measureName) .. ','
             .. luaString(trim(resolveValue(options.releaseNotesCallback, helper) or 'OpenUpdateReleaseNotes')) .. ','
-            .. luaString(trim(resolveValue(options.updateCallback, helper) or 'StartLatestVersionUpdate')) .. ','
-            .. luaString('') .. ','
-            .. luaString('two-top-action') .. ','
+            .. luaString(primaryCallback()) .. ','
+            .. luaString(secondaryCallback()) .. ','
+            .. luaString(modalMode()) .. ','
             .. luaString('true') .. ','
             .. luaString('true') .. ','
             .. luaString('false') .. ','

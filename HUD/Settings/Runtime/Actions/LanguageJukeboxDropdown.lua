@@ -25,9 +25,6 @@ return function(app)
 
         local currentLanguage = methods.normalizeLanguageCode(methods.readFieldValue(field), methods.normalizeLanguageCode(nil, nil))
         local targetLanguage = methods.normalizeLanguageCode(option.appliedValue, currentLanguage)
-        if targetLanguage == currentLanguage then
-            return false
-        end
 
         state.pendingLanguageSwitchValue = targetLanguage
         state.pendingLanguageSwitchBeforeSnapshot = shallowCopy(beforeSnapshot or methods.captureSnapshot())
@@ -56,16 +53,23 @@ return function(app)
             return false
         end
 
-        methods.applyFieldValue(field, pendingValue, {
+        local changed = methods.applyFieldValue(field, pendingValue, {
             suppressRefresh = true,
             refreshAppAfterItemLabels = true,
         })
+
+        if not changed then
+            methods.syncActiveLocalization(pendingValue)
+            methods.syncItemLabelsForLanguage(pendingValue, {
+                refreshAppOnComplete = true,
+            })
+        end
 
         if submitActionFieldKey ~= '' then
             methods.ExecuteFieldAction(submitActionFieldKey)
         end
 
-        if beforeSnapshot then
+        if changed and beforeSnapshot then
             methods.pushHistory(field.historyLabel, beforeSnapshot)
         end
 

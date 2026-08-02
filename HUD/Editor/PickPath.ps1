@@ -56,6 +56,42 @@ function Join-ShortcutCommandLine([string]$TargetPath, [string]$Arguments) {
     return $target + ' ' + $argumentsText
 }
 
+function Close-ShortcutComObject([AllowNull()][object]$Value) {
+    if ($null -ne $Value -and [System.Runtime.InteropServices.Marshal]::IsComObject($Value)) {
+        [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Value)
+    }
+}
+
+function ConvertTo-ShortcutComPath([string]$Path, [switch]$ExistingFile) {
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $fileSystem = $null
+    $entry = $null
+    try {
+        $fileSystem = New-Object -ComObject Scripting.FileSystemObject
+        if ($ExistingFile) {
+            $entry = $fileSystem.GetFile($fullPath)
+            $shortPath = [string]$entry.ShortPath
+            if (-not [string]::IsNullOrWhiteSpace($shortPath)) {
+                return $shortPath
+            }
+            Close-ShortcutComObject -Value $entry
+            $entry = $null
+        }
+
+        $parentPath = [System.IO.Path]::GetDirectoryName($fullPath)
+        $entry = $fileSystem.GetFolder($parentPath)
+        $shortParent = [string]$entry.ShortPath
+        if (-not [string]::IsNullOrWhiteSpace($shortParent)) {
+            return (Join-Path $shortParent ([System.IO.Path]::GetFileName($fullPath)))
+        }
+        return $fullPath
+    }
+    finally {
+        Close-ShortcutComObject -Value $entry
+        Close-ShortcutComObject -Value $fileSystem
+    }
+}
+
 function Resolve-ShortcutCommandLine([string]$SelectedPath) {
     $resolvedPath = [string]$SelectedPath
     if ([string]::IsNullOrWhiteSpace($resolvedPath)) {
@@ -71,7 +107,9 @@ function Resolve-ShortcutCommandLine([string]$SelectedPath) {
 
     try {
         $shell = New-Object -ComObject WScript.Shell
-        $shortcut = $shell.CreateShortcut($resolvedPath)
+        $shortcut = $shell.CreateShortcut(
+            (ConvertTo-ShortcutComPath -Path $resolvedPath -ExistingFile)
+        )
         $targetPath = [string]$shortcut.TargetPath
         $arguments = [string]$shortcut.Arguments
         $commandLine = Join-ShortcutCommandLine -TargetPath $targetPath -Arguments $arguments
@@ -85,12 +123,8 @@ function Resolve-ShortcutCommandLine([string]$SelectedPath) {
         return $resolvedPath
     }
     finally {
-        if ($shortcut) {
-            [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut)
-        }
-        if ($shell) {
-            [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
-        }
+        Close-ShortcutComObject -Value $shortcut
+        Close-ShortcutComObject -Value $shell
     }
 }
 
@@ -184,6 +218,9 @@ try {
     $pickerForm.AcceptButton = $buttonApp
     $pickerForm.CancelButton = $buttonClose
     $pickerForm.Add_Shown({
+        $pickerForm.TopMost = $true
+        $pickerForm.BringToFront()
+        $pickerForm.Activate()
         $buttonApp.Focus()
     }.GetNewClosure())
 

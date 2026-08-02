@@ -39,7 +39,7 @@ return function(app)
 
 
     local function resolvePowerShellProgramPath()
-        return '"' .. trim(SKIN:GetVariable('@', '')) .. 'Defaults\\Runtime\\helpers\\BlockHudPowerShellHost.exe"'
+        return 'powershell'
     end
 
 

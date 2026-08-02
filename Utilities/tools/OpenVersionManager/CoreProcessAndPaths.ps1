@@ -49,6 +49,74 @@ function TF {
     Format-LocalizedText -Table $script:LocTable -Key $Key -Arguments $normalizedArguments -Fallback $Fallback
 }
 
+function Set-VersionManagerControlTextFit {
+    param(
+        [Parameter(Mandatory = $true)][System.Windows.Forms.Control]$Control,
+        [Parameter(Mandatory = $true)][ValidateRange(1, 100)][single]$BaseFontSize,
+        [ValidateRange(0.1, 1.0)][double]$MinimumScale = 0.70,
+        [ValidateRange(0, 128)][int]$HorizontalPadding = 0,
+        [ValidateRange(0, 128)][int]$VerticalPadding = 0,
+        [switch]$Multiline
+    )
+
+    $text = [string]$Control.Text
+    if ([string]::IsNullOrEmpty($text)) {
+        return [single]$BaseFontSize
+    }
+
+    $availableWidth = [Math]::Max(1, [int]$Control.ClientSize.Width - $HorizontalPadding)
+    $availableHeight = [Math]::Max(1, [int]$Control.ClientSize.Height - $VerticalPadding)
+    $minimumFontSize = [Math]::Max(6.0, [Math]::Round(([double]$BaseFontSize * $MinimumScale), 2))
+    $candidateSize = [double]$BaseFontSize
+    $selectedSize = $minimumFontSize
+    $flags = [System.Windows.Forms.TextFormatFlags]::NoPadding
+    $proposedSize = [System.Drawing.Size]::Empty
+    if ($Multiline) {
+        $flags = $flags -bor [System.Windows.Forms.TextFormatFlags]::WordBreak -bor [System.Windows.Forms.TextFormatFlags]::TextBoxControl
+        $proposedSize = New-Object System.Drawing.Size($availableWidth, [int]::MaxValue)
+    }
+    else {
+        $flags = $flags -bor [System.Windows.Forms.TextFormatFlags]::SingleLine
+    }
+
+    while ($true) {
+        $candidateFont = New-Object System.Drawing.Font(
+            $Control.Font.FontFamily,
+            [single]$candidateSize,
+            $Control.Font.Style,
+            [System.Drawing.GraphicsUnit]::Point)
+        try {
+            $measured = [System.Windows.Forms.TextRenderer]::MeasureText(
+                $text,
+                $candidateFont,
+                $proposedSize,
+                $flags)
+            if ($measured.Width -le $availableWidth -and $measured.Height -le $availableHeight) {
+                $selectedSize = $candidateSize
+                break
+            }
+        }
+        finally {
+            $candidateFont.Dispose()
+        }
+
+        if ($candidateSize -le ($minimumFontSize + 0.01)) {
+            $selectedSize = $minimumFontSize
+            break
+        }
+        $candidateSize = [Math]::Max($minimumFontSize, $candidateSize - 0.25)
+    }
+
+    if ([Math]::Abs(([double]$Control.Font.SizeInPoints - $selectedSize)) -gt 0.01) {
+        $Control.Font = New-Object System.Drawing.Font(
+            $Control.Font.FontFamily,
+            [single]$selectedSize,
+            $Control.Font.Style,
+            [System.Drawing.GraphicsUnit]::Point)
+    }
+    return [single]$selectedSize
+}
+
 function Set-ResultPairValue {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -218,19 +286,17 @@ function Resolve-FullPath {
 }
 
 function Get-PowerShellExecutablePath {
-    $runtimeHost = [Environment]::GetEnvironmentVariable('DMEL_POWERSHELL_HOST')
-    if (-not [string]::IsNullOrWhiteSpace($runtimeHost) -and (Test-Path -LiteralPath $runtimeHost -PathType Leaf)) {
-        return $runtimeHost
+    $candidate = Join-Path $PSHOME 'powershell.exe'
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return [System.IO.Path]::GetFullPath($candidate)
     }
 
-    $toolsRoot = Get-VersionManagerToolsRoot
-    $skinRoot = [System.IO.Path]::GetFullPath((Join-Path $toolsRoot '..\..'))
-    $packagedHost = Join-Path $skinRoot '@Resources\Defaults\Runtime\helpers\BlockHudPowerShellHost.exe'
-    if (Test-Path -LiteralPath $packagedHost -PathType Leaf) {
-        return $packagedHost
+    $command = Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue
+    if ($command -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
+        return [System.IO.Path]::GetFullPath($command.Source)
     }
 
-    throw 'BlockHudPowerShellHost.exe could not be located.'
+    throw 'powershell.exe could not be located.'
 }
 
 function ConvertTo-WindowsCommandLineArgument {
@@ -298,6 +364,82 @@ function New-VersionManagerHostProcessStartInfo {
         $startInfo.StandardErrorEncoding = $script:Utf8NoBom
     }
     return $startInfo
+}
+
+function Invoke-VersionManagerIsolatedScript {
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Parameters,
+        [ValidateRange(5, 3600)][int]$TimeoutSeconds = 1800,
+        [switch]$CancelWhenWindowCloses
+    )
+
+    if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+        throw "Helper script was not found: $ScriptPath"
+    }
+
+    $pipeline = [PowerShell]::Create()
+    $asyncResult = $null
+    try {
+        [void]$pipeline.AddCommand($ScriptPath)
+        foreach ($entry in $Parameters.GetEnumerator()) {
+            $name = [string]$entry.Key
+            $value = $entry.Value
+            if ($value -is [System.Management.Automation.SwitchParameter]) {
+                if ([bool]$value) {
+                    [void]$pipeline.AddParameter($name)
+                }
+                continue
+            }
+            if ($value -is [bool]) {
+                if ($value) {
+                    [void]$pipeline.AddParameter($name)
+                }
+                continue
+            }
+            [void]$pipeline.AddParameter($name, $value)
+        }
+
+        $asyncResult = $pipeline.BeginInvoke()
+        $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+        while (-not $asyncResult.IsCompleted) {
+            [System.Windows.Forms.Application]::DoEvents()
+            if ($CancelWhenWindowCloses -and $script:VersionManagerWindowClosing) {
+                $pipeline.Stop()
+                throw 'Helper operation was canceled because the Skin manager is closing.'
+            }
+            if ([DateTime]::UtcNow -ge $deadline) {
+                $pipeline.Stop()
+                throw ("Helper operation exceeded the {0}-second operation deadline." -f $TimeoutSeconds)
+            }
+            [System.Threading.Thread]::Sleep(50)
+        }
+
+        $output = @($pipeline.EndInvoke($asyncResult))
+        $errors = @($pipeline.Streams.Error | ForEach-Object { [string]$_ })
+        return [PSCustomObject]@{
+            Output = $output
+            Errors = $errors
+            HadErrors = [bool]$pipeline.HadErrors
+        }
+    }
+    finally {
+        $pipeline.Dispose()
+    }
+}
+
+function Get-VersionManagerPassThruObject {
+    param(
+        [AllowNull()][object[]]$Output,
+        [Parameter(Mandatory = $true)][string]$RequiredProperty
+    )
+
+    foreach ($candidate in (@($Output) | Select-Object -Last 20)) {
+        if ($null -ne $candidate -and $null -ne $candidate.PSObject.Properties[$RequiredProperty]) {
+            return $candidate
+        }
+    }
+    return $null
 }
 
 function ConvertTo-PowerShellSingleQuotedLiteral {

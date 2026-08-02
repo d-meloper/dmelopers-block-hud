@@ -2,6 +2,352 @@
 
 # Dot-sourced by the public entrypoint. Keep public CLI contracts in the entrypoint file.
 
+$script:AppPickerShellApplication = $null
+$script:AppPickerShellFolder = $null
+$script:AppPickerIconSourceCache = @{}
+
+function Close-AppPickerIconResolver {
+    $script:AppPickerIconSourceCache = @{}
+
+    foreach ($comObject in @($script:AppPickerShellFolder, $script:AppPickerShellApplication)) {
+        if ($null -ne $comObject -and [System.Runtime.InteropServices.Marshal]::IsComObject($comObject)) {
+            try {
+                [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($comObject)
+            }
+            catch {
+            }
+        }
+    }
+
+    $script:AppPickerShellFolder = $null
+    $script:AppPickerShellApplication = $null
+}
+
+function Get-AppPickerShellFolder {
+    if ($null -ne $script:AppPickerShellFolder) {
+        return $script:AppPickerShellFolder
+    }
+
+    try {
+        $script:AppPickerShellApplication = New-Object -ComObject Shell.Application
+        $script:AppPickerShellFolder = $script:AppPickerShellApplication.NameSpace('shell:AppsFolder')
+        return $script:AppPickerShellFolder
+    }
+    catch {
+        Close-AppPickerIconResolver
+        return $null
+    }
+}
+
+function Get-AppPickerPackageLogoDescriptor {
+    param(
+        [string]$AppID,
+        [string]$PackageInstallPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($AppID) -or
+        [string]::IsNullOrWhiteSpace($PackageInstallPath) -or
+        -not [System.IO.Directory]::Exists($PackageInstallPath)) {
+        return $null
+    }
+
+    $separatorIndex = $AppID.IndexOf('!')
+    if ($separatorIndex -lt 0 -or $separatorIndex -ge ($AppID.Length - 1)) {
+        return $null
+    }
+
+    $manifestPath = [System.IO.Path]::Combine($PackageInstallPath, 'AppxManifest.xml')
+    if (-not [System.IO.File]::Exists($manifestPath)) {
+        return $null
+    }
+
+    try {
+        [xml]$manifest = [System.IO.File]::ReadAllText($manifestPath)
+        $applicationId = $AppID.Substring($separatorIndex + 1)
+        $application = @(
+            $manifest.SelectNodes(
+                "/*[local-name()='Package']/*[local-name()='Applications']/*[local-name()='Application']"
+            )
+        ) | Where-Object {
+            [string]::Equals(
+                [string]$_.GetAttribute('Id'),
+                $applicationId,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )
+        } | Select-Object -First 1
+
+        if ($null -eq $application) {
+            return $null
+        }
+
+        $visualElements = @($application.ChildNodes) | Where-Object {
+            $_.LocalName -eq 'VisualElements'
+        } | Select-Object -First 1
+
+        $logoContracts = @(
+            [PSCustomObject]@{ Name = 'Square44x44Logo'; NominalSize = 44 },
+            [PSCustomObject]@{ Name = 'Square30x30Logo'; NominalSize = 30 },
+            [PSCustomObject]@{ Name = 'SmallLogo'; NominalSize = 30 },
+            [PSCustomObject]@{ Name = 'Logo'; NominalSize = 150 },
+            [PSCustomObject]@{ Name = 'Square150x150Logo'; NominalSize = 150 }
+        )
+        foreach ($contract in $logoContracts) {
+            foreach ($node in @($visualElements, $application)) {
+                if ($null -eq $node -or $null -eq $node.Attributes) {
+                    continue
+                }
+                $attribute = @($node.Attributes) | Where-Object {
+                    $_.LocalName -eq $contract.Name
+                } | Select-Object -First 1
+                $reference = if ($null -ne $attribute) { [string]$attribute.Value } else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($reference) -and
+                    -not $reference.StartsWith('ms-resource:', [System.StringComparison]::OrdinalIgnoreCase)) {
+                    return [PSCustomObject]@{
+                        PackageInstallPath = [System.IO.Path]::GetFullPath($PackageInstallPath)
+                        LogoReference = $reference
+                        NominalSize = [int]$contract.NominalSize
+                    }
+                }
+            }
+        }
+    }
+    catch {
+        return $null
+    }
+
+    return $null
+}
+
+function Get-AppPickerIconSource([string]$AppID) {
+    if ([string]::IsNullOrWhiteSpace($AppID)) {
+        return $null
+    }
+
+    if ($script:AppPickerIconSourceCache.ContainsKey($AppID)) {
+        $cachedSource = $script:AppPickerIconSourceCache[$AppID]
+        if ($null -ne $cachedSource -and $cachedSource.Kind -ne 'Unavailable') {
+            return $cachedSource
+        }
+        return $null
+    }
+
+    $expandedAppId = [Environment]::ExpandEnvironmentVariables($AppID)
+    if ([System.IO.File]::Exists($expandedAppId)) {
+        $source = [PSCustomObject]@{
+            Kind = 'File'
+            Path = [System.IO.Path]::GetFullPath($expandedAppId)
+        }
+        $script:AppPickerIconSourceCache[$AppID] = $source
+        return $source
+    }
+
+    $shellFolder = Get-AppPickerShellFolder
+    $shellItem = $null
+    try {
+        if ($null -ne $shellFolder) {
+            $shellItem = $shellFolder.ParseName($AppID)
+        }
+        if ($null -ne $shellItem) {
+            $targetPath = [string]$shellItem.ExtendedProperty('System.Link.TargetParsingPath')
+            $targetPath = [Environment]::ExpandEnvironmentVariables($targetPath)
+            if ([System.IO.File]::Exists($targetPath)) {
+                $source = [PSCustomObject]@{
+                    Kind = 'File'
+                    Path = [System.IO.Path]::GetFullPath($targetPath)
+                }
+                $script:AppPickerIconSourceCache[$AppID] = $source
+                return $source
+            }
+
+            $packageInstallPath = [string]$shellItem.ExtendedProperty(
+                'System.AppUserModel.PackageInstallPath'
+            )
+            $packageDescriptor = Get-AppPickerPackageLogoDescriptor `
+                -AppID $AppID `
+                -PackageInstallPath $packageInstallPath
+            if ($null -ne $packageDescriptor) {
+                $source = [PSCustomObject]@{
+                    Kind = 'Package'
+                    PackageInstallPath = [string]$packageDescriptor.PackageInstallPath
+                    LogoReference = [string]$packageDescriptor.LogoReference
+                    NominalSize = [int]$packageDescriptor.NominalSize
+                }
+                $script:AppPickerIconSourceCache[$AppID] = $source
+                return $source
+            }
+        }
+    }
+    catch {
+    }
+    finally {
+        if ($null -ne $shellItem -and [System.Runtime.InteropServices.Marshal]::IsComObject($shellItem)) {
+            try {
+                [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shellItem)
+            }
+            catch {
+            }
+        }
+    }
+
+    $script:AppPickerIconSourceCache[$AppID] = [PSCustomObject]@{ Kind = 'Unavailable' }
+    return $null
+}
+
+function Get-AppPickerPackageLogoPath {
+    param(
+        $Source,
+        [int]$Size
+    )
+
+    if ($null -eq $Source -or $Source.Kind -ne 'Package') {
+        return $null
+    }
+
+    try {
+        $packageRoot = [System.IO.Path]::GetFullPath([string]$Source.PackageInstallPath)
+        $relativeLogoPath = ([string]$Source.LogoReference).Replace('/', '\').TrimStart('\')
+        $unqualifiedPath = [System.IO.Path]::GetFullPath(
+            [System.IO.Path]::Combine($packageRoot, $relativeLogoPath)
+        )
+        $rootPrefix = $packageRoot.TrimEnd('\') + '\'
+        if (-not $unqualifiedPath.StartsWith(
+            $rootPrefix,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )) {
+            return $null
+        }
+
+        $assetDirectory = [System.IO.Path]::GetDirectoryName($unqualifiedPath)
+        if (-not [System.IO.Directory]::Exists($assetDirectory)) {
+            return $null
+        }
+
+        $baseName = [System.IO.Path]::GetFileNameWithoutExtension($unqualifiedPath)
+        $extension = [System.IO.Path]::GetExtension($unqualifiedPath)
+        if ([string]::IsNullOrWhiteSpace($baseName) -or
+            [string]::IsNullOrWhiteSpace($extension)) {
+            return $null
+        }
+
+        $escapedBaseName = [System.Text.RegularExpressions.Regex]::Escape($baseName)
+        $escapedExtension = [System.Text.RegularExpressions.Regex]::Escape($extension)
+        $assetNamePattern = '^' + $escapedBaseName +
+            '(?:\.(?:targetsize|scale)-[^.]*)?' + $escapedExtension + '$'
+        $candidates = New-Object System.Collections.Generic.List[object]
+        foreach ($asset in @(Get-ChildItem -LiteralPath $assetDirectory -File -ErrorAction Stop)) {
+            if ($asset.Name -notmatch $assetNamePattern) {
+                continue
+            }
+
+            $qualifierPenalty = 20
+            if ($asset.Name -match '_contrast-') {
+                $qualifierPenalty = 10000
+            }
+            elseif ($asset.Name -match '_altform-unplated') {
+                $qualifierPenalty = 0
+            }
+            elseif ($asset.Name -match '_altform-lightunplated') {
+                $qualifierPenalty = 2
+            }
+            elseif ($asset.Name -notmatch '_altform-') {
+                $qualifierPenalty = 5
+            }
+
+            $score = 5000 + $qualifierPenalty
+            if ($asset.Name -match '\.targetsize-(\d+)') {
+                $assetSize = [int]$Matches[1]
+                $score = ([Math]::Abs($assetSize - $Size) * 10) + $qualifierPenalty
+                if ($assetSize -lt $Size) {
+                    $score += 1
+                }
+            }
+            elseif ($asset.Name -match '\.scale-(\d+)') {
+                $assetSize = [int][Math]::Round(
+                    ([int]$Source.NominalSize * [int]$Matches[1]) / 100.0
+                )
+                $score = 2000 + ([Math]::Abs($assetSize - $Size) * 10) + $qualifierPenalty
+                if ($assetSize -lt $Size) {
+                    $score += 1
+                }
+            }
+            elseif ([string]::Equals(
+                $asset.FullName,
+                $unqualifiedPath,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+                $score = 4000 + $qualifierPenalty
+            }
+
+            $candidates.Add([PSCustomObject]@{
+                Path = $asset.FullName
+                Score = $score
+            })
+        }
+
+        $selected = @($candidates | Sort-Object Score, Path | Select-Object -First 1)
+        if ($selected.Count -gt 0) {
+            return [string]$selected[0].Path
+        }
+    }
+    catch {
+        return $null
+    }
+
+    return $null
+}
+
+function New-AppPickerBitmapFromImagePath {
+    param(
+        [string]$Path,
+        [int]$Size
+    )
+
+    $sourceImage = $null
+    $bitmap = $null
+    $graphics = $null
+    try {
+        $sourceImage = [System.Drawing.Image]::FromFile($Path)
+        $bitmap = New-Object System.Drawing.Bitmap(
+            $Size,
+            $Size,
+            [System.Drawing.Imaging.PixelFormat]::Format32bppPArgb
+        )
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.Clear([System.Drawing.Color]::Transparent)
+        $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+        $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+
+        $scale = [Math]::Min(
+            $Size / [double]$sourceImage.Width,
+            $Size / [double]$sourceImage.Height
+        )
+        $drawWidth = [Math]::Max(1, [int][Math]::Round($sourceImage.Width * $scale))
+        $drawHeight = [Math]::Max(1, [int][Math]::Round($sourceImage.Height * $scale))
+        $drawX = [int][Math]::Floor(($Size - $drawWidth) / 2.0)
+        $drawY = [int][Math]::Floor(($Size - $drawHeight) / 2.0)
+        $graphics.DrawImage(
+            $sourceImage,
+            (New-Object System.Drawing.Rectangle($drawX, $drawY, $drawWidth, $drawHeight))
+        )
+        return $bitmap
+    }
+    catch {
+        if ($null -ne $bitmap) {
+            $bitmap.Dispose()
+        }
+        return $null
+    }
+    finally {
+        if ($null -ne $graphics) {
+            $graphics.Dispose()
+        }
+        if ($null -ne $sourceImage) {
+            $sourceImage.Dispose()
+        }
+    }
+}
+
 function New-FallbackAppBitmap([int]$Size) {
     $bitmap = New-Object System.Drawing.Bitmap($Size, $Size)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
@@ -26,11 +372,61 @@ function Get-AppPickerIconBitmap([string]$AppID, [int]$Size) {
         return $null
     }
 
+    $source = Get-AppPickerIconSource -AppID $AppID
+    if ($null -eq $source) {
+        return $null
+    }
+
+    if ($source.Kind -eq 'Package') {
+        $logoPath = Get-AppPickerPackageLogoPath -Source $source -Size $Size
+        if ([string]::IsNullOrWhiteSpace($logoPath)) {
+            return $null
+        }
+        return New-AppPickerBitmapFromImagePath -Path $logoPath -Size $Size
+    }
+
+    $icon = $null
     try {
-        return [ShellAppIconProvider]::GetBitmap('shell:AppsFolder\' + $AppID, $Size)
+        $candidate = [string]$source.Path
+        if (-not [System.IO.File]::Exists($candidate)) {
+            return $null
+        }
+
+        if ([string]::Equals(
+            [System.IO.Path]::GetExtension($candidate),
+            '.ico',
+            [System.StringComparison]::OrdinalIgnoreCase
+        )) {
+            $icon = New-Object System.Drawing.Icon($candidate, $Size, $Size)
+        }
+        else {
+            $icon = [System.Drawing.Icon]::ExtractAssociatedIcon(
+                [System.IO.Path]::GetFullPath($candidate)
+            )
+        }
+        if ($null -eq $icon) {
+            return $null
+        }
+
+        $bitmap = $icon.ToBitmap()
+        if ($bitmap.Width -eq $Size -and $bitmap.Height -eq $Size) {
+            return $bitmap
+        }
+
+        try {
+            return (New-Object System.Drawing.Bitmap($bitmap, (New-Object System.Drawing.Size($Size, $Size))))
+        }
+        finally {
+            $bitmap.Dispose()
+        }
     }
     catch {
         return $null
+    }
+    finally {
+        if ($null -ne $icon) {
+            $icon.Dispose()
+        }
     }
 }
 
@@ -255,6 +651,11 @@ function Show-FavoriteEditDialog(
     $form.Controls.Add($buttonCancel)
     $form.AcceptButton = $buttonSave
     $form.CancelButton = $buttonCancel
+    $form.Add_Shown({
+        $form.TopMost = $true
+        $form.BringToFront()
+        $form.Activate()
+    })
 
     [void]$form.ShowDialog($Owner)
     $form.Dispose()
@@ -582,6 +983,11 @@ function Show-FavoriteDialog([System.Windows.Forms.IWin32Window]$Owner) {
     $form.CancelButton = $buttonClose
 
     & $dialogState.RefreshList $null
+    $form.Add_Shown({
+        $form.TopMost = $true
+        $form.BringToFront()
+        $form.Activate()
+    })
 
     if ($form.ShowDialog($Owner) -eq [System.Windows.Forms.DialogResult]::OK -and $listBox.SelectedItem) {
         $selected = $listBox.SelectedItem

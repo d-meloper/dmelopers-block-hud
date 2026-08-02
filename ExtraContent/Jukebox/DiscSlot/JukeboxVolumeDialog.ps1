@@ -196,6 +196,8 @@ try {
         $form.Location = New-Object System.Drawing.Point([int]$x, [int]$y)
         $textBox.SelectAll()
         $textBox.Focus()
+        $form.TopMost = $true
+        $form.BringToFront()
         $form.Activate()
     })
 

@@ -4,21 +4,6 @@
 
 [English](README.md) | 한국어
 
-## Windows 보안 및 백신 안내
-
-> [!WARNING]
-> 현재 일부 백신 프로그램과 VirusTotal의 일부 검사 엔진에서 `BlockHudPowerShellHost.exe` 또는 관련 보조 스크립트를 바이러스, 트로이목마 등의 악성 파일로 탐지하는 사례가 확인되고 있습니다. 프로젝트는 이 탐지 현상을 인지하고 있으며, 원인이 될 수 있는 패키지 구성과 실행 경로를 계속 검토하고 있습니다.
-
-DMeloper's Block HUD는 Rainmeter만으로 처리하기 어려운 파일 선택, 이미지 처리, 설정 적용, 데이터 가져오기, 업데이트, 버전 전환, Jukebox 등의 작업을 위해 패키지에 포함된 `BlockHudPowerShellHost.exe`와 로컬 PowerShell 보조 스크립트를 사용합니다.
-
-이 파일은 Block HUD의 정상 기능을 위한 구성 요소이지만, PowerShell 자동화와 새 실행 파일에 대한 백신의 행위·평판 기반 검사로 인해 설치 또는 업데이트 직후 초기화가 지연되거나 경고가 표시될 수 있습니다.
-
-코드 서명은 게시자 신원을 확인하기 쉽게 만들 수 있지만 모든 백신 경고가 사라지는 것을 보장하지는 않습니다. 이 프로젝트는 완전히 무료로 개발·배포·운영되고 있으며, 개발자가 연간 약 20만 원에 달하는 코드 서명 비용을 지속적으로 부담하기 어려워 현재 릴리스 실행 파일에는 디지털 서명을 적용하지 못하고 있습니다.
-
-공식 GitHub Releases에서 받은 패키지만 사용하고 release notes의 SHA256 체크섬을 확인해 주세요. 프로젝트는 향후 업데이트를 통해 보조 프로그램의 실행 경로를 더욱 단순화하고, 백신의 행위 기반 탐지를 유발할 수 있는 동작을 지속적으로 줄일 예정입니다.
-
-[보조 프로그램 사용 목적과 백신 안내](ANTIVIRUS.ko-KR.md)
-
 <p align="center">
   <a href="https://github.com/d-meloper/dmelopers-block-hud/releases/latest"><img alt="Latest release" src="https://raw.githubusercontent.com/d-meloper/dmelopers-block-hud/badges/release.svg"></a>
   <a href="https://github.com/d-meloper/dmelopers-block-hud/releases"><img alt="Total downloads" src="https://raw.githubusercontent.com/d-meloper/dmelopers-block-hud/badges/downloads.svg"></a>
@@ -47,6 +32,8 @@ Rainmeter나 스킨 설치에 익숙하지 않은 사용자는 아래 스킨 노
 - 실행 취소, 다시 실행, 새로고침, 초기화, 위치, 테마, 폰트, 시작 옵션을 포함한 설정 창
 - HUD 수동 드래그 및 스냅 배치 옵션
 - 구버전 스킨 데이터 가져오기 지원
+- 릴리즈 노트, 24시간 알림 미루기, 스킨 내 최신 버전 업데이트를 제공하는 가벼운 업데이트 알림
+- 다른 설치본은 유지하면서 같은 버전을 다시 내려받는 확인형 현재 스킨 초기화
 - Korea / Global 두 가지 공개 패키지
 
 ## 다운로드
@@ -63,7 +50,7 @@ GitHub에서 직접 설치하려는 경우에는 반드시 `.rmskin` 파일을 �
 
 두 variant는 모두 같은 Rainmeter 스킨 폴더인 `DMeloper's Block HUD`에 설치되므로, 나란히 공존하도록 설계되지 않았습니다. 한 variant 위에 다른 variant를 설치하면 기존 스킨 폴더가 덮어써질 수 있습니다.
 
-업데이트는 가능하면 스킨에 포함된 `Skin manager`를 사용하세요. `Skin manager`는 GitHub Release tag를 기준으로 최신 버전을 확인하고, 현재 설치된 variant에 맞는 ZIP 패키지를 적용합니다. GitHub에서 수동으로 다시 설치하려는 경우에는 `.rmskin` 파일을 사용하세요.
+업데이트는 가능하면 스킨에 포함된 `Skin manager`를 사용하세요. `Skin manager`는 과거 릴리즈 목록 전체를 불러오지 않고 현재 설치된 variant의 검증된 최신 릴리즈 정보를 확인해 맞는 ZIP 패키지를 적용합니다. 호환되는 설정, 아이템, 사용자 이미지와 로컬 음원은 새 설치본으로 이어지며, 일부 아이템 이미지 필드를 사용할 수 없는 경우에는 해당 필드만 비우기 전에 확인을 요청합니다. GitHub에서 수동으로 다시 설치하려는 경우에는 `.rmskin` 파일을 사용하세요.
 
 ## 요구 사항
 
@@ -91,6 +78,13 @@ GitHub에서 직접 설치하려는 경우에는 반드시 `.rmskin` 파일을 �
 - 중국어 간체 (`zh-CN`)
 - 아르메니아어 (`hy-AM`)
 - 덴마크어 (`da-DK`)
+- 핀란드어 (`fi-FI`)
+- 포르투갈어 (`pt-PT`)
+- 브라질 포르투갈어 (`pt-BR`)
+- 힝글리시/우르디시 (`hi-Latn`)
+- 페르시아어 (`fa-IR`)
+- 인도네시아어 (`id-ID`)
+- 독일어 (`de-DE`)
 
 스킨 번역을 돕거나 기존 번역을 개선하고 싶다면 DMeloper's Block HUD Translation Hub를 이용해 주세요. 코드나 Rainmeter 파일을 직접 수정할 필요는 없으며, 번역 작업은 검토 가능한 TSV/스프레드시트 파일을 통해 진행됩니다.
 

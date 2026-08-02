@@ -2,9 +2,12 @@
 param(
     [Parameter(Mandatory = $true)][string]$CurrentTargetRoot,
     [Parameter(Mandatory = $true)][string]$PackagePath,
+    [string]$ExpectedVersion,
     [string]$ExpectedReleaseVariant,
+    [switch]$ResetCurrentVersion,
     [switch]$NonInteractive,
-    [switch]$EmitResultPairs
+    [switch]$EmitResultPairs,
+    [switch]$PassThruResultObject
 )
 
 Set-StrictMode -Version 2.0
@@ -14,19 +17,23 @@ $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $script:LogStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 try {
     [Console]::OutputEncoding = $script:Utf8NoBom
+    $OutputEncoding = $script:Utf8NoBom
 }
 catch {
 }
 
 . (Join-Path $PSScriptRoot 'Localization.Common.ps1')
-. (Join-Path $PSScriptRoot 'VersionManager.ReleaseCatalog.ps1')
+. (Join-Path $PSScriptRoot 'VersionManager.ReleaseIdentity.ps1')
 
 $script:LogMessages = New-Object System.Collections.Generic.List[string]
 $script:LogPath = Get-BlockHudCanonicalLogPath -ScriptRoot $PSScriptRoot
 $script:ResolvedCurrentRoot = ''
 $script:ResolvedLatestRoot = ''
 $script:ResolvedStageRoot = ''
+$script:ExtractRoot = ''
+$script:StageParentRoot = ''
 $script:ReplacementRollbackRoot = ''
+$script:ReplacementRollbackParent = ''
 $script:FailedLatestRoot = ''
 $script:LatestRootCreated = $false
 $script:StageRootCreated = $false
@@ -34,6 +41,9 @@ $script:FixedRootReplacementStarted = $false
 $script:FixedRootInstalled = $false
 $script:ImportStarted = $false
 $script:SwitchSucceeded = $false
+$script:PostUpdateActivationSucceeded = $false
+$script:ResetRecoveryTransaction = $null
+$script:ResetRecoveryGuardReady = $false
 $script:ResultPairs = [ordered]@{
     DMEL_STATUS = ''
     DMEL_SOURCEPATH = ''
@@ -45,6 +55,7 @@ $script:ResultPairs = [ordered]@{
 $script:ModuleRoot = Join-Path $PSScriptRoot 'UpdateToLatestVersion'
 . (Join-Path $script:ModuleRoot 'CorePathsAndPackage.ps1')
 . (Join-Path $script:ModuleRoot 'ReplacementAndSwitch.ps1')
+. (Join-Path $script:ModuleRoot 'ResetRecovery.ps1')
 
 
 
@@ -109,13 +120,54 @@ try {
     Invoke-UpdateToLatest
 }
 catch {
-    if ($script:FixedRootReplacementStarted -and -not $script:FixedRootInstalled -and
+    $operationError = $_
+    if ($ResetCurrentVersion -and $null -ne $script:ResetRecoveryTransaction -and
+        -not $script:PostUpdateActivationSucceeded) {
+        try {
+            if (-not [string]::IsNullOrWhiteSpace($script:ReplacementRollbackRoot) -and
+                (Test-Path -LiteralPath $script:ReplacementRollbackRoot -PathType Container)) {
+                if (Test-Path -LiteralPath $script:ResolvedCurrentRoot -PathType Container) {
+                    Restore-InstalledFixedRootBestEffort `
+                        -FinalRoot $script:ResolvedCurrentRoot `
+                        -RollbackRoot $script:ReplacementRollbackRoot `
+                        -Reason 'current-version reset failure' | Out-Null
+                }
+                else {
+                    Restore-FixedRootBestEffort -FinalRoot $script:ResolvedCurrentRoot -RollbackRoot $script:ReplacementRollbackRoot
+                    $script:FixedRootReplacementStarted = $false
+                }
+            }
+            Set-ResetRecoveryPhase -Phase 'Restored'
+            if (-not $script:ResetRecoveryGuardReady) {
+                Remove-SafeUpdateTempRootBestEffort -Root ([string]$script:ResetRecoveryTransaction.JournalRoot) -Reason 'recovery guard startup failure'
+            }
+        }
+        catch {
+            Write-Log ("Current-version reset restore attempt failed in outer catch: {0}" -f $_.Exception.Message) 'ERROR'
+            try {
+                Set-ResetRecoveryPhase -Phase 'RecoveryPending'
+            }
+            catch {
+                Write-Log ("Could not hand failed reset restoration to the recovery guard: {0}" -f $_.Exception.Message) 'ERROR'
+            }
+        }
+    }
+    elseif ($script:FixedRootReplacementStarted -and -not $script:PostUpdateActivationSucceeded -and
         -not [string]::IsNullOrWhiteSpace($script:ResolvedCurrentRoot) -and
         -not [string]::IsNullOrWhiteSpace($script:ReplacementRollbackRoot)) {
         try {
-            if (-not (Test-Path -LiteralPath $script:ResolvedCurrentRoot) -and
+            if (-not [string]::IsNullOrWhiteSpace($script:ReplacementRollbackRoot) -and
                 (Test-Path -LiteralPath $script:ReplacementRollbackRoot -PathType Container)) {
-                Restore-FixedRootBestEffort -FinalRoot $script:ResolvedCurrentRoot -RollbackRoot $script:ReplacementRollbackRoot
+                if (Test-Path -LiteralPath $script:ResolvedCurrentRoot -PathType Container) {
+                    Restore-InstalledFixedRootBestEffort `
+                        -FinalRoot $script:ResolvedCurrentRoot `
+                        -RollbackRoot $script:ReplacementRollbackRoot `
+                        -Reason 'fixed-root update failure' | Out-Null
+                }
+                else {
+                    Restore-FixedRootBestEffort -FinalRoot $script:ResolvedCurrentRoot -RollbackRoot $script:ReplacementRollbackRoot
+                    $script:FixedRootReplacementStarted = $false
+                }
             }
         }
         catch {
@@ -149,13 +201,21 @@ catch {
     else {
         Set-ResultPairValue -Key 'DMEL_BACKUPPATH' -Value ''
     }
-    Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value $_.Exception.Message
-    Write-Log $_.Exception.Message 'ERROR'
-    if ($_.ScriptStackTrace) {
-        Write-Log $_.ScriptStackTrace 'ERROR'
+    Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value $operationError.Exception.Message
+    Write-Log $operationError.Exception.Message 'ERROR'
+    if ($operationError.ScriptStackTrace) {
+        Write-Log $operationError.ScriptStackTrace 'ERROR'
     }
 }
 finally {
+    Remove-UpdateExtractRootBestEffort
+    Remove-UpdateStageParentBestEffort
+    Remove-UpdateFailedRootBestEffort
     Save-Log
-    Emit-ResultPairs
+    if ($PassThruResultObject) {
+        Write-Output ([PSCustomObject]$script:ResultPairs)
+    }
+    else {
+        Emit-ResultPairs
+    }
 }

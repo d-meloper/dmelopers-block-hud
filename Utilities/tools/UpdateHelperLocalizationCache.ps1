@@ -7,6 +7,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $utf16LeBom = New-Object System.Text.UnicodeEncoding($false, $true)
 $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
 . (Join-Path $PSScriptRoot 'Localization.Common.ps1')
 
 function Resolve-FullPath {

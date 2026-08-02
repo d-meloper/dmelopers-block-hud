@@ -9,6 +9,7 @@ $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 try {
     [Console]::OutputEncoding = $script:Utf8NoBom
+    $OutputEncoding = $script:Utf8NoBom
 }
 catch {
 }
@@ -113,7 +114,7 @@ function Test-JukeboxPlayerProcess {
 
     try {
         $process = Get-Process -Id $ProcessId -ErrorAction Stop
-        if ($process.ProcessName -notin @('BlockHudPowerShellHost', 'powershell', 'pwsh')) {
+        if ($process.ProcessName -ne 'powershell') {
             return $false
         }
 

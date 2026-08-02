@@ -197,11 +197,13 @@ function Normalize-ImportItemFieldValue {
         [string]$Field,
         [AllowNull()]
         [string]$Value,
-        [hashtable]$ImageRenameMap
+        [hashtable]$ImageRenameMap,
+        [string]$RepairContext = '',
+        [string]$RepairKey = ''
     )
 
     if ($Field -eq 'Image') {
-        return (Repair-ImportImageValue -Value $Value -ImageRenameMap $ImageRenameMap)
+        return (Repair-ImportImageValue -Value $Value -ImageRenameMap $ImageRenameMap -RepairContext $RepairContext -RepairKey $RepairKey)
     }
     if ($Field -eq 'ConfirmBeforeRun') {
         if ([string]$Value -eq '1') {
@@ -246,12 +248,15 @@ function Set-ItemSectionValues {
         [string]$Prefix,
         [Parameter(Mandatory = $true)]
         [hashtable]$Values,
-        [hashtable]$ImageRenameMap
+        [hashtable]$ImageRenameMap,
+        [string]$RepairContext = '',
+        [string]$RepairKeyPrefix = ''
     )
 
     foreach ($field in Get-ImportItemFields) {
         $value = if ($Values.ContainsKey($field)) { [string]$Values[$field] } else { '' }
-        $value = Normalize-ImportItemFieldValue -Field $field -Value $value -ImageRenameMap $ImageRenameMap
+        $repairKey = if ([string]::IsNullOrWhiteSpace($RepairKeyPrefix)) { '' } else { "${RepairKeyPrefix}_${field}" }
+        $value = Normalize-ImportItemFieldValue -Field $field -Value $value -ImageRenameMap $ImageRenameMap -RepairContext $RepairContext -RepairKey $repairKey
         Set-MapValue -Map $Variables -Key "${Prefix}_${field}" -Value $value
     }
 }
@@ -298,7 +303,9 @@ function Move-HotbarSlot10ToInventoryIfCustom {
         [string]$SourcePrefix,
         [Parameter(Mandatory = $true)]
         [string]$Context,
-        [hashtable]$ImageRenameMap
+        [hashtable]$ImageRenameMap,
+        [string]$RepairContext = '',
+        [string]$RepairKeyPrefix = ''
     )
 
     if ((Test-ItemSectionEmpty -Variables $SourceVariables -Prefix $SourcePrefix) -or (Test-ReservedHotbarSlot10Section -Variables $SourceVariables -Prefix $SourcePrefix)) {
@@ -311,7 +318,8 @@ function Move-HotbarSlot10ToInventoryIfCustom {
         return $false
     }
 
-    Set-ItemSectionValues -Variables $InventoryVariables -Prefix $targetPrefix -Values (Get-ItemSectionValues -Variables $SourceVariables -Prefix $SourcePrefix) -ImageRenameMap $ImageRenameMap
+    $resolvedRepairKeyPrefix = if ([string]::IsNullOrWhiteSpace($RepairKeyPrefix)) { $SourcePrefix } else { $RepairKeyPrefix }
+    Set-ItemSectionValues -Variables $InventoryVariables -Prefix $targetPrefix -Values (Get-ItemSectionValues -Variables $SourceVariables -Prefix $SourcePrefix) -ImageRenameMap $ImageRenameMap -RepairContext $RepairContext -RepairKeyPrefix $resolvedRepairKeyPrefix
     Write-Log "$Context slot 10 custom data moved to $targetPrefix to preserve the v1.1 inventory button."
     return $true
 }
@@ -331,7 +339,7 @@ function Move-LegacyHotbarSlot10IfCustom {
 
     $sourceVariables = Read-VariablesFile -Path $SourceHotbarPath
     $inventoryVariables = Read-VariablesFile -Path $TargetInventoryPath
-    $changed = Move-HotbarSlot10ToInventoryIfCustom -SourceVariables $sourceVariables -InventoryVariables $inventoryVariables -SourcePrefix 'HotbarItem_Slot10' -Context 'Legacy hotbar' -ImageRenameMap $ImageRenameMap
+    $changed = Move-HotbarSlot10ToInventoryIfCustom -SourceVariables $sourceVariables -InventoryVariables $inventoryVariables -SourcePrefix 'HotbarItem_Slot10' -Context 'Legacy hotbar' -ImageRenameMap $ImageRenameMap -RepairContext 'source HotbarItems.inc'
     if (-not $changed) {
         return
     }
@@ -388,7 +396,7 @@ function Commit-EditorDraftIfActive {
 
         $slot = $matches[1]
         $field = $matches[2]
-        $value = Normalize-ImportItemFieldValue -Field $field -Value ([string]$sourceVariables[$key]) -ImageRenameMap $ImageRenameMap
+        $value = Normalize-ImportItemFieldValue -Field $field -Value ([string]$sourceVariables[$key]) -ImageRenameMap $ImageRenameMap -RepairContext 'active source EditorDraft.inc' -RepairKey $key
 
         if ($slot -eq 'Slot10') {
             Set-MapValue -Map $draftSlot10 -Key "DraftSlot10_${field}" -Value $value
@@ -410,10 +418,10 @@ function Commit-EditorDraftIfActive {
         foreach ($field in Get-ImportItemFields) {
             $sourceKey = "DraftSlot10_${field}"
             $value = if ($draftSlot10.Contains($sourceKey)) { $draftSlot10[$sourceKey] } else { '' }
-            $value = Normalize-ImportItemFieldValue -Field $field -Value ([string]$value) -ImageRenameMap $ImageRenameMap
+            $value = Normalize-ImportItemFieldValue -Field $field -Value ([string]$value) -ImageRenameMap $ImageRenameMap -RepairContext 'active source EditorDraft.inc' -RepairKey "EditorDraftItem_Slot10_${field}"
             Set-MapValue -Map $slot10Values -Key "DraftSlot10_${field}" -Value $value
         }
-        $inventoryChanged = (Move-HotbarSlot10ToInventoryIfCustom -SourceVariables $slot10Values -InventoryVariables $inventoryVariables -SourcePrefix 'DraftSlot10' -Context 'Active editor draft' -ImageRenameMap $ImageRenameMap) -or $inventoryChanged
+        $inventoryChanged = (Move-HotbarSlot10ToInventoryIfCustom -SourceVariables $slot10Values -InventoryVariables $inventoryVariables -SourcePrefix 'DraftSlot10' -Context 'Active editor draft' -ImageRenameMap $ImageRenameMap -RepairContext 'active source EditorDraft.inc' -RepairKeyPrefix 'EditorDraftItem_Slot10') -or $inventoryChanged
     }
 
     if ($hotbarChanged) {
@@ -462,7 +470,7 @@ function Merge-EditorDraftIfActive {
     foreach ($key in $sourceVariables.Keys) {
         $value = $sourceVariables[$key]
         if ($key -match '_Image$') {
-            $value = Repair-ImportImageValue -Value $value -ImageRenameMap $ImageRenameMap
+            $value = Repair-ImportImageValue -Value $value -ImageRenameMap $ImageRenameMap -RepairContext 'active source EditorDraft.inc' -RepairKey $key
         }
         elseif ($key -match '_ConfirmBeforeRun$') {
             $value = if ([string]$value -eq '1') { '1' } else { '0' }
@@ -630,6 +638,10 @@ function Ensure-CacheFormat2 {
 }
 
 function Invoke-Migration {
+    if (-not [string]::IsNullOrWhiteSpace($PackageIdentity) -and $PackageIdentity.Trim() -notmatch '^[0-9A-Fa-f]{64}$') {
+        throw 'PackageIdentity must be blank or a SHA-256 value containing exactly 64 hexadecimal characters.'
+    }
+
     if ([string]::IsNullOrWhiteSpace($TargetRoot)) {
         $TargetRoot = Get-ImportFromOldVersionDefaultTargetRoot
     }
@@ -677,11 +689,21 @@ function Invoke-Migration {
     $targetItemImageDirectory = Join-RootPath -Root $resolvedTargetRoot -RelativePath '@Resources\Customs\Images\Items'
     $importedLanguageCode = $null
 
+    Initialize-ImportProgress -OwnerRoot $ProgressOwnerRoot -Token $ProgressToken -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
+    $script:ImportAudioWorkload = Get-JukeboxAudioMigrationWorkload -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
+    $script:ImportProgressDetailVisible = Test-ImportProgressDetailThreshold -TotalBytes ([int64]$script:ImportAudioWorkload.TotalBytes)
+
     if ($ValidateOnly) {
         Preflight-SourceState -SourceRoot $resolvedSourceRoot
         $importedLanguageCode = Resolve-ImportedLanguageCode -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
         Assert-MigrationTargetImportState -Root $resolvedTargetRoot -ImportedLanguageCode $importedLanguageCode
-        Assert-ImportableItemImageReferences -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceEditorDraftPath $sourceEditorDraftPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
+        $script:ItemImageCompatibilityPlan = New-ItemImageCompatibilityPlan -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceEditorDraftPath $sourceEditorDraftPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
+        Set-ItemImageCompatibilityResult -Plan $script:ItemImageCompatibilityPlan
+        if ($script:ItemImageCompatibilityPlan.Compatibility -eq 'REPAIRABLE' -and -not $AllowItemImageRepair) {
+            $script:PreserveRepairableCompatibilityOnError = $true
+            Assert-ImportableItemImageReferences -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceEditorDraftPath $sourceEditorDraftPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
+            throw ("Legacy import found item image references that require an approved compatibility repair: {0}" -f $script:ItemImageCompatibilityPlan.Summary)
+        }
 
         Write-Log 'Legacy import validation passed.'
         return
@@ -692,7 +714,19 @@ function Invoke-Migration {
     $importedLanguageCode = Resolve-ImportedLanguageCode -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
     Assert-MigrationTargetImportState -Root $resolvedTargetRoot -ImportedLanguageCode $importedLanguageCode
 
-    Assert-ImportableItemImageReferences -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceEditorDraftPath $sourceEditorDraftPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
+    $script:ItemImageCompatibilityPlan = New-ItemImageCompatibilityPlan -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceEditorDraftPath $sourceEditorDraftPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
+    Set-ItemImageCompatibilityResult -Plan $script:ItemImageCompatibilityPlan
+    if ($script:ItemImageCompatibilityPlan.Compatibility -eq 'REPAIRABLE') {
+        if (-not $AllowItemImageRepair) {
+            $script:PreserveRepairableCompatibilityOnError = $true
+            Assert-ImportableItemImageReferences -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceEditorDraftPath $sourceEditorDraftPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
+            throw ("Legacy import found item image references that require an approved compatibility repair: {0}" -f $script:ItemImageCompatibilityPlan.Summary)
+        }
+        Enable-ApprovedItemImageRepairPlan -Plan $script:ItemImageCompatibilityPlan
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($ExpectedRepairPlanId)) {
+        throw 'The approved item image repair plan is stale because the current data no longer requires that repair. Run compatibility preflight again.'
+    }
 
     Backup-TargetStateToTemporaryRollback -TargetRoot $resolvedTargetRoot
     $script:ImportTargetMutationStarted = $true
@@ -701,19 +735,28 @@ function Invoke-Migration {
     Add-ItemConfirmBeforeRunBackfill -Backfill $hotbarBackfill -Kind Hotbar
     $inventoryBackfill = New-VariablesMap
     Add-ItemConfirmBeforeRunBackfill -Backfill $inventoryBackfill -Kind Inventory
-    Merge-VariablesFile -SourcePath $sourceHotbarPath -TargetPath $targetHotbarPath -SameKeysOnly -ExcludeKeyPatterns @('^HotbarItem_Slot10_') -Backfill $hotbarBackfill -BackfillBeforeMerge -ImageRenameMap $imageRenameMap
+    Merge-VariablesFile -SourcePath $sourceHotbarPath -TargetPath $targetHotbarPath -SameKeysOnly -ExcludeKeyPatterns @('^HotbarItem_Slot10_') -Backfill $hotbarBackfill -BackfillBeforeMerge -ImageRenameMap $imageRenameMap -RepairContext 'source HotbarItems.inc'
     Normalize-HotbarSlot10ReservedLabel -TargetHotbarPath $targetHotbarPath -LanguageCode $importedLanguageCode -TargetRoot $resolvedTargetRoot
-    Merge-VariablesFile -SourcePath $sourceInventoryPath -TargetPath $targetInventoryPath -SameKeysOnly -Backfill $inventoryBackfill -BackfillBeforeMerge -ImageRenameMap $imageRenameMap
-    Merge-ImageAdjustmentsFile -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'ImageAdjustments.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'ImageAdjustments.inc') -ImageRenameMap $imageRenameMap
+    Merge-VariablesFile -SourcePath $sourceInventoryPath -TargetPath $targetInventoryPath -SameKeysOnly -Backfill $inventoryBackfill -BackfillBeforeMerge -ImageRenameMap $imageRenameMap -RepairContext 'source InventoryItems.inc'
+    $sourceImageAdjustmentsPath = Join-RootPath -Root $sourceData -RelativePath 'ImageAdjustments.inc'
+    $targetImageAdjustmentsPath = Join-RootPath -Root $targetData -RelativePath 'ImageAdjustments.inc'
+    Merge-ImageAdjustmentsFile -SourcePath $sourceImageAdjustmentsPath -TargetPath $targetImageAdjustmentsPath -ImageRenameMap $imageRenameMap -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
     Merge-ItemImagesCatalog -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'ItemImages.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'ItemImages.inc') -ImageRenameMap $imageRenameMap
     Rebuild-ImageAdjustmentsCatalog -TargetPath (Join-RootPath -Root $targetData -RelativePath 'ImageAdjustments.inc') -ImageDirectory $targetItemImageDirectory
+    Assert-ImportedImageAdjustmentIntegrity -SourcePath $sourceImageAdjustmentsPath -TargetPath $targetImageAdjustmentsPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory -ImageRenameMap $imageRenameMap
     Move-LegacyHotbarSlot10IfCustom -SourceHotbarPath $sourceHotbarPath -TargetInventoryPath $targetInventoryPath -ImageRenameMap $imageRenameMap
     Commit-EditorDraftIfActive -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'EditorDraft.inc') -TargetHotbarPath $targetHotbarPath -TargetInventoryPath $targetInventoryPath -ImageRenameMap $imageRenameMap | Out-Null
     Rebuild-EditorDraftFromImportedItems -TargetRoot $resolvedTargetRoot
+    Assert-ImportedItemImageIntegrity -TargetRoot $resolvedTargetRoot -TargetHotbarPath $targetHotbarPath -TargetInventoryPath $targetInventoryPath -TargetImageDirectory $targetItemImageDirectory
     Merge-ResponsiveLayoutState -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'ResponsiveLayoutState.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'ResponsiveLayoutState.inc') -SourceRoot $resolvedSourceRoot
     Merge-HerobrineStatsFile -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'HerobrineStats.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'HerobrineStats.inc')
     Merge-HerobrineStateFile -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'HerobrineState.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'HerobrineState.inc')
     Merge-LineFile -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'EditorFavoritesCatalog.txt') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'EditorFavoritesCatalog.txt')
+    Merge-ProgramActionLabels -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
+    Merge-MinecraftSkinHistory -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
+    Assert-MinecraftSkinHistoryIntegrity -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
+
+    Merge-JukeboxUserData -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot -Workload $script:ImportAudioWorkload
 
     Copy-PlayerSkinCacheFiles -SourceDirectory (Join-RootPath -Root $resolvedSourceRoot -RelativePath '@Resources\Customs\Images\Player') -TargetDirectory (Join-RootPath -Root $resolvedTargetRoot -RelativePath '@Resources\Customs\Images\Player')
 
@@ -722,7 +765,9 @@ function Invoke-Migration {
     Normalize-ImportedMinecraftSkinState -TargetRoot $resolvedTargetRoot
     Sync-ActiveLocalizationCatalog -TargetRoot $resolvedTargetRoot -LanguageCode $importedLanguageCode
     Set-LegacyUpdaterZPosBootstrapPending -TargetRoot $resolvedTargetRoot -SourceVersion $sourceVersion
+    Write-ImportProgress -Stage 'validating' -CompletedBytes 0 -TotalBytes 1 -CompletedFiles 0 -TotalFiles 1 -Force
     Validate-TouchedRainmeterFiles
+    Write-ImportProgress -Stage 'validating' -CompletedBytes 1 -TotalBytes 1 -CompletedFiles 1 -TotalFiles 1 -Force
     Install-RootConfigNameCompatModule -SourceRoot $resolvedSourceRoot
     if (-not [string]::IsNullOrWhiteSpace($script:EphemeralRollbackRoot)) {
         Remove-TemporaryRollbackRootBestEffort -RollbackRoot $script:EphemeralRollbackRoot -Reason 'successful legacy import'

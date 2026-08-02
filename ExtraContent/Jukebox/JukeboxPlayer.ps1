@@ -26,6 +26,7 @@ $script:LastHeartbeatUnixSeconds = 0
 
 try {
     [Console]::OutputEncoding = $script:Utf8NoBom
+    $OutputEncoding = $script:Utf8NoBom
 }
 catch {
 }
@@ -561,6 +562,20 @@ function Quote-NativeArgument {
     return '"' + ($value -replace '"', '\"') + '"'
 }
 
+function Get-RuntimePowerShellPath {
+    $candidate = Join-Path $PSHOME 'powershell.exe'
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return [System.IO.Path]::GetFullPath($candidate)
+    }
+
+    $command = Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue
+    if ($command -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
+        return [System.IO.Path]::GetFullPath($command.Source)
+    }
+
+    throw 'powershell.exe could not be located.'
+}
+
 function Start-ServerProcess {
     param([Parameter(Mandatory = $true)][string]$ResolvedAudioPath)
 
@@ -569,7 +584,7 @@ function Start-ServerProcess {
         return
     }
 
-    $powerShellPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $powerShellPath = Get-RuntimePowerShellPath
     $arguments = @(
         '-NoProfile',
         '-STA',

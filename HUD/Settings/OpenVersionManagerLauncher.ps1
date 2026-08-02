@@ -11,6 +11,7 @@ $ErrorActionPreference = 'Stop'
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $helperProcessTimeoutMilliseconds = 40000
+$script:ResolvedTargetRoot = ''
 try {
     [Console]::OutputEncoding = $utf8NoBom
     $OutputEncoding = $utf8NoBom
@@ -52,13 +53,18 @@ function Write-LauncherFileLog {
         if ([string]::IsNullOrWhiteSpace($path)) {
             return
         }
+        $loggedTargetRoot = [string]$script:ResolvedTargetRoot
+        if ([string]::IsNullOrWhiteSpace($loggedTargetRoot)) {
+            $loggedTargetRoot = [string]$TargetRoot
+        }
         $lines = @(
             '<VersionManagerLauncher>',
             ('timeUtc={0}' -f ((Get-Date).ToUniversalTime().ToString('o'))),
             ('stage={0}' -f $Stage),
             ('pid={0}' -f $PID),
             ('scriptRoot={0}' -f $PSScriptRoot),
-            ('targetRoot={0}' -f [string]$TargetRoot),
+            ('targetRootInput={0}' -f [string]$TargetRoot),
+            ('targetRoot={0}' -f $loggedTargetRoot),
             ('launchToken={0}' -f [string]$LaunchToken),
             ('message={0}' -f [string]$Message),
             '</VersionManagerLauncher>',
@@ -149,10 +155,52 @@ function Read-LaunchStateJsonShared {
     return $null
 }
 
+function Resolve-LauncherTargetRoot {
+    param([AllowNull()][string]$Value)
+
+    $candidate = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($candidate)) {
+        throw 'TargetRoot is empty.'
+    }
+
+    while ($candidate.Length -ge 2) {
+        $first = $candidate.Substring(0, 1)
+        $last = $candidate.Substring($candidate.Length - 1, 1)
+        if (($first -eq '"' -and $last -eq '"') -or ($first -eq "'" -and $last -eq "'")) {
+            $candidate = $candidate.Substring(1, $candidate.Length - 2)
+            if ([string]::IsNullOrWhiteSpace($candidate)) {
+                throw 'TargetRoot is empty after removing wrapper quotes.'
+            }
+            continue
+        }
+        break
+    }
+
+    foreach ($character in $candidate.ToCharArray()) {
+        if ([char]::IsControl($character)) {
+            throw 'TargetRoot contains a control character.'
+        }
+    }
+
+    $candidate = [Environment]::ExpandEnvironmentVariables($candidate)
+    if ([System.IO.Path]::IsPathRooted($candidate)) {
+        $resolved = [System.IO.Path]::GetFullPath($candidate)
+    }
+    else {
+        $resolved = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot $candidate))
+    }
+
+    if (-not (Test-Path -LiteralPath $resolved -PathType Container)) {
+        throw ("TargetRoot does not exist: {0}" -f $resolved)
+    }
+    return $resolved
+}
+
 function Test-LaunchStateShown {
+    param([Parameter(Mandatory = $true)][string]$ResolvedTargetRoot)
+
     try {
-        $resolvedTargetRoot = [System.IO.Path]::GetFullPath($TargetRoot)
-        $statePath = Join-Path $resolvedTargetRoot '@Resources\Customs\Data\VersionManagerLaunchState.json'
+        $statePath = Join-Path $ResolvedTargetRoot '@Resources\Customs\Data\VersionManagerLaunchState.json'
         if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
             return $false
         }
@@ -248,18 +296,17 @@ function Join-WindowsCommandLineArguments {
 }
 
 function Get-PowerShellExecutablePath {
-    $runtimeHost = [Environment]::GetEnvironmentVariable('DMEL_POWERSHELL_HOST')
-    if (-not [string]::IsNullOrWhiteSpace($runtimeHost) -and (Test-Path -LiteralPath $runtimeHost -PathType Leaf)) {
-        return $runtimeHost
+    $candidate = Join-Path $PSHOME 'powershell.exe'
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return [System.IO.Path]::GetFullPath($candidate)
     }
 
-    $skinRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-    $packagedHost = Join-Path $skinRoot '@Resources\Defaults\Runtime\helpers\BlockHudPowerShellHost.exe'
-    if (Test-Path -LiteralPath $packagedHost -PathType Leaf) {
-        return $packagedHost
+    $command = Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue
+    if ($command -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
+        return [System.IO.Path]::GetFullPath($command.Source)
     }
 
-    throw 'BlockHudPowerShellHost.exe could not be located.'
+    throw 'powershell.exe could not be located.'
 }
 
 function Invoke-HelperProcess {
@@ -268,85 +315,88 @@ function Invoke-HelperProcess {
         [Parameter(Mandatory = $true)][hashtable]$Parameters
     )
 
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $HelperPath)
+    $arguments = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($argument in @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', $HelperPath)) {
+        [void]$arguments.Add([string]$argument)
+    }
     foreach ($name in @('TargetRoot', 'LaunchToken', 'InitialAction')) {
         if ($Parameters.ContainsKey($name)) {
-            $arguments += @('-' + $name, [string]$Parameters[$name])
+            [void]$arguments.Add('-' + $name)
+            [void]$arguments.Add([string]$Parameters[$name])
         }
     }
-    if ($Parameters.ContainsKey('EmitResultPairs') -and [bool]$Parameters['EmitResultPairs']) {
-        $arguments += '-EmitResultPairs'
-    }
+    [void]$arguments.Add('-WindowSession')
 
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = Get-PowerShellExecutablePath
-    $startInfo.Arguments = Join-WindowsCommandLineArguments -Arguments $arguments
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    $startInfo.StandardOutputEncoding = $utf8NoBom
-    $startInfo.StandardErrorEncoding = $utf8NoBom
+    $startInfo.Arguments = Join-WindowsCommandLineArguments -Arguments @($arguments.ToArray())
+    $startInfo.UseShellExecute = $true
+    $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $startInfo.RedirectStandardOutput = $false
+    $startInfo.RedirectStandardError = $false
 
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw 'OpenVersionManager helper process could not be started.'
+        }
+        $deadline = [DateTime]::UtcNow.AddMilliseconds($helperProcessTimeoutMilliseconds)
+        while ([DateTime]::UtcNow -lt $deadline) {
+            if (Test-LaunchStateShown -ResolvedTargetRoot ([string]$Parameters['TargetRoot'])) {
+                return [PSCustomObject]@{
+                    ExitCode = ''
+                    TimedOut = $false
+                    Stdout = @('DMEL_STATUS=OK', 'DMEL_MESSAGE=Skins opened.')
+                    Stderr = @()
+                }
+            }
+            if ($process.HasExited) {
+                return [PSCustomObject]@{
+                    ExitCode = [string]$process.ExitCode
+                    TimedOut = $false
+                    Stdout = @()
+                    Stderr = @('The Skin manager window session exited before reporting shown.')
+                }
+            }
+            Start-Sleep -Milliseconds 50
+        }
 
-    if (-not $process.Start()) {
-        throw 'OpenVersionManager helper process could not be started.'
-    }
-    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-    $stderrTask = $process.StandardError.ReadToEndAsync()
-    $timedOut = -not $process.WaitForExit($helperProcessTimeoutMilliseconds)
-    if ($timedOut) {
-        try {
-            $process.Kill()
-        }
-        catch {
-        }
-        try {
-            $process.WaitForExit(1000) | Out-Null
-        }
-        catch {
-        }
-        if (-not $process.HasExited) {
-            throw 'OpenVersionManager helper exceeded wrapper timeout and could not be terminated.'
+        return [PSCustomObject]@{
+            ExitCode = ''
+            TimedOut = $false
+            Stdout = @('DMEL_STATUS=WARN', 'DMEL_MESSAGE=Skins launch is still pending; the window session was left running.')
+            Stderr = @()
         }
     }
-    $stdoutText = [string]$stdoutTask.Result
-    $stderrText = [string]$stderrTask.Result
-
-    $stdout = @()
-    if (-not [string]::IsNullOrEmpty($stdoutText)) {
-        $stdout = @($stdoutText -split "\r?\n" | Where-Object { $_ -ne '' })
-    }
-    $stderr = @()
-    if (-not [string]::IsNullOrEmpty($stderrText)) {
-        $stderr = @($stderrText -split "\r?\n" | Where-Object { $_ -ne '' })
-    }
-
-    $exitCode = ''
-    if ($process.HasExited) {
-        $exitCode = [string]$process.ExitCode
-    }
-
-    return [PSCustomObject]@{
-        ExitCode = $exitCode
-        TimedOut = $timedOut
-        Stdout = [string[]]$stdout
-        Stderr = [string[]]$stderr
+    finally {
+        $process.Dispose()
     }
 }
 
 try {
+    $script:ResolvedTargetRoot = Resolve-LauncherTargetRoot -Value $TargetRoot
     $helperPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\Utilities\tools\OpenVersionManager.ps1'))
     if (-not (Test-Path -LiteralPath $helperPath -PathType Leaf)) {
         throw ("OpenVersionManager helper was not found: {0}" -f $helperPath)
+    }
+    $operationLockPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\Utilities\tools\VersionManager.OperationLock.ps1'))
+    if (Test-Path -LiteralPath $operationLockPath -PathType Leaf) {
+        . $operationLockPath
+        $operationProbe = Enter-VersionManagerOperationMutex -TargetRoot $script:ResolvedTargetRoot
+        try {
+            if (-not [bool]$operationProbe.Acquired) {
+                Emit-LauncherFailure -Message 'A latest update or another Skin manager operation is already running. Wait for it to finish before opening Skin manager.'
+                return
+            }
+        }
+        finally { Exit-VersionManagerOperationMutex -Lock $operationProbe }
     }
 
     $supportedParameters = Get-HelperParameterSet -Path $helperPath
     $helperParameters = @{}
     if ($supportedParameters.Contains('TargetRoot')) {
-        $helperParameters['TargetRoot'] = $TargetRoot
+        $helperParameters['TargetRoot'] = $script:ResolvedTargetRoot
     }
     if ($supportedParameters.Contains('LaunchToken')) {
         $helperParameters['LaunchToken'] = $LaunchToken
@@ -389,7 +439,7 @@ try {
         if ([string]::IsNullOrWhiteSpace($preview)) {
             $preview = 'OpenVersionManager helper returned no stdout.'
         }
-        if (Test-LaunchStateShown) {
+        if (Test-LaunchStateShown -ResolvedTargetRoot $script:ResolvedTargetRoot) {
             Emit-LauncherSuccess -Message ('OpenVersionManager helper did not emit DMEL_STATUS, but matching launch state reported shown. exitCode=' + [string]$result.ExitCode + '. ' + $preview)
             return
         }

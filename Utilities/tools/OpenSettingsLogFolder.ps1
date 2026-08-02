@@ -12,6 +12,7 @@ $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $script:LogStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 try {
     [Console]::OutputEncoding = $script:Utf8NoBom
+    $OutputEncoding = $script:Utf8NoBom
 }
 catch {
 }
@@ -214,6 +215,95 @@ function Ensure-Directory {
     }
 }
 
+function ConvertTo-ComparableExplorerPath {
+    param([AllowNull()][string]$LocationUrl)
+
+    if ([string]::IsNullOrWhiteSpace($LocationUrl)) {
+        return ''
+    }
+
+    try {
+        $uri = [System.Uri]$LocationUrl
+        if (-not $uri.IsFile) {
+            return ''
+        }
+        return [System.IO.Path]::GetFullPath($uri.LocalPath).TrimEnd('\', '/')
+    }
+    catch {
+        return ''
+    }
+}
+
+function Invoke-ExplorerForegroundHint {
+    param(
+        [Parameter(Mandatory = $true)][string]$Target,
+        [AllowNull()][System.Diagnostics.Process]$StartedProcess
+    )
+
+    $deadline = [DateTime]::UtcNow.AddMilliseconds(1500)
+    $wscriptShell = $null
+    $shellApplication = $null
+    try {
+        $wscriptShell = New-Object -ComObject WScript.Shell
+        $shellApplication = New-Object -ComObject Shell.Application
+        $comparableTarget = [System.IO.Path]::GetFullPath($Target).TrimEnd('\', '/')
+
+        do {
+            if ($null -ne $StartedProcess) {
+                try {
+                    $StartedProcess.Refresh()
+                    if (-not $StartedProcess.HasExited -and $StartedProcess.MainWindowHandle -ne [IntPtr]::Zero) {
+                        if ($wscriptShell.AppActivate([int]$StartedProcess.Id)) {
+                            return $true
+                        }
+                    }
+                }
+                catch {
+                }
+            }
+
+            $matchingTitles = New-Object System.Collections.Generic.List[string]
+            $titleCounts = @{}
+            foreach ($window in @($shellApplication.Windows())) {
+                try {
+                    $title = [string]$window.LocationName
+                    if (-not [string]::IsNullOrWhiteSpace($title)) {
+                        $titleKey = $title.ToUpperInvariant()
+                        $titleCounts[$titleKey] = 1 + [int]$titleCounts[$titleKey]
+                    }
+                    $windowPath = ConvertTo-ComparableExplorerPath -LocationUrl ([string]$window.LocationURL)
+                    if ([string]::Equals($windowPath, $comparableTarget, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        if (-not [string]::IsNullOrWhiteSpace($title) -and -not $matchingTitles.Contains($title)) {
+                            $matchingTitles.Add($title)
+                        }
+                    }
+                }
+                catch {
+                }
+            }
+
+            $uniqueMatchingTitles = @($matchingTitles | Where-Object { [int]$titleCounts[$_.ToUpperInvariant()] -eq 1 })
+            if ($uniqueMatchingTitles.Count -eq 1 -and $wscriptShell.AppActivate($uniqueMatchingTitles[0])) {
+                return $true
+            }
+
+            Start-Sleep -Milliseconds 75
+        } while ([DateTime]::UtcNow -lt $deadline)
+    }
+    catch {
+    }
+    finally {
+        if ($null -ne $shellApplication -and [System.Runtime.InteropServices.Marshal]::IsComObject($shellApplication)) {
+            [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shellApplication)
+        }
+        if ($null -ne $wscriptShell -and [System.Runtime.InteropServices.Marshal]::IsComObject($wscriptShell)) {
+            [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($wscriptShell)
+        }
+    }
+
+    return $false
+}
+
 function Start-DetachedExplorer {
     param([Parameter(Mandatory = $true)][string]$Target)
 
@@ -227,7 +317,15 @@ function Start-DetachedExplorer {
     }
 
     $quotedTarget = '"' + $Target.Replace('"', '') + '"'
-    Start-Process -FilePath $explorerPath -ArgumentList $quotedTarget -WindowStyle Normal | Out-Null
+    $startedProcess = Start-Process -FilePath $explorerPath -ArgumentList $quotedTarget -WindowStyle Normal -PassThru
+    try {
+        [void](Invoke-ExplorerForegroundHint -Target $Target -StartedProcess $startedProcess)
+    }
+    finally {
+        if ($null -ne $startedProcess) {
+            $startedProcess.Dispose()
+        }
+    }
 }
 
 function Invoke-OpenLogFolder {

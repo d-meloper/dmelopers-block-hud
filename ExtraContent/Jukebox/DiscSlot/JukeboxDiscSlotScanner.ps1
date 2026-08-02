@@ -10,6 +10,7 @@ $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 try {
     [Console]::OutputEncoding = $script:Utf8NoBom
+    $OutputEncoding = $script:Utf8NoBom
 }
 catch {
 }

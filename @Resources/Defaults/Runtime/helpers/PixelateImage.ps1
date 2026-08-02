@@ -828,7 +828,10 @@ try {
     $finalGraphics.Clear([System.Drawing.Color]::Transparent)
     $finalGraphics.DrawImage($lowBitmap, 0, 0, $Width, $Height)
 
-    $tempOutputPath = $resolvedOutputPath + '.tmp-' + [System.Guid]::NewGuid().ToString('N') + '.png'
+    $tempOutputPath = [System.IO.Path]::Combine(
+        $outputDirectory,
+        '__dmeloper_pixelate_tmp_' + [System.Guid]::NewGuid().ToString('N') + '.png'
+    )
     $finalBitmap.Save($tempOutputPath, [System.Drawing.Imaging.ImageFormat]::Png)
     Move-Item -LiteralPath $tempOutputPath -Destination $resolvedOutputPath -Force
     $tempOutputPath = ''

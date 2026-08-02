@@ -45,6 +45,299 @@ function Get-UpdateConfiguration {
     }
 }
 
+function Get-UpdateCache {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    return (Read-VersionManagerUpdateCache -Root $Root)
+}
+
+function Save-UpdateCache {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)]$Cache
+    )
+
+    try {
+        return (Save-VersionManagerUpdateCache -Root $Root -Cache $Cache)
+    }
+    catch {
+        $normalized = ConvertTo-VersionManagerUpdateCacheObject -Cache $Cache
+        Write-JsonFile -Path (Get-UpdateCachePath -Root $Root) -Value $normalized
+        return $normalized
+    }
+}
+
+function Update-UpdateCache {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)]$Patch
+    )
+
+    try {
+        return (Update-VersionManagerUpdateCache -Root $Root -Patch $Patch)
+    }
+    catch {
+        $current = Get-UpdateCache -Root $Root
+        $merged = Merge-VersionManagerUpdateCache -BaseCache $current -PatchCache $Patch
+        Write-JsonFile -Path (Get-UpdateCachePath -Root $Root) -Value $merged
+        return $merged
+    }
+}
+
+function Test-UpdateConfigured {
+    param($Config)
+
+    $activePattern = $null
+    try {
+        $activePattern = Resolve-ActiveUpdateAssetPattern -Config $Config
+    }
+    catch {
+        return $false
+    }
+
+    return (
+        [string]::Equals([string]$Config.Provider, 'github', [System.StringComparison]::OrdinalIgnoreCase) -and
+        -not [string]::IsNullOrWhiteSpace([string]$Config.Owner) -and
+        -not [string]::IsNullOrWhiteSpace([string]$Config.Repo) -and
+        -not [string]::IsNullOrWhiteSpace([string]$activePattern.AssetPattern)
+    )
+}
+
+function Get-VersionManagerBadgeProfile {
+    param([Parameter(Mandatory = $true)]$Config)
+
+    if (-not [string]::Equals(([string]$Config.Provider).Trim(), 'github', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw (New-UpdateOperationException -ErrorCode 'badge-feed-provider' -Message 'The configured update provider is not supported by the badge feed.')
+    }
+    $channel = ([string](Get-ObjectPropertyValue -Object $Config -Name 'Channel' -DefaultValue 'stable')).Trim()
+    if (-not [string]::Equals($channel, 'stable', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw (New-UpdateOperationException -ErrorCode 'badge-feed-channel' -Message 'The badge feed supports only the stable update channel.')
+    }
+    $repositorySlug = ('{0}/{1}' -f ([string]$Config.Owner).Trim(), ([string]$Config.Repo).Trim()).ToLowerInvariant()
+    switch -CaseSensitive ($repositorySlug) {
+        'd-meloper/dmelopers-block-hud' {
+            return [PSCustomObject]@{
+                RepositorySlug = $repositorySlug
+                FeedUrl = 'https://raw.githubusercontent.com/d-meloper/dmelopers-block-hud/badges/badge-data.json'
+            }
+        }
+        'oup030416/dmelopers-block-hud-test' {
+            return [PSCustomObject]@{
+                RepositorySlug = $repositorySlug
+                FeedUrl = 'https://raw.githubusercontent.com/oup030416/dmelopers-block-hud-test/badges/badge-data.json'
+            }
+        }
+        default {
+            throw (New-UpdateOperationException `
+                -ErrorCode 'badge-feed-repository' `
+                -Message 'The configured update repository is not an approved Block HUD badge feed.')
+        }
+    }
+}
+
+function ConvertTo-VersionManagerStableComparableVersion {
+    param([AllowNull()][string]$VersionText)
+
+    $normalized = ([string]$VersionText).Trim()
+    if ($normalized -notmatch '^[vV]?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+        return $null
+    }
+    $normalized = $normalized -replace '^[vV]', ''
+    return (Convert-ToVersion -VersionText $normalized)
+}
+
+function Test-VersionManagerBadgeTimestamp {
+    param([AllowNull()][string]$Value)
+
+    $parsed = [datetime]::MinValue
+    return [datetime]::TryParseExact(
+        ([string]$Value).Trim(),
+        'yyyy-MM-ddTHH:mm:ssZ',
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        ([System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal),
+        [ref]$parsed)
+}
+
+function Get-VersionManagerBadgeRequiredString {
+    param(
+        [Parameter(Mandatory = $true)]$Payload,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $value = Get-ObjectPropertyValue -Object $Payload -Name $Name -DefaultValue $null
+    if (-not ($value -is [string]) -or [string]::IsNullOrWhiteSpace([string]$value)) {
+        throw (New-UpdateOperationException -ErrorCode 'badge-feed-format' -Message ("The badge feed field '$Name' must be a non-empty string."))
+    }
+    return ([string]$value).Trim()
+}
+
+function ConvertFrom-VersionManagerBadgePayload {
+    param(
+        [Parameter(Mandatory = $true)][string]$RawPayload,
+        [Parameter(Mandatory = $true)]$Config,
+        [Parameter(Mandatory = $true)]$Profile
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RawPayload)) {
+        throw (New-UpdateOperationException -ErrorCode 'badge-feed-format' -Message 'The badge feed response was empty.')
+    }
+    if ($RawPayload.Length -gt 0 -and [int]$RawPayload[0] -eq 0xFEFF) {
+        $RawPayload = $RawPayload.Substring(1)
+    }
+
+    try {
+        $payload = $RawPayload | ConvertFrom-Json
+    }
+    catch {
+        throw (New-UpdateOperationException -ErrorCode 'badge-feed-format' -Message 'The badge feed did not contain valid JSON.')
+    }
+
+    $schemaVersion = Get-ObjectPropertyValue -Object $payload -Name 'SchemaVersion' -DefaultValue $null
+    if ($null -eq $payload -or
+        (-not ($schemaVersion -is [int]) -and -not ($schemaVersion -is [long])) -or
+        [long]$schemaVersion -lt 2) {
+        throw (New-UpdateOperationException -ErrorCode 'badge-feed-schema' -Message 'The badge feed schema is not supported.')
+    }
+
+    $repositorySlug = [string]$Profile.RepositorySlug
+    $advertisedRepositoryProperty = $payload.PSObject.Properties['RepoSlug']
+    if ($null -ne $advertisedRepositoryProperty) {
+        $advertisedRepository = $advertisedRepositoryProperty.Value
+        if (-not ($advertisedRepository -is [string]) -or [string]::IsNullOrWhiteSpace([string]$advertisedRepository)) {
+            throw (New-UpdateOperationException -ErrorCode 'badge-feed-repository' -Message 'The advertised badge repository identity was malformed.')
+        }
+        if (-not [string]::Equals(([string]$advertisedRepository).Trim(), $repositorySlug, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw (New-UpdateOperationException -ErrorCode 'badge-feed-repository' -Message 'The badge feed repository identity did not match the configured repository.')
+        }
+    }
+
+    $configuredVariant = ([string]$Config.ReleaseVariant).Trim()
+    switch ($configuredVariant.ToLowerInvariant()) {
+        'korea' {
+            $variant = 'Korea'
+            $releaseField = 'LatestReleaseKorea'
+            $releaseNameField = 'LatestReleaseNameKorea'
+            $assetField = 'LatestAssetNameKorea'
+            $publishedField = 'LatestPublishedAtUtcKorea'
+            $expectedAssetName = 'DMelopers-Block-HUD_Korea.zip'
+        }
+        'global' {
+            $variant = 'Global'
+            $releaseField = 'LatestReleaseGlobal'
+            $releaseNameField = 'LatestReleaseNameGlobal'
+            $assetField = 'LatestAssetNameGlobal'
+            $publishedField = 'LatestPublishedAtUtcGlobal'
+            $expectedAssetName = 'DMelopers-Block-HUD_Global.zip'
+        }
+        default {
+            throw (New-UpdateOperationException -ErrorCode 'badge-feed-variant' -Message 'The configured release variant is not supported by the badge feed.')
+        }
+    }
+
+    $advertisedTag = Get-VersionManagerBadgeRequiredString -Payload $payload -Name $releaseField
+    $version = ConvertTo-VersionManagerStableComparableVersion -VersionText $advertisedTag
+    if ($null -eq $version) {
+        throw (New-UpdateOperationException -ErrorCode 'badge-feed-version' -Message 'The badge feed release is not a stable semantic version.')
+    }
+    $tag = 'v{0}.{1}.{2}' -f $version.Major, $version.Minor, $version.Build
+    $releaseNameValue = Get-ObjectPropertyValue -Object $payload -Name $releaseNameField -DefaultValue $null
+    $releaseName = if ($releaseNameValue -is [string] -and -not [string]::IsNullOrWhiteSpace([string]$releaseNameValue)) {
+        ([string]$releaseNameValue).Trim()
+    }
+    else {
+        $tag
+    }
+    $assetName = $expectedAssetName
+    $advertisedAssetProperty = $payload.PSObject.Properties[$assetField]
+    if ($null -ne $advertisedAssetProperty) {
+        $advertisedAsset = $advertisedAssetProperty.Value
+        if (-not ($advertisedAsset -is [string]) -or [string]::IsNullOrWhiteSpace([string]$advertisedAsset)) {
+            throw (New-UpdateOperationException -ErrorCode 'badge-feed-asset' -Message 'The advertised badge asset identity was malformed.')
+        }
+        if (-not [string]::Equals(([string]$advertisedAsset).Trim(), $expectedAssetName, [System.StringComparison]::Ordinal)) {
+            throw (New-UpdateOperationException -ErrorCode 'badge-feed-asset' -Message 'The badge feed asset did not match the active release variant.')
+        }
+    }
+    $publishedAtUtc = ''
+    $publishedValue = Get-ObjectPropertyValue -Object $payload -Name $publishedField -DefaultValue $null
+    if ($publishedValue -is [string] -and (Test-VersionManagerBadgeTimestamp -Value ([string]$publishedValue))) {
+        $publishedAtUtc = ([string]$publishedValue).Trim()
+    }
+
+    $escapedTag = [uri]::EscapeDataString($tag)
+    $escapedAssetName = [uri]::EscapeDataString($assetName)
+    $releaseUrl = 'https://github.com/{0}/releases/tag/{1}' -f $repositorySlug, $escapedTag
+    $assetUrl = 'https://github.com/{0}/releases/download/{1}/{2}' -f $repositorySlug, $escapedTag, $escapedAssetName
+    return [PSCustomObject]@{
+        RepositorySlug = $repositorySlug
+        ReleaseVariant = $variant
+        Version = $version
+        VersionText = ($tag -replace '^[vV]', '')
+        Tag = $tag
+        ReleaseName = $releaseName
+        ReleaseUrl = $releaseUrl
+        AssetName = $assetName
+        AssetUrl = $assetUrl
+        PublishedAtUtc = $publishedAtUtc
+    }
+}
+
+function Invoke-VersionManagerBadgeRequest {
+    param(
+        [Parameter(Mandatory = $true)]$Config,
+        [ValidateRange(1, 60)][int]$TimeoutSeconds = 15
+    )
+
+    $profile = Get-VersionManagerBadgeProfile -Config $Config
+    Add-Type -AssemblyName System.Net.Http
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    $handler.UseCookies = $false
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    $client.Timeout = [timespan]::FromSeconds($TimeoutSeconds)
+    $response = $null
+    $request = $null
+    try {
+        $request = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Get, [string]$profile.FeedUrl)
+        $request.Headers.CacheControl = New-Object System.Net.Http.Headers.CacheControlHeaderValue
+        $request.Headers.CacheControl.NoCache = $true
+        $request.Headers.CacheControl.NoStore = $true
+        $requestTask = $client.SendAsync($request)
+        while (-not $requestTask.IsCompleted) {
+            if ($script:VersionManagerWindowClosing) {
+                throw (New-UpdateOperationException -ErrorCode 'badge-feed-canceled' -Message 'The badge request was canceled because the Skin manager is closing.')
+            }
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 25
+        }
+        $response = $requestTask.GetAwaiter().GetResult()
+        if (-not $response.IsSuccessStatusCode) {
+            throw (New-UpdateOperationException -ErrorCode ('update-http-' + [int]$response.StatusCode) -Message ("The badge feed request failed with HTTP {0}." -f [int]$response.StatusCode))
+        }
+        $bodyTask = $response.Content.ReadAsStringAsync()
+        while (-not $bodyTask.IsCompleted) {
+            if ($script:VersionManagerWindowClosing) {
+                throw (New-UpdateOperationException -ErrorCode 'badge-feed-canceled' -Message 'The badge request was canceled because the Skin manager is closing.')
+            }
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 25
+        }
+        return (ConvertFrom-VersionManagerBadgePayload -RawPayload $bodyTask.GetAwaiter().GetResult() -Config $Config -Profile $profile)
+    }
+    catch [System.Threading.Tasks.TaskCanceledException] {
+        throw (New-UpdateOperationException -ErrorCode 'update-network-timeout' -Message 'The badge feed request exceeded the 15-second deadline.')
+    }
+    finally {
+        if ($null -ne $request) {
+            $request.Dispose()
+        }
+        if ($null -ne $response) {
+            $response.Dispose()
+        }
+        $client.Dispose()
+        $handler.Dispose()
+    }
+}
+
 function Get-UpdateConfigurationErrorCode {
     param([AllowNull()]$Exception)
 
@@ -169,43 +462,6 @@ function New-UpdateOperationException {
     $exception = New-Object System.InvalidOperationException($messageText)
     $exception.Data['DMEL_ERROR_CODE'] = $ErrorCode
     return $exception
-}
-
-function Get-VersionCatalogInstallUnavailableDetail {
-    param(
-        [AllowNull()]$Entry,
-        [AllowNull()][string]$TargetVersion,
-        [AllowNull()][string]$TargetRoot,
-        [switch]$OperationInProgress,
-        [switch]$IsCurrent
-    )
-
-    $reason = if ($OperationInProgress) { 'catalog-operation-in-progress' } elseif ($null -eq $Entry) { 'latest-entry-missing' } elseif ($IsCurrent) { 'latest-entry-is-current-target' } else { 'latest-entry-not-actionable' }
-    $entryVersion = [string](Get-ObjectPropertyValue -Object $Entry -Name 'version' -DefaultValue '')
-    $entryTag = [string](Get-ObjectPropertyValue -Object $Entry -Name 'tag' -DefaultValue '')
-    $entryVariant = [string](Get-ObjectPropertyValue -Object $Entry -Name 'release_variant' -DefaultValue '')
-    $status = [string](Get-ObjectPropertyValue -Object $Entry -Name 'status' -DefaultValue '')
-    $assetUrl = [string](Get-ObjectPropertyValue -Object $Entry -Name 'asset_url' -DefaultValue '')
-    $installedPath = [string](Get-ObjectPropertyValue -Object $Entry -Name 'installed_path' -DefaultValue '')
-    $installedPathMatchesCurrent = $false
-    if (-not [string]::IsNullOrWhiteSpace($installedPath) -and -not [string]::IsNullOrWhiteSpace($TargetRoot)) {
-        $installedPathMatchesCurrent = [string]::Equals((Resolve-FullPath -Path $installedPath -AllowMissing), (Resolve-FullPath -Path $TargetRoot), [System.StringComparison]::OrdinalIgnoreCase)
-    }
-
-    [string]::Join("`r`n", @(
-        (T 'Helper_VersionManager_Update_LatestCatalogInstallUnavailable' 'The latest version is not available for selected-version installation. Refresh the version list and try again.'), '',
-        'Diagnostic: code=update-latest-catalog-install-unavailable',
-        ('reason=' + $reason),
-        ('entry_version=' + $entryVersion),
-        ('entry_tag=' + $entryTag),
-        ('entry_variant=' + $entryVariant),
-        ('entry_status=' + $status),
-        ('target_version=' + [string]$TargetVersion),
-        ('target_root=' + [string]$TargetRoot),
-        ('installed_path=' + $installedPath),
-        ('installed_path_matches_current=' + [string]$installedPathMatchesCurrent),
-        ('asset_url_present=' + [string](-not [string]::IsNullOrWhiteSpace($assetUrl)))
-    ))
 }
 
 function Get-UpdateFriendlyMessage {
