@@ -224,6 +224,35 @@ function Get-LatestStableReleaseWithAsset {
     return ($matching | Sort-Object Major, Minor, Patch, PublishedAt -Descending | Select-Object -First 1).Release
 }
 
+function Get-ReleaseAssetSha256 {
+    param(
+        [Parameter(Mandatory = $true)]$Release,
+        [Parameter(Mandatory = $true)][string]$AssetName
+    )
+
+    $assets = @($Release.assets | Where-Object { [string]$_.name -ceq $AssetName })
+    if ($assets.Count -ne 1) {
+        throw "Release '$([string]$Release.tag_name)' must contain exactly one asset named '$AssetName'."
+    }
+
+    $digest = [string]$assets[0].digest
+    if ($digest -notmatch '^sha256:(?<hash>[0-9A-Fa-f]{64})$') {
+        throw "Release asset '$AssetName' does not expose a valid GitHub SHA-256 digest."
+    }
+    $assetSha256 = $Matches['hash'].ToUpperInvariant()
+
+    $checksumPattern = '(?im)^SHA256[\t ]+(?<hash>[0-9A-Fa-f]{64})[\t ]+' + [Regex]::Escape($AssetName) + '[\t ]*\r?$'
+    $checksumMatches = [Regex]::Matches([string]$Release.body, $checksumPattern)
+    if ($checksumMatches.Count -ne 1) {
+        throw "Release '$([string]$Release.tag_name)' must publish exactly one SHA256 entry for '$AssetName'."
+    }
+    $publishedSha256 = $checksumMatches[0].Groups['hash'].Value.ToUpperInvariant()
+    if (-not [string]::Equals($publishedSha256, $assetSha256, [StringComparison]::Ordinal)) {
+        throw "Release checksum mismatch for '$AssetName'. release-note=$publishedSha256 github-digest=$assetSha256"
+    }
+    return $assetSha256
+}
+
 function ConvertTo-DisplayCount {
     param([Parameter(Mandatory = $true)][int]$Value)
 
@@ -356,10 +385,12 @@ function Get-BadgePayload {
     $globalAssetName = 'DMelopers-Block-HUD_Global.zip'
     $latestKorea = Get-LatestStableReleaseWithAsset -Releases $stableReleases -AssetName $koreaAssetName
     $latestGlobal = Get-LatestStableReleaseWithAsset -Releases $stableReleases -AssetName $globalAssetName
+    $latestKoreaSha256 = Get-ReleaseAssetSha256 -Release $latestKorea -AssetName $koreaAssetName
+    $latestGlobalSha256 = Get-ReleaseAssetSha256 -Release $latestGlobal -AssetName $globalAssetName
     $downloadCount = Get-TotalReleaseAssetDownloads -Releases $publishedReleases
 
     return [PSCustomObject]@{
-        SchemaVersion = 2
+        SchemaVersion = 3
         RepoSlug = $RepoSlug
         GeneratedAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
         LatestRelease = [string]$latest.tag_name
@@ -367,10 +398,12 @@ function Get-BadgePayload {
         LatestReleaseKorea = [string]$latestKorea.tag_name
         LatestReleaseNameKorea = [string]$latestKorea.name
         LatestAssetNameKorea = $koreaAssetName
+        LatestAssetSha256Korea = $latestKoreaSha256
         LatestPublishedAtUtcKorea = ([DateTimeOffset]::Parse([string]$latestKorea.published_at)).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         LatestReleaseGlobal = [string]$latestGlobal.tag_name
         LatestReleaseNameGlobal = [string]$latestGlobal.name
         LatestAssetNameGlobal = $globalAssetName
+        LatestAssetSha256Global = $latestGlobalSha256
         LatestPublishedAtUtcGlobal = ([DateTimeOffset]::Parse([string]$latestGlobal.published_at)).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         TotalDownloads = $downloadCount
         Stars = [int]$repo.stargazers_count
@@ -411,8 +444,8 @@ function Test-BadgePayloadValuesEqual {
     }
     foreach ($requiredProperty in @(
         'SchemaVersion',
-        'LatestReleaseKorea', 'LatestReleaseNameKorea', 'LatestAssetNameKorea', 'LatestPublishedAtUtcKorea',
-        'LatestReleaseGlobal', 'LatestReleaseNameGlobal', 'LatestAssetNameGlobal', 'LatestPublishedAtUtcGlobal'
+        'LatestReleaseKorea', 'LatestReleaseNameKorea', 'LatestAssetNameKorea', 'LatestAssetSha256Korea', 'LatestPublishedAtUtcKorea',
+        'LatestReleaseGlobal', 'LatestReleaseNameGlobal', 'LatestAssetNameGlobal', 'LatestAssetSha256Global', 'LatestPublishedAtUtcGlobal'
     )) {
         if ($null -eq $ExistingPayload.PSObject.Properties[$requiredProperty]) {
             return $false
@@ -427,10 +460,12 @@ function Test-BadgePayloadValuesEqual {
         ([string]$ExistingPayload.LatestReleaseKorea -eq [string]$NewPayload.LatestReleaseKorea) -and
         ([string]$ExistingPayload.LatestReleaseNameKorea -eq [string]$NewPayload.LatestReleaseNameKorea) -and
         ([string]$ExistingPayload.LatestAssetNameKorea -eq [string]$NewPayload.LatestAssetNameKorea) -and
+        ([string]$ExistingPayload.LatestAssetSha256Korea -eq [string]$NewPayload.LatestAssetSha256Korea) -and
         ([string]$ExistingPayload.LatestPublishedAtUtcKorea -eq [string]$NewPayload.LatestPublishedAtUtcKorea) -and
         ([string]$ExistingPayload.LatestReleaseGlobal -eq [string]$NewPayload.LatestReleaseGlobal) -and
         ([string]$ExistingPayload.LatestReleaseNameGlobal -eq [string]$NewPayload.LatestReleaseNameGlobal) -and
         ([string]$ExistingPayload.LatestAssetNameGlobal -eq [string]$NewPayload.LatestAssetNameGlobal) -and
+        ([string]$ExistingPayload.LatestAssetSha256Global -eq [string]$NewPayload.LatestAssetSha256Global) -and
         ([string]$ExistingPayload.LatestPublishedAtUtcGlobal -eq [string]$NewPayload.LatestPublishedAtUtcGlobal) -and
         ([int]$ExistingPayload.TotalDownloads -eq [int]$NewPayload.TotalDownloads) -and
         ([int]$ExistingPayload.Stars -eq [int]$NewPayload.Stars)
