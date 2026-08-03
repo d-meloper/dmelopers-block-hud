@@ -48,7 +48,7 @@ GitHub에서 직접 설치하려는 경우에는 반드시 `.rmskin` 파일을 �
 
 한국어 사용자는 `DMelopers-Block-HUD_Korea.rmskin`을 내려받는 것을 권장합니다. 영어 또는 글로벌 환경 사용자는 `DMelopers-Block-HUD_Global.rmskin`을 사용하세요.
 
-두 variant는 모두 같은 Rainmeter 스킨 폴더인 `DMeloper's Block HUD`에 설치되므로, 나란히 공존하도록 설계되지 않았습니다. 한 variant 위에 다른 variant를 설치하면 기존 스킨 폴더가 덮어써질 수 있습니다.
+`.rmskin` 패키지는 `DMeloper's Block HUD Korea v<version>` 및 `DMeloper's Block HUD Global v<version>`처럼 variant와 버전이 포함된 별도 스킨 폴더에 설치됩니다. 두 설치본은 나란히 공존할 수 있으며, 관리하거나 삭제할 때 해당 폴더를 선택하세요.
 
 업데이트는 가능하면 스킨에 포함된 `Skin manager`를 사용하세요. `Skin manager`는 과거 릴리즈 목록 전체를 불러오지 않고 현재 설치된 variant의 검증된 최신 릴리즈 정보를 확인해 맞는 ZIP 패키지를 적용합니다. 호환되는 설정, 아이템, 사용자 이미지와 로컬 음원은 새 설치본으로 이어지며, 일부 아이템 이미지 필드를 사용할 수 없는 경우에는 해당 필드만 비우기 전에 확인을 요청합니다. GitHub에서 수동으로 다시 설치하려는 경우에는 `.rmskin` 파일을 사용하세요.
 
