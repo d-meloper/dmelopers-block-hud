@@ -18,7 +18,7 @@
 - Lua 런타임 코드는 Lua 5.1 호환을 유지해야 합니다.
 - 빌드된 배포 트리, ZIP/RMSKIN release asset, 생성 캐시, 로컬 런타임 상태, 로그, 백업, 개인 경로는 커밋하지 마세요.
 - public-facing 문구는 사용자 친화적으로 유지하고, private/internal workflow 용어는 피하되 PR 동작을 설명할 때 필요한 public branch/check policy 용어만 사용하세요.
-- Korea와 Global 패키지는 같은 스킨 폴더 `DMeloper's Block HUD`에 설치됩니다.
+- updater ZIP 패키지는 고정 wrapper 루트 `DMeloper's Block HUD`를 사용합니다. 수동 `.rmskin` 패키지는 `DMeloper's Block HUD Korea v<version>` 및 `DMeloper's Block HUD Global v<version>`처럼 variant와 버전별 루트를 사용합니다.
 
 ## Pull Request
 

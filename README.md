@@ -48,7 +48,7 @@ Use an `.rmskin` file when installing directly from GitHub. The `.zip` files are
 
 Korean users should download `DMelopers-Block-HUD_Korea.rmskin`. English and global users should use `DMelopers-Block-HUD_Global.rmskin`.
 
-Both variants install to the same Rainmeter skin folder, `DMeloper's Block HUD`, so they are not designed to coexist side by side. Installing one variant over the other can overwrite the existing skin folder.
+The `.rmskin` packages install to separate versioned skin folders: `DMeloper's Block HUD Korea v<version>` and `DMeloper's Block HUD Global v<version>`. They can coexist side by side; use the corresponding folder when managing or removing an installation.
 
 For updates, use the in-skin `Skin manager` whenever possible. It checks validated latest-release data for the installed variant and applies the matching ZIP package without loading a historical release list. Compatible settings, items, user images, and local audio are carried into the new install; if some item-image fields cannot be used, the skin asks before clearing only those fields. Use an `.rmskin` file when reinstalling manually from GitHub.
 

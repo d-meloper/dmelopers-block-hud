@@ -18,7 +18,7 @@ Open an issue first for larger changes, behavior changes, packaging changes, or 
 - Lua runtime code should remain compatible with Lua 5.1.
 - Do not commit built distribution trees, ZIP/RMSKIN release assets, generated caches, local runtime state, logs, backups, or private paths.
 - Keep public-facing wording user-friendly and avoid private/internal workflow terminology; use public branch/check policy terms only where they explain pull request behavior.
-- Korea and Global packages install to the same skin folder: `DMeloper's Block HUD`.
+- Updater ZIP packages use the fixed wrapper root `DMeloper's Block HUD`. Manual `.rmskin` packages use variant- and version-specific roots: `DMeloper's Block HUD Korea v<version>` and `DMeloper's Block HUD Global v<version>`.
 
 ## Pull Requests
 
