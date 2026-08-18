@@ -259,6 +259,14 @@ return function(app)
 
         end
 
+        if kind == 'toggleField' then
+
+            methods.ToggleField(descriptor.fieldKey)
+
+            return
+
+        end
+
 
 
         local fieldKey = trim(descriptor.fieldKey or '')
@@ -536,6 +544,12 @@ return function(app)
             return
         end
 
+        if field.key == 'refreshHudMirrorMonitors' and methods.RefreshHudMirrorMonitors then
+            methods.clearPendingConfirmation()
+            methods.RefreshHudMirrorMonitors()
+            return
+        end
+
         if field.key == 'attachMinecraftSkinFile' then
 
             local beforeMinecraftSkinSnapshot = methods.captureSnapshot()
@@ -773,6 +787,11 @@ return function(app)
 
 
 
+                end
+
+                if field.key == 'resetHudMirrorSettings' and methods.ResetHudMirrorPreferences then
+                    methods.ResetHudMirrorPreferences()
+                    return
                 end
 
 

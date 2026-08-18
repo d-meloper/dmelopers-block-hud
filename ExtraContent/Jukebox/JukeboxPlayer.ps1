@@ -5,6 +5,7 @@ param(
     [string]$AudioPath,
     [string]$RequestPath,
     [string]$StateRoot,
+    [string]$EventSignalDirectory,
     [string]$InstanceKey = 'default',
     [int]$Volume = 100,
     [switch]$Loop
@@ -19,10 +20,13 @@ $script:ResultPairs = [ordered]@{
     DMEL_MESSAGE = ''
     DMEL_LOGPATH = ''
     DMEL_EVENT   = '0'
+    DMEL_EVENTSIGNAL = '0'
     DMEL_AUDIOFILE = ''
 }
 $script:ServerLaunchContractVersion = 'repeat-reopen-v4'
+$script:EventSignalContractVersion = 'event-signal-v1'
 $script:LastHeartbeatUnixSeconds = 0
+$script:LastDequeuedEventQueueId = ''
 
 try {
     [Console]::OutputEncoding = $script:Utf8NoBom
@@ -58,7 +62,8 @@ function Write-OutputPair {
 
 function Emit-ResultPairs {
     Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value (Get-CanonicalLogPath)
-    foreach ($key in @('DMEL_STATUS', 'DMEL_CODE', 'DMEL_MESSAGE', 'DMEL_LOGPATH', 'DMEL_EVENT', 'DMEL_AUDIOFILE')) {
+    Set-ResultPairValue -Key 'DMEL_EVENTSIGNAL' -Value $(if (Test-EventSignalCapability) { '1' } else { '0' })
+    foreach ($key in @('DMEL_STATUS', 'DMEL_CODE', 'DMEL_MESSAGE', 'DMEL_LOGPATH', 'DMEL_EVENT', 'DMEL_EVENTSIGNAL', 'DMEL_AUDIOFILE')) {
         Write-OutputPair -Key $key -Value $script:ResultPairs[$key]
     }
 }
@@ -155,6 +160,69 @@ function Get-EventQueuePath {
 
 function Get-EventQueueCursorPath {
     return [System.IO.Path]::Combine((Get-InstanceRoot), 'events.cursor')
+}
+
+function Get-EventSignalFailurePath {
+    return [System.IO.Path]::Combine((Get-InstanceRoot), 'event-signal.disabled')
+}
+
+function Get-ResolvedEventSignalDirectory {
+    $path = [string]$EventSignalDirectory
+    if ([string]::IsNullOrWhiteSpace($path) -or $path.IndexOf([char]0xfffd) -ge 0) {
+        return ''
+    }
+    try {
+        foreach ($invalidChar in [System.IO.Path]::GetInvalidPathChars()) {
+            if ($path.IndexOf($invalidChar) -ge 0) {
+                return ''
+            }
+        }
+        return [System.IO.Path]::GetFullPath($path)
+    }
+    catch {
+        return ''
+    }
+}
+
+function Set-EventSignalFailure {
+    param([AllowNull()][string]$Detail)
+
+    try {
+        Ensure-InstanceDirectories
+        [System.IO.File]::WriteAllText(
+            (Get-EventSignalFailurePath),
+            ([DateTime]::UtcNow.ToString('o') + ' ' + ([string]$Detail -replace "[`r`n]+", ' ')),
+            $script:Utf8NoBom
+        )
+    }
+    catch {
+    }
+}
+
+function Clear-EventSignalFailure {
+    Remove-Item -LiteralPath (Get-EventSignalFailurePath) -Force -ErrorAction SilentlyContinue
+}
+
+function Ensure-EventSignalDirectory {
+    param([switch]$ClearFailureOnSuccess)
+
+    $directory = Get-ResolvedEventSignalDirectory
+    if ([string]::IsNullOrWhiteSpace($directory)) {
+        return $false
+    }
+    try {
+        if (-not [System.IO.Directory]::Exists($directory)) {
+            [System.IO.Directory]::CreateDirectory($directory) | Out-Null
+        }
+        if ($ClearFailureOnSuccess) {
+            Clear-EventSignalFailure
+        }
+        return $true
+    }
+    catch {
+        Set-EventSignalFailure -Detail $_.Exception.Message
+        return $false
+    }
 }
 
 function Ensure-InstanceDirectories {
@@ -264,6 +332,9 @@ function Apply-RequestFile {
     }
     if ($request.ContainsKey('VOLUME')) {
         $script:Volume = Get-ClampedVolumePercent -Value $request['VOLUME']
+    }
+    if ($request.ContainsKey('EVENTSIGNALDIRECTORY')) {
+        $script:EventSignalDirectory = [string]$request['EVENTSIGNALDIRECTORY']
     }
 
     if (@('Play', 'Pause', 'Stop', 'PollEvent', 'Serve', 'SetLoop', 'SetVolume') -notcontains $script:Command) {
@@ -469,9 +540,11 @@ function Write-ServerLaunchContract {
     Ensure-InstanceDirectories
     $contract = [ordered]@{
         Version = $script:ServerLaunchContractVersion
+        EventSignalVersion = $script:EventSignalContractVersion
         ProcessId = [int]$PID
         Token = [Guid]::NewGuid().ToString('N')
         ProcessStartTimeUtc = Get-ProcessStartTimeUtcText -ProcessId ([int]$PID)
+        EventSignalDirectory = Get-ResolvedEventSignalDirectory
     }
     $json = $contract | ConvertTo-Json -Compress
     [System.IO.File]::WriteAllText((Get-ServerLaunchContractPath), $json, $script:Utf8NoBom)
@@ -505,6 +578,14 @@ function Test-ServerLaunchContractCurrent {
         return $false
     }
     if (-not [string]::Equals([string]$contract.Version, $script:ServerLaunchContractVersion, [System.StringComparison]::Ordinal)) {
+        return $false
+    }
+    $contractSignalVersion = [string](Get-JsonPropertyValue -Object $contract -Name 'EventSignalVersion' -Fallback '')
+    if (-not [string]::Equals($contractSignalVersion, $script:EventSignalContractVersion, [System.StringComparison]::Ordinal)) {
+        return $false
+    }
+    $contractSignalDirectory = [string](Get-JsonPropertyValue -Object $contract -Name 'EventSignalDirectory' -Fallback '')
+    if (-not [string]::Equals($contractSignalDirectory, (Get-ResolvedEventSignalDirectory), [System.StringComparison]::OrdinalIgnoreCase)) {
         return $false
     }
     if ($ProcessId -le 0) {
@@ -596,6 +677,10 @@ function Start-ServerProcess {
         '-StateRoot', (Get-StateRootPath),
         '-InstanceKey', (Get-SafeInstanceKey)
     )
+    $signalDirectory = Get-ResolvedEventSignalDirectory
+    if (-not [string]::IsNullOrWhiteSpace($signalDirectory)) {
+        $arguments += @('-EventSignalDirectory', $signalDirectory)
+    }
     if ($Loop) {
         $arguments += '-Loop'
     }
@@ -663,6 +748,69 @@ function ConvertTo-ResultPairLineValue {
     return ([string]$Value) -replace "[`r`n]+", ' '
 }
 
+function Prune-PlayerEventSignals {
+    $directory = Get-ResolvedEventSignalDirectory
+    if ([string]::IsNullOrWhiteSpace($directory) -or -not [System.IO.Directory]::Exists($directory)) {
+        return
+    }
+    try {
+        $files = @(Get-ChildItem -LiteralPath $directory -File -Filter '*.signal' -ErrorAction Stop | Sort-Object LastWriteTimeUtc, Name)
+        $cutoff = [DateTime]::UtcNow.AddDays(-1)
+        foreach ($file in @($files | Where-Object { $_.LastWriteTimeUtc -lt $cutoff })) {
+            Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+        }
+        $remaining = @(Get-ChildItem -LiteralPath $directory -File -Filter '*.signal' -ErrorAction Stop | Sort-Object LastWriteTimeUtc, Name)
+        if ($remaining.Count -gt 256) {
+            foreach ($file in @($remaining | Select-Object -First ($remaining.Count - 256))) {
+                Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    catch {
+        Set-EventSignalFailure -Detail $_.Exception.Message
+    }
+}
+
+function New-PlayerEventSignal {
+    param([Parameter(Mandatory = $true)][string]$QueueId)
+
+    if ($QueueId -notmatch '^[A-Fa-f0-9]{32}$' -or -not (Ensure-EventSignalDirectory)) {
+        return $false
+    }
+    $directory = Get-ResolvedEventSignalDirectory
+    $path = [System.IO.Path]::Combine($directory, ($QueueId.ToLowerInvariant() + '.signal'))
+    $temporaryPath = [System.IO.Path]::Combine($directory, ('.' + $QueueId.ToLowerInvariant() + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'))
+    try {
+        [System.IO.File]::WriteAllText($temporaryPath, ($QueueId.ToLowerInvariant() + "`n"), $script:Utf8NoBom)
+        Move-Item -LiteralPath $temporaryPath -Destination $path -Force
+        Clear-EventSignalFailure
+        Prune-PlayerEventSignals
+        return $true
+    }
+    catch {
+        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        Set-EventSignalFailure -Detail $_.Exception.Message
+        return $false
+    }
+}
+
+function Remove-PlayerEventSignal {
+    param([AllowNull()][string]$QueueId)
+
+    $directory = Get-ResolvedEventSignalDirectory
+    if ([string]::IsNullOrWhiteSpace($directory) -or $QueueId -notmatch '^[A-Fa-f0-9]{32}$') {
+        return
+    }
+    try {
+        Remove-Item -LiteralPath ([System.IO.Path]::Combine($directory, ($QueueId.ToLowerInvariant() + '.signal'))) -Force -ErrorAction Stop
+    }
+    catch [System.Management.Automation.ItemNotFoundException] {
+    }
+    catch {
+        Set-EventSignalFailure -Detail $_.Exception.Message
+    }
+}
+
 function New-PlayerEventResultBlock {
     param(
         [Parameter(Mandatory = $true)][string]$Status,
@@ -698,6 +846,11 @@ function Add-PlayerEventResultBlock {
             '[ERROR] Failed to queue Jukebox player event.',
             'The Jukebox player event queue was busy.'
         ) | Out-Null
+        return
+    }
+    $queueId = Get-ResultPairValueFromBlock -Block $Block -Name 'DMEL_QUEUE_ID'
+    if (-not [string]::IsNullOrWhiteSpace($queueId)) {
+        [void](New-PlayerEventSignal -QueueId $queueId)
     }
 }
 
@@ -708,6 +861,7 @@ function Read-FirstQueuedPlayerEventBlock {
     }
 
     $script:QueuedPlayerEventBlock = ''
+    $script:LastDequeuedEventQueueId = ''
     [void](Invoke-WithEventQueueMutex {
         if (-not [System.IO.File]::Exists($queuePath)) {
             return
@@ -769,8 +923,13 @@ function Read-FirstQueuedPlayerEventBlock {
         $script:QueuedPlayerEventBlock = $selectedBlock
         if (-not [string]::IsNullOrWhiteSpace($selectedId)) {
             [System.IO.File]::WriteAllText($cursorPath, ($selectedId + "`n"), $script:Utf8NoBom)
+            $script:LastDequeuedEventQueueId = $selectedId
         }
     })
+
+    if (-not [string]::IsNullOrWhiteSpace($script:LastDequeuedEventQueueId)) {
+        Remove-PlayerEventSignal -QueueId $script:LastDequeuedEventQueueId
+    }
 
     return $script:QueuedPlayerEventBlock
 }
@@ -830,6 +989,51 @@ function Poll-QueuedPlayerEvent {
     return $true
 }
 
+function Sync-PlayerEventSignalsWithQueue {
+    $directory = Get-ResolvedEventSignalDirectory
+    if ([string]::IsNullOrWhiteSpace($directory) -or -not [System.IO.Directory]::Exists($directory)) {
+        return
+    }
+
+    [void](Invoke-WithEventQueueMutex {
+        $pendingIds = @{}
+        $queuePath = Get-EventQueuePath
+        $cursorPath = Get-EventQueueCursorPath
+        $cursorId = ''
+        if ([System.IO.File]::Exists($cursorPath)) {
+            $cursorId = ([System.IO.File]::ReadAllText($cursorPath, $script:Utf8NoBom)).Trim()
+        }
+        $returnNext = [string]::IsNullOrWhiteSpace($cursorId)
+        if ([System.IO.File]::Exists($queuePath)) {
+            $raw = [System.IO.File]::ReadAllText($queuePath, $script:Utf8NoBom)
+            $matches = [regex]::Matches([string]$raw, 'DMEL_QUEUE_ID=.*?DMEL_END=1', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+            foreach ($match in $matches) {
+                $blockId = Get-ResultPairValueFromBlock -Block ([string]$match.Value) -Name 'DMEL_QUEUE_ID'
+                if ([string]::IsNullOrWhiteSpace($blockId)) {
+                    continue
+                }
+                if ($returnNext) {
+                    $pendingIds[$blockId.ToLowerInvariant()] = $true
+                }
+                elseif ([string]::Equals($blockId, $cursorId, [System.StringComparison]::Ordinal)) {
+                    $returnNext = $true
+                }
+            }
+        }
+        try {
+            foreach ($file in @(Get-ChildItem -LiteralPath $directory -File -Filter '*.signal' -ErrorAction Stop)) {
+                $signalId = [System.IO.Path]::GetFileNameWithoutExtension($file.Name).ToLowerInvariant()
+                if ($signalId -match '^[a-f0-9]{32}$' -and -not $pendingIds.ContainsKey($signalId)) {
+                    Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
+                }
+            }
+        }
+        catch {
+            Set-EventSignalFailure -Detail $_.Exception.Message
+        }
+    })
+}
+
 function Queue-PlayerCommand {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -866,6 +1070,8 @@ function Poll-PlayerEvent {
     if (Poll-QueuedPlayerEvent) {
         return
     }
+
+    Sync-PlayerEventSignalsWithQueue
 
     $file = Get-OldestFile -Directory (Get-EventsRoot)
     if ($null -eq $file) {
@@ -937,6 +1143,7 @@ function Write-PlayerEvent {
 
 function Start-PlayerServer {
     Ensure-InstanceDirectories
+    [void](Ensure-EventSignalDirectory -ClearFailureOnSuccess)
     $pidFile = Get-PidFilePath
     [System.IO.File]::WriteAllText($pidFile, [string]$PID, $script:Utf8NoBom)
     Write-ServerLaunchContract
@@ -1139,6 +1346,24 @@ function Start-PlayerServer {
         Clear-ServerLaunchContract
         Clear-ServerHeartbeat
     }
+}
+
+function Test-EventSignalCapability {
+    $directory = Get-ResolvedEventSignalDirectory
+    if ([string]::IsNullOrWhiteSpace($directory) -or -not (Ensure-EventSignalDirectory)) {
+        return $false
+    }
+    if ([System.IO.File]::Exists((Get-EventSignalFailurePath))) {
+        return $false
+    }
+    $serverPid = Get-ServerProcessId
+    if ($serverPid -le 0) {
+        return $true
+    }
+    if (-not (Test-ServerLaunchContractCurrent -ProcessId $serverPid)) {
+        return $false
+    }
+    return $true
 }
 
 try {

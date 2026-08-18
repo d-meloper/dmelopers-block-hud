@@ -61,11 +61,15 @@ return function(app)
 
         elseif loadKind == 'startupAutoRunProbe' then
 
-            started = methods.startStartupAutoRunHelper(nil)
+            started = methods.startStartupAutoRunHelper(nil, 'all')
 
         elseif loadKind == 'startupAutoRunApply' then
 
-            started = methods.startStartupAutoRunHelper(state.pendingLoadValue)
+            started = methods.startStartupAutoRunHelper(state.pendingLoadValue, state.pendingLoadStartupMethod)
+
+        elseif loadKind == 'startupAutoRunRecoveryProbe' then
+
+            started = methods.startStartupAutoRunHelper(nil, 'all')
 
         elseif loadKind == 'minecraftSkinApply' then
 
@@ -196,6 +200,10 @@ return function(app)
                 methods.finishPendingLoadCycle()
                 return
             end
+
+        elseif loadKind == 'minecraftSkinAtlasRender' then
+
+            started = methods.startMinecraftSkinAtlasHelper()
 
         end
 

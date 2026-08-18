@@ -64,6 +64,8 @@ local RESERVED_SLOT10 = {
     ExecPath = "_OPEN_INVENTORY_",
     Qty = 0,
     ConfirmBeforeRun = "0",
+    ActionType = "",
+    FolderCountSync = "0",
     Populated = true,
 }
 
@@ -101,8 +103,16 @@ end
 local function normalizeConfirmBeforeRun(value)
     return trim(value) == "1" and "1" or "0"
 end
+
+local function normalizeActionType(value)
+    return trim(value):lower() == "folder" and "folder" or ""
+end
+
+local function normalizeFolderCountSync(actionType, value)
+    return normalizeActionType(actionType) == "folder" and trim(value) == "1" and "1" or "0"
+end
 local VARIABLE_MISSING = "__DMCS_VARIABLE_MISSING__"
-local ITEM_KEYS = { "Image", "Label", "Action", "Qty", "ConfirmBeforeRun" }
+local ITEM_KEYS = { "Image", "Label", "Action", "Qty", "ConfirmBeforeRun", "ActionType", "FolderCountSync" }
 local DRAFT_META_KEYS = {
     "SchemaVersion",
     "Dirty",
@@ -657,6 +667,8 @@ local function cloneRecord(record)
         ExecPath = record.ExecPath or "",
         Qty = toNumber(record.Qty, 0),
         ConfirmBeforeRun = normalizeConfirmBeforeRun(record.ConfirmBeforeRun),
+        ActionType = normalizeActionType(record.ActionType),
+        FolderCountSync = normalizeFolderCountSync(record.ActionType, record.FolderCountSync),
         Populated = record.Populated == true,
     }
 end
@@ -672,6 +684,8 @@ local function makeEmptyRecord(source, x, y)
         ExecPath = "",
         Qty = 0,
         ConfirmBeforeRun = "0",
+        ActionType = "",
+        FolderCountSync = "0",
         Populated = false,
     }
 end

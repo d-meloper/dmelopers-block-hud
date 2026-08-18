@@ -227,16 +227,26 @@ function Get-ReparseTargetText {
     return ''
 }
 
-function Test-CloudPlaceholderReparsePoint {
-    param([Parameter(Mandatory = $true)][System.IO.FileSystemInfo]$Item)
+function Test-CloudPlaceholderFileAttributes {
+    param([Parameter(Mandatory = $true)][System.IO.FileAttributes]$Attributes)
 
     # Windows cloud placeholders are non-redirecting reparse points.  The
     # RecallOnOpen / RecallOnDataAccess flags distinguish those placeholders
     # from an unknown redirecting tag whose target PowerShell cannot resolve.
-    $recallOnOpen = [System.IO.FileAttributes]0x00040000
-    $recallOnDataAccess = [System.IO.FileAttributes]0x00400000
-    return (($Item.Attributes -band $recallOnOpen) -ne 0 -or
-        ($Item.Attributes -band $recallOnDataAccess) -ne 0)
+    # Windows PowerShell 5.1's FileAttributes enum does not define either
+    # member, so inspect the raw bits instead of casting those values to the
+    # enum and rejecting otherwise valid OneDrive placeholders.
+    $attributeBits = [int64]$Attributes
+    $recallOnOpenBits = [int64]0x00040000
+    $recallOnDataAccessBits = [int64]0x00400000
+    return (($attributeBits -band $recallOnOpenBits) -ne 0 -or
+        ($attributeBits -band $recallOnDataAccessBits) -ne 0)
+}
+
+function Test-CloudPlaceholderReparsePoint {
+    param([Parameter(Mandatory = $true)][System.IO.FileSystemInfo]$Item)
+
+    return (Test-CloudPlaceholderFileAttributes -Attributes $Item.Attributes)
 }
 
 function Resolve-ReparseAwareExistingPath {
@@ -512,6 +522,7 @@ function ConvertTo-SkinVersion {
     }
 }
 
+# DMEL_COMPAT:import.source-floor-v110
 function Assert-MigrationTargetRoot {
     param([Parameter(Mandatory = $true)][string]$Root)
 

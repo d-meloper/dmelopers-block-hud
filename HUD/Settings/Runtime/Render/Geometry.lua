@@ -65,6 +65,7 @@ return function(app)
         setVariable(prefix .. '_FieldContentY', tostring(controlY + textPad))
         setVariable(prefix .. '_FieldContentW', tostring(math.max(0, controlW - (2 * textPad))))
         setVariable(prefix .. '_FieldContentH', tostring(math.max(0, controlH - (2 * textPad))))
+        setVariable(prefix .. '_FieldTextAlign', 'LeftCenter')
         setVariable(prefix .. '_DropdownButton_X', tostring(dropdownX))
         setVariable(prefix .. '_DropdownButton_Y', tostring(controlY))
         setVariable(prefix .. '_DropdownButton_W', tostring(dropdownW))
@@ -246,6 +247,8 @@ return function(app)
 
         setVariable('SettingsRow' .. rowIndex .. '_DropdownButtonText', dropdownClosedText(rowIndex))
 
+        setVariable('SettingsRow' .. rowIndex .. '_DropdownButtonCommand', '')
+
         setVariable('SettingsRow' .. rowIndex .. '_ToggleHidden', '1')
 
         setVariable('SettingsRow' .. rowIndex .. '_ToggleCommand', '')
@@ -269,11 +272,15 @@ return function(app)
 
         setVariable('SettingsRow' .. rowIndex .. '_ActionCommand', '')
 
+        setVariable('SettingsRow' .. rowIndex .. '_ActionCursor', '0')
+
         state.currentRowActionByIndex[rowIndex] = nil
 
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryHidden', '1')
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryText', '')
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryCommand', '')
+
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryCursor', '0')
 
         state.currentRowSecondaryActionByIndex[rowIndex] = nil
 

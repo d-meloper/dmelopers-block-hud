@@ -297,6 +297,14 @@ local function recordsEquivalent(left, right)
 
         end
 
+        if normalizeActionType(leftRecord.ActionType) ~= normalizeActionType(rightRecord.ActionType) then
+            return false
+        end
+
+        if normalizeFolderCountSync(leftRecord.FolderCountSync, leftRecord.ActionType) ~= normalizeFolderCountSync(rightRecord.FolderCountSync, rightRecord.ActionType) then
+            return false
+        end
+
         if tostring(leftRecord.Qty or 0) ~= tostring(rightRecord.Qty or 0) then
 
             return false
@@ -612,7 +620,7 @@ end
 
 
 
-local function updateFieldAtLocator(locator, fieldName, value)
+local function updateFieldAtLocator(locator, fieldName, value, actionType)
 
 
 
@@ -722,7 +730,12 @@ local function updateFieldAtLocator(locator, fieldName, value)
 
 
 
-        if record.ExecPath == resolvedPath then
+        local resolvedActionType = normalizeActionType(actionType)
+        local resolvedFolderCountSync = normalizeFolderCountSync(record.FolderCountSync, resolvedActionType)
+
+        if record.ExecPath == resolvedPath
+            and normalizeActionType(record.ActionType) == resolvedActionType
+            and normalizeFolderCountSync(record.FolderCountSync, record.ActionType) == resolvedFolderCountSync then
 
 
 
@@ -735,6 +748,10 @@ local function updateFieldAtLocator(locator, fieldName, value)
 
 
         record.ExecPath = resolvedPath
+
+        record.ActionType = resolvedActionType
+
+        record.FolderCountSync = resolvedFolderCountSync
 
 
 
@@ -1130,7 +1147,9 @@ local function normalizeInvalidDraftChanges()
 
                     or record.Qty ~= RESERVED_SLOT.Qty
 
-                    or normalizeConfirmBeforeRun(record.ConfirmBeforeRun) ~= '0' then
+                    or normalizeConfirmBeforeRun(record.ConfirmBeforeRun) ~= '0'
+                    or normalizeActionType(record.ActionType) ~= ''
+                    or normalizeFolderCountSync(record.FolderCountSync, record.ActionType) ~= '0' then
 
 
 
@@ -1169,6 +1188,10 @@ local function normalizeInvalidDraftChanges()
                         Qty = RESERVED_SLOT.Qty,
 
                         ConfirmBeforeRun = '0',
+
+                        ActionType = '',
+
+                        FolderCountSync = '0',
 
 
 

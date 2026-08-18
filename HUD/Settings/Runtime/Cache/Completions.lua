@@ -114,9 +114,13 @@ return function(app)
 
         local shouldReopenDropdown = state.pendingLoadReopenDropdown
 
+        local wasSilent = state.pendingLoadSilent == true
+
         methods.clearPendingLoadState()
 
-        methods.setLoadingVisible(false)
+        if not wasSilent then
+            methods.setLoadingVisible(false)
+        end
 
         local reopenField = methods.getField(reopenFieldKey)
 
@@ -152,6 +156,21 @@ return function(app)
         local output = methods.runCommandMeasureOutput(state.pendingLoadHelperMeasureName)
         local values = methods.parseCommandCaptureVariables(output)
         local shouldFinishLoadCycle = true
+        if loadKind == 'startupAutoRunApply' or loadKind == 'startupAutoRunRecoveryProbe' then
+            local startupResult = parseStartupAutoRunResult(output, methods.currentStartupAutoRunState())
+            local expectedToken = trim(state.pendingStartupAutoRunRequestToken or '')
+            if expectedToken ~= ''
+                and startupResult.requestToken ~= ''
+                and startupResult.requestToken ~= expectedToken then
+                logNotice(
+                    'Ignored stale startup auto-run helper completion: expectedToken='
+                        .. expectedToken
+                        .. ' actualToken='
+                        .. startupResult.requestToken
+                )
+                return
+            end
+        end
         if loadKind == 'fontFamily' then
             methods.applyBundledFontFacesFromValues(field, values)
             if not state.bundledFontFaces or #state.bundledFontFaces == 0 then
@@ -195,37 +214,59 @@ return function(app)
             methods.applyStartupAutoRunProbeOutput(output)
             methods.captureBaselineState()
         elseif loadKind == 'startupAutoRunApply' then
-            methods.applyStartupAutoRunApplyOutput(output, field)
+            local applyResult = methods.applyStartupAutoRunApplyOutput(output, field)
+            if type(applyResult) == 'table' and applyResult.requiresProbe == true then
+                shouldFinishLoadCycle = not methods.beginStartupAutoRunRecoveryProbe(
+                    applyResult.result,
+                    'incomplete-helper-result'
+                )
+            end
+        elseif loadKind == 'startupAutoRunRecoveryProbe' then
+            methods.applyStartupAutoRunRecoveryProbeOutput(output)
         elseif loadKind == 'minecraftSkinApply' then
-            methods.applyMinecraftSkinFetchResult({
+            shouldFinishLoadCycle = not methods.applyMinecraftSkinFetchResult({
                 status = trim(values.DMEL_STATUS or ''),
                 username = trim(values.DMEL_USERNAME or ''),
                 imagePath = trim(values.DMEL_IMAGEPATH or ''),
                 texturePath = trim(values.DMEL_TEXTUREPATH or ''),
                 model = trim(values.DMEL_MODEL or ''),
+                cacheKey = trim(values.DMEL_CACHEKEY or ''),
+                atlasPath = trim(values.DMEL_ATLASPATH or ''),
+                atlasReady = trim(values.DMEL_ATLASREADY or ''),
+                atlasRequired = trim(values.DMEL_ATLAS_REQUIRED or ''),
                 message = trim(values.DMEL_MESSAGE or ''),
                 logPath = trim(values.DMEL_LOGPATH or values.DMEL_DEBUGLOG or ''),
             })
         elseif loadKind == 'minecraftSkinFileAttach' then
-            methods.applyMinecraftSkinFileAttachResult({
+            shouldFinishLoadCycle = not methods.applyMinecraftSkinFileAttachResult({
                 status = trim(values.DMEL_STATUS or ''),
                 username = trim(values.DMEL_USERNAME or ''),
                 imagePath = trim(values.DMEL_IMAGEPATH or ''),
                 texturePath = trim(values.DMEL_TEXTUREPATH or ''),
                 model = trim(values.DMEL_MODEL or ''),
+                cacheKey = trim(values.DMEL_CACHEKEY or ''),
+                atlasPath = trim(values.DMEL_ATLASPATH or ''),
+                atlasReady = trim(values.DMEL_ATLASREADY or ''),
+                atlasRequired = trim(values.DMEL_ATLAS_REQUIRED or ''),
                 message = trim(values.DMEL_MESSAGE or ''),
                 logPath = trim(values.DMEL_LOGPATH or ''),
             })
         elseif loadKind == 'minecraftSkinModelRender' then
-            methods.applyMinecraftSkinTextureRenderResult({
+            shouldFinishLoadCycle = not methods.applyMinecraftSkinTextureRenderResult({
                 status = trim(values.DMEL_STATUS or ''),
                 username = trim(values.DMEL_USERNAME or state.pendingLoadUsername or ''),
                 imagePath = trim(values.DMEL_IMAGEPATH or ''),
                 texturePath = trim(values.DMEL_TEXTUREPATH or state.pendingLoadTexturePath or ''),
                 model = trim(values.DMEL_MODEL or state.pendingLoadValue or ''),
+                cacheKey = trim(values.DMEL_CACHEKEY or ''),
+                atlasPath = trim(values.DMEL_ATLASPATH or ''),
+                atlasReady = trim(values.DMEL_ATLASREADY or ''),
+                atlasRequired = trim(values.DMEL_ATLAS_REQUIRED or ''),
                 message = trim(values.DMEL_MESSAGE or ''),
                 logPath = trim(values.DMEL_LOGPATH or values.DMEL_DEBUGLOG or ''),
             })
+        elseif loadKind == 'minecraftSkinAtlasRender' then
+            shouldFinishLoadCycle = methods.applyMinecraftSkinAtlasHelperResult(values) ~= false
         end
         if shouldFinishLoadCycle ~= false then
             methods.finishPendingLoadCycle()

@@ -95,6 +95,7 @@ $resultPairs = [ordered]@{
     DMEL_ITEMIMAGEASSETS = ''
     DMEL_LOGPATH = ''
     DMEL_MESSAGE = ''
+    DMEL_ITEMIMAGEATLASPROFILES = ''
 }
 
 function Set-ResultPairValue {
@@ -126,7 +127,7 @@ function Emit-ResultPairs {
     $stdout = New-Object System.IO.StreamWriter([Console]::OpenStandardOutput(), $utf8NoBom)
     try {
         $stdout.AutoFlush = $true
-        foreach ($key in @('DMEL_STATUS', 'DMEL_IMAGEPATH', 'DMEL_ITEMIMAGEASSETS', 'DMEL_LOGPATH', 'DMEL_MESSAGE')) {
+        foreach ($key in @('DMEL_STATUS', 'DMEL_IMAGEPATH', 'DMEL_ITEMIMAGEASSETS', 'DMEL_LOGPATH', 'DMEL_MESSAGE', 'DMEL_ITEMIMAGEATLASPROFILES')) {
             $stdout.WriteLine($key + '=' + (Convert-ResultPairValueToSingleLine -Value $resultPairs[$key]))
         }
     }
@@ -209,16 +210,35 @@ if ($dialog.ShowDialog($ownerForm) -eq [System.Windows.Forms.DialogResult]::OK) 
         return
     }
 
-    $importResult = Import-EditorItemImageFromFileDetailed -SourcePath $selectedPath -ItemImageDirectory $itemImageDirectory
+    try {
+        $importResult = Import-EditorItemImageFromFileDetailed -SourcePath $selectedPath -ItemImageDirectory $itemImageDirectory
+    }
+    catch {
+        $logPath = Write-EditorPickerDebugLog -Context 'PickImage.Import' -ErrorRecord $_ -State @{
+            InitialDirectory = $InitialDirectory
+            ItemImageDirectory = $itemImageDirectory
+            SelectedPath = $selectedPath
+            ScriptPath = $PSCommandPath
+        }
+        $failureReason = Get-EditorImageImportFailureMessage `
+            -Operation 'processing the selected image' `
+            -TargetPath $selectedPath `
+            -Exception $_.Exception
+        Emit-ErrorResult `
+            -Message (LF 'Helper_PickImage_ImportFailed' @([string]$failureReason) 'Selected image could not be imported: %1') `
+            -LogPath ([string]$logPath)
+        return
+    }
     if ($null -eq $importResult -or [string]::IsNullOrWhiteSpace([string]$importResult.FinalPath)) {
         Emit-ErrorResult -Message (LF 'Helper_PickImage_ImportFailed' @([string]$selectedPath) 'Selected image could not be imported: %1')
         return
     }
 
-    Set-ResultPairValue -Key 'DMEL_STATUS' -Value $(if ($importResult.ManifestPersisted) { 'OK' } else { 'WARN' })
+    Set-ResultPairValue -Key 'DMEL_STATUS' -Value ([string]$importResult.Status)
     Set-ResultPairValue -Key 'DMEL_IMAGEPATH' -Value ([string]$importResult.FinalPath)
     Set-ResultPairValue -Key 'DMEL_ITEMIMAGEASSETS' -Value ([string]$importResult.ItemImageAssets)
     Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value ([string]$importResult.WarningMessage)
+    Set-ResultPairValue -Key 'DMEL_ITEMIMAGEATLASPROFILES' -Value ([string]$importResult.ItemImageAtlasProfiles)
     Emit-ResultPairs
 }
 }
@@ -228,20 +248,32 @@ finally {
 }
 }
 catch {
+    $reportedToRainmeter = $false
     try {
         $logPath = Write-EditorPickerDebugLog -Context 'PickImage.TopLevel' -ErrorRecord $_ -State @{
             InitialDirectory = $InitialDirectory
             ScriptPath = $PSCommandPath
         }
+        $failureMessage = L 'Helper_PickImage_UnexpectedResult' 'Image picker failed. Check the helper log for details.'
+        if ($null -ne $_.Exception -and -not [string]::IsNullOrWhiteSpace([string]$_.Exception.Message)) {
+            $failureMessage = $failureMessage + ' ' + ([string]$_.Exception.Message).Trim()
+        }
         Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'ERROR'
         Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value ([string]$logPath)
-        Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value (L 'Helper_PickImage_UnexpectedResult' 'Image picker failed. Check the helper log for details.')
+        Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value $failureMessage
         Emit-ResultPairs
-        $message = LF 'Helper_PickImage_ErrorMessage' @([string]$logPath) ('Image picker failed. A debug log was written to:' + [Environment]::NewLine + $logPath)
-        $title = L 'Helper_PickImage_ErrorTitle' 'Editor Image Picker Error'
-        [System.Windows.Forms.MessageBox]::Show($message, $title, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        $reportedToRainmeter = $true
     }
     catch {
+    }
+    if (-not $reportedToRainmeter) {
+        try {
+            $message = LF 'Helper_PickImage_ErrorMessage' @([string]$logPath) ('Image picker failed. A debug log was written to:' + [Environment]::NewLine + $logPath)
+            $title = L 'Helper_PickImage_ErrorTitle' 'Editor Image Picker Error'
+            [System.Windows.Forms.MessageBox]::Show($message, $title, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        }
+        catch {
+        }
     }
     exit 0
 }

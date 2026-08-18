@@ -125,8 +125,10 @@ function Get-ItemImageDirectoryIdentityPart {
     }
 
     $identityParts = New-Object System.Collections.Generic.List[string]
+    $profiles = @(Get-BlockHudValidItemGifAtlasProfiles -ItemImageDirectory $Directory)
     foreach ($asset in @(Get-DirectoryItemImageAssets -Directory $Directory | Sort-Object)) {
-        $assetPath = Resolve-BlockHudItemImageAssetPath -ItemImageDirectory $Directory -AssetName $asset
+        $assetPath = Resolve-BlockHudItemImageBackingPath -ItemImageDirectory $Directory -AssetName $asset -ValidAtlasProfiles $profiles
+        if ([string]::IsNullOrWhiteSpace($assetPath)) { continue }
         $identityParts.Add(('{0}:{1}' -f $asset, (Get-Sha256HashString -Path $assetPath)))
     }
     return ($identityParts.ToArray() -join '|')
@@ -146,6 +148,7 @@ function Get-ItemImageRepairPlanId {
     }
 }
 
+# DMEL_COMPAT:import.item-schema-backfill
 function New-ItemImageCompatibilityPlan {
     param(
         [Parameter(Mandatory = $true)][string]$SourceRoot,

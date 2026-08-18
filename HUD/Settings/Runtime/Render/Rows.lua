@@ -11,34 +11,13 @@ return function(app)
     local pixelValue = helpers.pixelValue
     local applyTextFit = helpers.applyTextFit
 
-    local function fieldLabelKey(field)
-        if methods.fieldLabelLocalizationKey then
-            return methods.fieldLabelLocalizationKey(field)
-        end
-        local fieldKey = trim(field and field.key or '')
-        if fieldKey == '' then
-            return ''
-        end
-        return 'Settings_Field_' .. fieldKey .. '_Label'
-    end
-
-    local function fieldActionKey(field)
-        if methods.fieldActionLocalizationKey then
-            return methods.fieldActionLocalizationKey(field)
-        end
-        local fieldKey = trim(field and field.key or '')
-        if fieldKey == '' then
-            return ''
-        end
-        return 'Settings_Field_' .. fieldKey .. '_Action'
-    end
-
     local function applyRowLabelFit(rowIndex, field, text)
         if not applyTextFit then
             return
         end
         local width = methods.numericVariable('SettingsRow' .. rowIndex .. '_LabelW', methods.numericVariable('SlotSettingsRow' .. rowIndex .. '_LabelW', 0)) or 0
-        applyTextFit('MeterSettingsRow' .. tostring(rowIndex) .. 'Label', fieldLabelKey(field), text, 'SettingsLabelFontSize', math.max(0, width - 4), 0.35, 1.0)
+        local height = methods.numericVariable('SettingsRow' .. rowIndex .. '_LabelH', methods.numericVariable('SlotSettingsRow' .. rowIndex .. '_LabelH', 0)) or 0
+        applyTextFit('MeterSettingsRow' .. tostring(rowIndex) .. 'Label', text, 'SettingsLabelFontSize', math.max(0, width - 4), height, 'wrap4')
     end
 
     local function applyRowFieldFit(rowIndex, text)
@@ -46,7 +25,8 @@ return function(app)
             return
         end
         local width = methods.numericVariable('SettingsRow' .. rowIndex .. '_FieldContentW', methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_W', 0)) or 0
-        applyTextFit('MeterSettingsRow' .. tostring(rowIndex) .. 'FieldText', '', text, 'SettingsUIFontSize', width, 0.45, 1.0)
+        local height = methods.numericVariable('SettingsRow' .. rowIndex .. '_FieldContentH', methods.numericVariable('SettingsRow' .. rowIndex .. '_Field_H', 0)) or 0
+        applyTextFit('MeterSettingsRow' .. tostring(rowIndex) .. 'FieldText', text, 'SettingsUIFontSize', width, height, 'single-line')
     end
 
     local function applyRowActionFit(rowIndex, field, text, secondary)
@@ -56,11 +36,12 @@ return function(app)
         local suffix = secondary and 'ActionSecondary' or 'Action'
         local meterSuffix = secondary and 'ActionSecondaryLabel' or 'ActionLabel'
         local width = methods.numericVariable('SettingsRow' .. rowIndex .. '_' .. suffix .. '_W', 0) or 0
+        local height = methods.numericVariable('SettingsRow' .. rowIndex .. '_' .. suffix .. '_H', 0) or 0
         local pad = methods.numericVariable('SlotSettingsRowText_ContentPad', methods.numericVariable('SettingsInnerPad', 10)) or 10
-        applyTextFit('MeterSettingsRow' .. tostring(rowIndex) .. meterSuffix, fieldActionKey(field), text, 'SettingsUIFontSize', math.max(0, width - (2 * pad)), 0.35, 1.0)
+        applyTextFit('MeterSettingsRow' .. tostring(rowIndex) .. meterSuffix, text, 'SettingsUIFontSize', math.max(0, width - (2 * pad)), height, 'wrap4')
     end
 
-    function methods.configureTextRow(rowIndex, field)
+    function methods.configureTextRow(rowIndex, field, isDisabled)
 
         local displayValue = methods.displayValueForField(field, methods.readFieldValue(field))
 
@@ -74,7 +55,17 @@ return function(app)
 
         setVariable('SettingsRow' .. rowIndex .. '_FieldText', displayValue)
 
-        setVariable('SettingsRow' .. rowIndex .. '_FieldCommand', '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "PrepareTextField(\'' .. field.key .. '\')"][!CommandMeasure MeasureSettingsCommit "OpenPreparedTextField()"]')
+        local fieldCommand = '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "PrepareTextField(\'' .. field.key .. '\')"][!CommandMeasure MeasureSettingsCommit "OpenPreparedTextField()"]'
+        if field.controlType == 'multiDropdown' then
+            fieldCommand = '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "ToggleVisibleRowDropdown(' .. tostring(rowIndex) .. ')"]'
+        end
+        setVariable('SettingsRow' .. rowIndex .. '_FieldCommand', isDisabled and '' or fieldCommand)
+
+        local dropdownCommand = ''
+        if methods.hasDropdown(field) and not isDisabled then
+            dropdownCommand = '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "ToggleVisibleRowDropdown(' .. tostring(rowIndex) .. ')"]'
+        end
+        setVariable('SettingsRow' .. rowIndex .. '_DropdownButtonCommand', dropdownCommand)
 
         methods.syncTextFieldGeometry(rowIndex, field)
         applyRowFieldFit(rowIndex, displayValue)
@@ -86,6 +77,8 @@ return function(app)
             local inlineActionField = methods.getField(inlineActionFieldKey)
 
             if inlineActionField then
+
+                local inlineDisabled = isDisabled or (methods.isFieldDisabled and methods.isFieldDisabled(inlineActionField))
 
                 local contentX = methods.numericVariable('SettingsContentX', methods.numericVariable('SettingsRowLabelX', 0)) or 0
 
@@ -177,19 +170,23 @@ return function(app)
                 setVariable('SettingsRow' .. rowIndex .. '_ActionText', inlineActionText)
                 applyRowActionFit(rowIndex, inlineActionField, inlineActionText, false)
 
-                setVariable('SettingsRow' .. rowIndex .. '_ActionCommand', string.format("[!CommandMeasure MeasureSettingsCommit \"PlayUiClick()\"][!CommandMeasure MeasureSettingsCommit \"ExecuteFieldAction('%s')\"]", inlineActionField.key))
+                setVariable('SettingsRow' .. rowIndex .. '_ActionCommand', inlineDisabled and '' or string.format("[!CommandMeasure MeasureSettingsCommit \"PlayUiClick()\"][!CommandMeasure MeasureSettingsCommit \"ExecuteFieldAction('%s')\"]", inlineActionField.key))
 
-                state.currentRowActionByIndex[rowIndex] = { kind = 'executeFieldAction', fieldKey = inlineActionField.key }
+                state.currentRowActionByIndex[rowIndex] = inlineDisabled and nil or { kind = 'executeFieldAction', fieldKey = inlineActionField.key }
 
-                setVariable('SettingsRow' .. rowIndex .. '_ActionBgColor', SKIN:GetVariable('SettingsButtonBgColor', ''))
+                setVariable('SettingsRow' .. rowIndex .. '_ActionBgColor', inlineDisabled and SKIN:GetVariable('SettingsButtonDisabledBgColor', '') or SKIN:GetVariable('SettingsButtonBgColor', ''))
 
-                setVariable('SettingsRow' .. rowIndex .. '_ActionTextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
+                setVariable('SettingsRow' .. rowIndex .. '_ActionTextColor', inlineDisabled and SKIN:GetVariable('SettingsButtonDisabledTextColor', '') or SKIN:GetVariable('SettingsButtonTextColor', ''))
+
+                setVariable('SettingsRow' .. rowIndex .. '_ActionCursor', inlineDisabled and '0' or '1')
 
                 setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryHidden', '1')
 
                 setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryText', '')
 
                 setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryCommand', '')
+
+                setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryCursor', '0')
 
                 setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryBgColor', SKIN:GetVariable('SettingsButtonBgColor', ''))
 
@@ -287,9 +284,49 @@ return function(app)
 
         setVariable('SettingsRow' .. rowIndex .. '_ToggleHidden', '0')
 
-        setVariable('SettingsRow' .. rowIndex .. '_ToggleFillColor', semanticOn and SKIN:GetVariable('SettingsToggleFillOnColor', '') or SKIN:GetVariable('SettingsToggleFillOffColor', '0,0,0,0'))
+        local toggleFillColor = SKIN:GetVariable('SettingsToggleFillOffColor', '0,0,0,0')
+        if semanticOn then
+            toggleFillColor = isDisabled and SKIN:GetVariable('SettingsButtonDisabledTextColor', '') or SKIN:GetVariable('SettingsToggleFillOnColor', '')
+        end
+        setVariable('SettingsRow' .. rowIndex .. '_ToggleFillColor', toggleFillColor)
 
         setVariable('SettingsRow' .. rowIndex .. '_ToggleCommand', isDisabled and '' or '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "ToggleField(\'' .. field.key .. '\')"]')
+
+        local inlineFieldKey = trim(field.inlineToggleFieldKey or '')
+        local inlineField = inlineFieldKey ~= '' and methods.getField(inlineFieldKey) or nil
+        if inlineField then
+            local toggleX = methods.numericVariable('SettingsRow' .. rowIndex .. '_Toggle_X', 0) or 0
+            local controlY = methods.numericVariable('SlotSettingsRow' .. rowIndex .. '_ControlY', 0) or 0
+            local controlH = methods.numericVariable('SlotSettingsRow' .. rowIndex .. '_ControlH', methods.numericVariable('SettingsTall1H', 40)) or 40
+            local actionW = pixelValue(tonumber(field.inlineToggleButtonWidth or 120) or 120, 120)
+            local actionGap = pixelValue(methods.numericVariable('SettingsDropdownButtonGap', 4), 4)
+            local actionX = toggleX - actionGap - actionW
+            local inlineDisabled = isDisabled or (methods.isFieldDisabled and methods.isFieldDisabled(inlineField))
+            local inlineOn = not inlineDisabled and methods.toggleSemanticValue(inlineField, methods.readFieldValue(inlineField))
+            local actionText = methods.fieldActionText(inlineField, trim(inlineField.defaultActionText or inlineField.label or ''))
+
+            setVariable('SettingsRow' .. rowIndex .. '_ActionHidden', '0')
+            setVariable('SettingsRow' .. rowIndex .. '_Action_X', tostring(actionX))
+            setVariable('SettingsRow' .. rowIndex .. '_Action_Y', tostring(controlY))
+            setVariable('SettingsRow' .. rowIndex .. '_Action_W', tostring(actionW))
+            setVariable('SettingsRow' .. rowIndex .. '_Action_H', tostring(controlH))
+            setVariable('SettingsRow' .. rowIndex .. '_Action_LabelX', tostring(actionX + (actionW / 2)))
+            setVariable('SettingsRow' .. rowIndex .. '_Action_LabelY', tostring(controlY + (controlH / 2)))
+            setVariable('SettingsRow' .. rowIndex .. '_ActionText', actionText)
+            setVariable('SettingsRow' .. rowIndex .. '_ActionTooltip', methods.tooltipTextForField(inlineField))
+            setVariable('SettingsRow' .. rowIndex .. '_ActionCommand', inlineDisabled and '' or '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "ExecuteVisibleRowAction(' .. tostring(rowIndex) .. ')"]')
+            setVariable('SettingsRow' .. rowIndex .. '_ActionCursor', inlineDisabled and '0' or '1')
+            setVariable('SettingsRow' .. rowIndex .. '_ActionBgColor', inlineDisabled
+                and SKIN:GetVariable('SettingsButtonDisabledBgColor', '')
+                or (inlineOn and SKIN:GetVariable('SettingsPalette6', SKIN:GetVariable('SettingsButtonBgColor', ''))
+                    or SKIN:GetVariable('SettingsButtonBgColor', '')))
+            setVariable('SettingsRow' .. rowIndex .. '_ActionTextColor', inlineDisabled
+                and SKIN:GetVariable('SettingsButtonDisabledTextColor', '')
+                or (inlineOn and SKIN:GetVariable('SettingsTabActiveTextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
+                    or SKIN:GetVariable('SettingsButtonTextColor', '')))
+            applyRowActionFit(rowIndex, inlineField, actionText, false)
+            state.currentRowActionByIndex[rowIndex] = inlineDisabled and nil or { kind = 'toggleField', fieldKey = inlineField.key }
+        end
 
     end
 
@@ -372,7 +409,8 @@ return function(app)
         setVariable('SettingsRow' .. rowIndex .. '_Action_LabelY', tostring(labelY))
         local primaryText = optionLabel(primary)
         setVariable('SettingsRow' .. rowIndex .. '_ActionText', primaryText)
-        setVariable('SettingsRow' .. rowIndex .. '_ActionCommand', '')
+        setVariable('SettingsRow' .. rowIndex .. '_ActionCommand', isDisabled and '' or '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "ExecuteVisibleRowAction(' .. tostring(rowIndex) .. ')"]')
+        setVariable('SettingsRow' .. rowIndex .. '_ActionCursor', isDisabled and '0' or '1')
         setVariable('SettingsRow' .. rowIndex .. '_ActionBgColor', optionBgColor(primarySelected))
         setVariable('SettingsRow' .. rowIndex .. '_ActionTextColor', optionTextColor(primarySelected))
         applyRowActionFit(rowIndex, field, primaryText, false)
@@ -385,7 +423,8 @@ return function(app)
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondary_LabelY', tostring(labelY))
         local secondaryText = optionLabel(secondary)
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryText', secondaryText)
-        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryCommand', '')
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryCommand', isDisabled and '' or '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "ExecuteVisibleRowSecondaryAction(' .. tostring(rowIndex) .. ')"]')
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryCursor', isDisabled and '0' or '1')
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryBgColor', optionBgColor(secondarySelected))
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryTextColor', optionTextColor(secondarySelected))
         applyRowActionFit(rowIndex, field, secondaryText, true)
@@ -395,7 +434,7 @@ return function(app)
 
     end
 
-    function methods.configureStepperRow(rowIndex, field)
+    function methods.configureStepperRow(rowIndex, field, isDisabled)
 
         setVariable('SettingsRow' .. rowIndex .. '_FieldHidden', '1')
 
@@ -405,15 +444,15 @@ return function(app)
 
         setVariable('SettingsRow' .. rowIndex .. '_StepperFieldText', methods.readFieldValue(field))
 
-        setVariable('SettingsRow' .. rowIndex .. '_StepperFieldCommand', '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "PrepareTextField(\'' .. field.key .. '\')"][!CommandMeasure MeasureSettingsCommit "OpenPreparedTextField()"]')
+        setVariable('SettingsRow' .. rowIndex .. '_StepperFieldCommand', isDisabled and '' or '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "PrepareTextField(\'' .. field.key .. '\')"][!CommandMeasure MeasureSettingsCommit "OpenPreparedTextField()"]')
 
-        setVariable('SettingsRow' .. rowIndex .. '_StepperMinusCommand', '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "StepFieldDown(\'' .. field.key .. '\')"]')
+        setVariable('SettingsRow' .. rowIndex .. '_StepperMinusCommand', isDisabled and '' or '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "StepFieldDown(\'' .. field.key .. '\')"]')
 
-        setVariable('SettingsRow' .. rowIndex .. '_StepperPlusCommand', '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "StepFieldUp(\'' .. field.key .. '\')"]')
+        setVariable('SettingsRow' .. rowIndex .. '_StepperPlusCommand', isDisabled and '' or '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "StepFieldUp(\'' .. field.key .. '\')"]')
 
     end
 
-    function methods.configureActionRow(rowIndex, field)
+    function methods.configureActionRow(rowIndex, field, isDisabled)
 
         setVariable('SettingsRow' .. rowIndex .. '_FieldHidden', '1')
 
@@ -441,7 +480,20 @@ return function(app)
 
         local controlH = methods.numericVariable('SlotSettingsRow' .. rowIndex .. '_ControlH', methods.numericVariable('SettingsTall1H', 40)) or 40
 
+        local actionStatusKind = trim(field and field.actionStatusKind or '')
+        if actionStatusKind ~= '' then
+            local contentX = methods.numericVariable('SettingsContentX', 0) or 0
+            local contentW = methods.numericVariable('SettingsContentW', 0) or 0
+            local baseLabelW = methods.numericVariable('SettingsRowBaseLabelW', methods.numericVariable('SettingsRowLabelW', 0)) or 0
+            local controlGap = methods.numericVariable('SettingsRowControlGap', 12) or 12
+            controlX = contentX + baseLabelW + controlGap
+            controlW = math.max(0, contentW - baseLabelW - controlGap)
+            setVariable('SettingsRow' .. rowIndex .. '_LabelW', tostring(baseLabelW))
+        end
+
         local actionButtonW = methods.numericVariable('SlotSettingsRowActionButtonW', methods.numericVariable('SettingsActionButtonW', controlW)) or controlW
+        local actionButtonWidthScale = tonumber(field and field.actionButtonWidthScale or 1) or 1
+        actionButtonW = math.max(0, actionButtonW * actionButtonWidthScale)
 
         local actionX = controlX + controlW - actionButtonW
 
@@ -473,11 +525,39 @@ return function(app)
 
         setVariable('SettingsRow' .. rowIndex .. '_ActionSecondary_LabelY', tostring(actionLabelY))
 
+        if actionStatusKind == 'minecraftSkinPlayerFolderSize' then
+            local statusGap = 5
+            local statusW = math.max(0, actionX - statusGap - controlX)
+            local statusText = methods.minecraftSkinPlayerFolderSizeDisplayText
+                and methods.minecraftSkinPlayerFolderSizeDisplayText()
+                or 'Occupied space: 0.0MB'
+            local statusTooltip = methods.minecraftSkinPlayerFolderSizeTooltipText
+                and methods.minecraftSkinPlayerFolderSizeTooltipText()
+                or ''
+            setVariable('SettingsRow' .. rowIndex .. '_FieldHidden', statusW > 0 and '0' or '1')
+            setVariable('SettingsRow' .. rowIndex .. '_FieldBgHidden', '1')
+            setVariable('SettingsRow' .. rowIndex .. '_Field_X', tostring(controlX))
+            setVariable('SettingsRow' .. rowIndex .. '_Field_Y', tostring(controlY))
+            setVariable('SettingsRow' .. rowIndex .. '_Field_W', tostring(statusW))
+            setVariable('SettingsRow' .. rowIndex .. '_Field_H', tostring(controlH))
+            setVariable('SettingsRow' .. rowIndex .. '_FieldContentX', tostring(actionX - statusGap))
+            setVariable('SettingsRow' .. rowIndex .. '_FieldContentY', tostring(controlY))
+            setVariable('SettingsRow' .. rowIndex .. '_FieldContentW', tostring(statusW))
+            setVariable('SettingsRow' .. rowIndex .. '_FieldContentH', tostring(controlH))
+            setVariable('SettingsRow' .. rowIndex .. '_FieldText', statusText)
+            setVariable('SettingsRow' .. rowIndex .. '_FieldTextAlign', 'RightCenter')
+            setVariable('SettingsRow' .. rowIndex .. '_FieldCommand', '')
+            setVariable('SettingsRow' .. rowIndex .. '_Tooltip', statusTooltip)
+            applyRowFieldFit(rowIndex, statusText)
+        end
+
         local labelText = methods.fieldLabelText(field)
 
         local actionText = methods.fieldActionText(field)
 
         local actionCommand = string.format("[!CommandMeasure MeasureSettingsCommit \"PlayUiClick()\"][!CommandMeasure MeasureSettingsCommit \"ExecuteFieldAction('%s')\"]", field.key)
+
+        local secondaryActionEnabled = false
 
         local actionBgColor = SKIN:GetVariable('SettingsButtonBgColor', '')
 
@@ -553,6 +633,8 @@ return function(app)
 
             setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryCommand', string.format("[!CommandMeasure MeasureSettingsCommit \"PlayUiClick()\"][!CommandMeasure MeasureSettingsCommit \"ExecuteFieldAction('%s')\"]", field.key))
 
+            secondaryActionEnabled = true
+
             state.currentRowSecondaryActionByIndex[rowIndex] = { kind = 'executeFieldAction', fieldKey = field.key }
 
             setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryBgColor', SKIN:GetVariable('SettingsDangerButtonBgColor', ''))
@@ -561,10 +643,26 @@ return function(app)
 
         end
 
+        if isDisabled then
+            actionCommand = ''
+            actionBgColor = SKIN:GetVariable('SettingsButtonDisabledBgColor', '')
+            actionTextColor = SKIN:GetVariable('SettingsButtonDisabledTextColor', '')
+            state.currentRowActionByIndex[rowIndex] = nil
+            setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryCommand', '')
+            setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryBgColor', SKIN:GetVariable('SettingsButtonDisabledBgColor', ''))
+            setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryTextColor', SKIN:GetVariable('SettingsButtonDisabledTextColor', ''))
+            state.currentRowSecondaryActionByIndex[rowIndex] = nil
+            secondaryActionEnabled = false
+        end
+
         setVariable('SettingsRow' .. rowIndex .. '_ActionText', actionText)
         applyRowActionFit(rowIndex, field, actionText, false)
 
         setVariable('SettingsRow' .. rowIndex .. '_ActionCommand', actionCommand)
+
+        setVariable('SettingsRow' .. rowIndex .. '_ActionCursor', actionCommand ~= '' and '1' or '0')
+
+        setVariable('SettingsRow' .. rowIndex .. '_ActionSecondaryCursor', secondaryActionEnabled and '1' or '0')
 
         if actionCommand ~= '' and state.currentRowActionByIndex[rowIndex] == nil then
 

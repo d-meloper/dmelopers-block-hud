@@ -18,6 +18,10 @@ return function(app)
             refreshOptions.loadingText = targetSet.__loadingText
         end
 
+        if targetSet and refreshOptions.waitForJukeboxReady == nil then
+            refreshOptions.waitForJukeboxReady = targetSet.__waitForJukeboxReady == true
+        end
+
         if methods.QueueRefreshTargets then
 
             local shouldRenderSettings = refreshOptions.includeSettings == true or trim(refreshOptions.loadingText or '') ~= ''
@@ -273,12 +277,17 @@ return function(app)
         end
 
         if field and field.key == 'jukeboxEnabled' and not shouldActivate then
-
+            methods.BeginJukeboxSettingsApply('inactive')
             return methods.stopAndDeactivateJukeboxTargets()
 
         end
 
         local targetList = shouldActivate and activateTargets or deactivateTargets
+        local jukeboxAlreadyActive = false
+        if field and field.key == 'jukeboxEnabled' and shouldActivate then
+            jukeboxAlreadyActive = methods.isConfigTargetActive('Jukebox')
+            methods.BeginJukeboxSettingsApply('ready')
+        end
 
         for _, targetName in ipairs(targetList) do
 
@@ -292,6 +301,10 @@ return function(app)
 
             end
 
+        end
+
+        if jukeboxAlreadyActive then
+            methods.RequestJukeboxSettingsApplyAck()
         end
 
         return shouldActivate

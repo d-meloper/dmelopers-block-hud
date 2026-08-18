@@ -12,5 +12,13 @@ return function(loadRuntimeModule)
     merge(loadRuntimeModule('Schema/Fields.lua'))
     merge(loadRuntimeModule('Schema/Options.lua'))
 
+    local hudMirror = loadRuntimeModule('Schema/HudMirror.lua')
+    for fieldKey, field in pairs(hudMirror.fields or {}) do
+        schema.fields[fieldKey] = field
+    end
+    for _, fieldKey in ipairs(hudMirror.trackedFieldKeys or {}) do
+        schema.trackedFieldKeys[#schema.trackedFieldKeys + 1] = fieldKey
+    end
+
     return schema
 end

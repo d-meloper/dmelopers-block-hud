@@ -161,6 +161,10 @@ return function(app)
 
         setVariable('SettingsDropdownPagePrevTextColor', pageCount > 1 and SKIN:GetVariable('SettingsButtonTextColor', '') or SKIN:GetVariable('SettingsButtonDisabledTextColor', ''))
 
+        setVariable('SettingsDropdownPagePrevCommand', pageCount > 1 and '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "PrevDropdownOptionPage()"]' or '')
+
+        setVariable('SettingsDropdownPagePrevCursor', pageCount > 1 and '1' or '0')
+
         setVariable('SettingsDropdownPageCurrentBgColor', SKIN:GetVariable('SettingsButtonBgColor', ''))
 
         setVariable('SettingsDropdownPageCurrentTextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
@@ -168,6 +172,10 @@ return function(app)
         setVariable('SettingsDropdownPageNextBgColor', pageCount > 1 and SKIN:GetVariable('SettingsButtonBgColor', '') or SKIN:GetVariable('SettingsButtonDisabledBgColor', ''))
 
         setVariable('SettingsDropdownPageNextTextColor', pageCount > 1 and SKIN:GetVariable('SettingsButtonTextColor', '') or SKIN:GetVariable('SettingsButtonDisabledTextColor', ''))
+
+        setVariable('SettingsDropdownPageNextCommand', pageCount > 1 and '[!CommandMeasure MeasureSettingsCommit "PlayUiClick()"][!CommandMeasure MeasureSettingsCommit "NextDropdownOptionPage()"]' or '')
+
+        setVariable('SettingsDropdownPageNextCursor', pageCount > 1 and '1' or '0')
 
         setVariable('SettingsDropdownPagePrev_X', tostring(pagePrevX))
 
@@ -263,9 +271,16 @@ return function(app)
 
                 setVariable('SettingsDropdownOption' .. slotIndex .. 'Hidden', '0')
 
-                setVariable('SettingsDropdownOption' .. slotIndex .. 'LabelText', option.displayLabel)
+                local optionLabel = option.selected == true and ('✓ ' .. tostring(option.displayLabel or '')) or option.displayLabel
+                setVariable('SettingsDropdownOption' .. slotIndex .. 'LabelText', optionLabel)
+                setVariable('SettingsDropdownOption' .. slotIndex .. '_BgColor', option.selected == true
+                    and SKIN:GetVariable('SettingsPalette6', SKIN:GetVariable('SettingsButtonBgColor', ''))
+                    or SKIN:GetVariable('SettingsButtonBgColor', ''))
+                setVariable('SettingsDropdownOption' .. slotIndex .. '_TextColor', option.selected == true
+                    and SKIN:GetVariable('SettingsTabActiveTextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
+                    or SKIN:GetVariable('SettingsButtonTextColor', ''))
                 if applyTextFit then
-                    applyTextFit('MeterSettingsDropdownOption' .. tostring(slotIndex) .. 'Label', '', option.displayLabel, 'SettingsUIFontSize', labelW, 0.70)
+                    applyTextFit('MeterSettingsDropdownOption' .. tostring(slotIndex) .. 'Label', optionLabel, 'SettingsUIFontSize', labelW, optionH, 'wrap4')
                 end
 
                 setVariable('SettingsDropdownOption' .. slotIndex .. 'AppliedValue', option.appliedValue)
@@ -276,7 +291,7 @@ return function(app)
 
                 setVariable('SettingsDropdownOption' .. slotIndex .. 'LabelText', '')
                 if applyTextFit then
-                    applyTextFit('MeterSettingsDropdownOption' .. tostring(slotIndex) .. 'Label', '', '', 'SettingsUIFontSize', labelW, 0.70)
+                    applyTextFit('MeterSettingsDropdownOption' .. tostring(slotIndex) .. 'Label', '', 'SettingsUIFontSize', labelW, optionH, 'wrap4')
                 end
 
                 setVariable('SettingsDropdownOption' .. slotIndex .. 'AppliedValue', '')

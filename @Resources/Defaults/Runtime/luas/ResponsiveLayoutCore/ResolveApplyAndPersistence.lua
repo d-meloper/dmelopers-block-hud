@@ -1,30 +1,116 @@
 -- Split from @Resources\Defaults\Runtime\luas\ResponsiveLayoutCore.lua lines 907-1748.
-function M.ResolveRects(SKIN)
-    local work = effectivePrimaryWorkArea(SKIN)
-    local scale = normalizeScale(M.GetScale(SKIN))
+local function resolveIndependentIndicatorAnchorHotbar(SKIN, snapshot, indicatorUserScale, forcedMonitor)
+    local state = resolveBaselineState(SKIN, 'Hotbar') or M.BaselineState('Hotbar')
+    if not state then
+        return nil
+    end
+
+    -- Indicators share the default HUD alignment, not the canonical Hotbar's
+    -- live / fixed position. This keeps their auto placement stable across a
+    -- Hotbar drag and the following independent config refresh.
+    state.PositionMode = 'auto'
+    state.FixedX = '0'
+    state.FixedY = '0'
+    state.MonitorFingerprint = ''
+    state.MonitorRelativeX = ''
+    state.MonitorRelativeY = ''
+
+    local context, metrics = resolveLayoutContext(snapshot, 'Hotbar', state, nil, function(targetScale)
+        return getHotbarMetrics(SKIN, targetScale, indicatorUserScale)
+    end, false, forcedMonitor)
+    local targetWork = context.work
+    local targetScale = context.scale
+    local visibleCenterX = targetWork.centerX + scaleNumber(state.OffsetXBase, targetScale, 0)
+    local visibleBottomY = targetWork.bottom + scaleNumber(state.OffsetYBase, targetScale, 0)
+    local rawX = visibleCenterX - (metrics.visibleLeft + (metrics.hotbarWidth / 2))
+    local rawY = visibleBottomY - (metrics.visibleTop + metrics.hotbarHeight)
+    rawX, rawY = clampWindow(targetWork, rawX, rawY, metrics.windowWidth, metrics.windowHeight)
+
+    return attachMonitorContext({
+        x = rawX,
+        y = rawY,
+        width = metrics.windowWidth,
+        height = metrics.windowHeight,
+        scale = targetScale,
+        metrics = metrics,
+        visibleLeft = rawX + metrics.visibleLeft,
+        visibleTop = rawY + metrics.visibleTop,
+        visibleRight = rawX + metrics.visibleLeft + metrics.visibleWidth,
+        visibleBottom = rawY + metrics.visibleTop + metrics.visibleHeight,
+        visibleCenterX = rawX + metrics.visibleLeft + (metrics.visibleWidth / 2),
+        indicatorAnchorLeft = (rawX + metrics.visibleLeft + (metrics.visibleWidth / 2)) - (metrics.indicatorAnchorWidth / 2),
+        indicatorAnchorRight = (rawX + metrics.visibleLeft + (metrics.visibleWidth / 2)) + (metrics.indicatorAnchorWidth / 2),
+        indicatorAnchorTop = (rawY + metrics.visibleTop + metrics.visibleHeight) - metrics.indicatorAnchorSlotSize,
+    }, context)
+end
+
+function M.ResolveRects(SKIN, snapshot, ownerRectOverrides, forcedMonitors, stateOverrides)
+    snapshot = snapshot or M.SnapshotMonitors(SKIN)
+    local work = snapshot.primary.work
+    local scale = normalizeScale(snapshot.primary.scale)
     local indicatorUserScale = getIndicatorUserScale(SKIN)
     local rects = {}
+    local function forcedMonitor(id)
+        if type(forcedMonitors) ~= 'table' then
+            return nil
+        end
+        return forcedMonitors[id]
+    end
+    local function resolvedState(id)
+        local state = M.GetState(SKIN, id)
+        local overrides = type(stateOverrides) == 'table' and stateOverrides[id] or nil
+        if not state or type(overrides) ~= 'table' then
+            return state
+        end
+        local result = {}
+        for key, value in pairs(state) do
+            result[key] = value
+        end
+        for key, value in pairs(overrides) do
+            result[key] = value
+        end
+        return result
+    end
 
     do
-        local state = M.GetState(SKIN, 'Hotbar')
-        local metrics = getHotbarMetrics(SKIN, scale, indicatorUserScale)
+        local state = resolvedState('Hotbar')
+        local context, metrics = resolveLayoutContext(snapshot, 'Hotbar', state, nil, function(targetScale)
+            return getHotbarMetrics(SKIN, targetScale, indicatorUserScale)
+        end, false, forcedMonitor('Hotbar'))
+        local targetWork = context.work
+        local targetScale = context.scale
         local rawX
         local rawY
         if usesFixedPosition(state) then
-            rawX, rawY = resolveFixedWindow(SKIN, 'Hotbar', state, work, metrics.windowWidth, metrics.windowHeight)
+            rawX, rawY = resolveFixedWindow(SKIN, 'Hotbar', state, targetWork, metrics.windowWidth, metrics.windowHeight, context)
         else
-            local visibleCenterX = work.centerX + scaleNumber(state.OffsetXBase, scale, 0)
-            local visibleBottomY = work.bottom + scaleNumber(state.OffsetYBase, scale, 0)
+            local visibleCenterX = targetWork.centerX + scaleNumber(state.OffsetXBase, targetScale, 0)
+            local visibleBottomY = targetWork.bottom + scaleNumber(state.OffsetYBase, targetScale, 0)
             rawX = visibleCenterX - (metrics.visibleLeft + (metrics.hotbarWidth / 2))
             rawY = visibleBottomY - (metrics.visibleTop + metrics.hotbarHeight)
-            rawX, rawY = clampWindow(work, rawX, rawY, metrics.windowWidth, metrics.windowHeight)
+            rawX, rawY = clampWindow(targetWork, rawX, rawY, metrics.windowWidth, metrics.windowHeight)
         end
-        rects.Hotbar = {
+        local liveState = not forcedMonitor('Hotbar') and M.CurrentSkinId(SKIN) ~= 'Hotbar' and readLiveState(SKIN, 'Hotbar') or nil
+        if canFollowLiveOwner(SKIN, 'Hotbar', liveState, snapshot) then
+            local liveFallbackActive = context.fallbackActive
+            rawX = round(liveState.WindowX)
+            rawY = round(liveState.WindowY)
+            context = contextForLiveRect(snapshot, buildRect(
+                rawX,
+                rawY,
+                liveState.Width or metrics.windowWidth,
+                liveState.Height or metrics.windowHeight
+            ))
+            context.fallbackActive = liveFallbackActive
+            metrics = getHotbarMetrics(SKIN, context.scale, indicatorUserScale)
+            targetScale = context.scale
+        end
+        rects.Hotbar = attachMonitorContext({
             x = rawX,
             y = rawY,
             width = metrics.windowWidth,
             height = metrics.windowHeight,
-            scale = scale,
+            scale = targetScale,
             metrics = metrics,
             visibleLeft = rawX + metrics.visibleLeft,
             visibleTop = rawY + metrics.visibleTop,
@@ -34,145 +120,218 @@ function M.ResolveRects(SKIN)
             indicatorAnchorLeft = (rawX + metrics.visibleLeft + (metrics.visibleWidth / 2)) - (metrics.indicatorAnchorWidth / 2),
             indicatorAnchorRight = (rawX + metrics.visibleLeft + (metrics.visibleWidth / 2)) + (metrics.indicatorAnchorWidth / 2),
             indicatorAnchorTop = (rawY + metrics.visibleTop + metrics.visibleHeight) - metrics.indicatorAnchorSlotSize,
-        }
+        }, context)
     end
 
     do
-        local state = M.GetState(SKIN, 'Inventory')
-        local metrics = getInventoryMetrics(SKIN, scale)
+        local state = resolvedState('Inventory')
+        local context, metrics = resolveLayoutContext(snapshot, 'Inventory', state, nil, function(targetScale)
+            return getInventoryMetrics(SKIN, targetScale)
+        end, false, forcedMonitor('Inventory'))
+        local targetWork = context.work
+        local targetScale = context.scale
         local rawX
         local rawY
         if usesFixedPosition(state) then
-            rawX, rawY = resolveFixedWindow(SKIN, 'Inventory', state, work, metrics.width, metrics.height)
+            rawX, rawY = resolveFixedWindow(SKIN, 'Inventory', state, targetWork, metrics.width, metrics.height, context)
         else
-            rawX = work.centerX + scaleNumber(state.OffsetXBase, scale, 0)
-            rawY = work.centerY + scaleNumber(state.OffsetYBase, scale, 0)
-            rawX, rawY = clampWindow(work, rawX, rawY, metrics.width, metrics.height)
+            rawX = targetWork.centerX + scaleNumber(state.OffsetXBase, targetScale, 0)
+            rawY = targetWork.centerY + scaleNumber(state.OffsetYBase, targetScale, 0)
+            rawX, rawY = clampWindow(targetWork, rawX, rawY, metrics.width, metrics.height)
         end
-        rects.Inventory = {
+        local liveState = not forcedMonitor('Inventory') and M.CurrentSkinId(SKIN) ~= 'Inventory' and readLiveState(SKIN, 'Inventory') or nil
+        if canFollowLiveOwner(SKIN, 'Inventory', liveState, snapshot) then
+            local liveFallbackActive = context.fallbackActive
+            rawX = round(liveState.WindowX)
+            rawY = round(liveState.WindowY)
+            context = contextForLiveRect(snapshot, buildRect(
+                rawX,
+                rawY,
+                liveState.Width or metrics.width,
+                liveState.Height or metrics.height
+            ))
+            context.fallbackActive = liveFallbackActive
+            metrics = getInventoryMetrics(SKIN, context.scale)
+            targetScale = context.scale
+        end
+        rects.Inventory = attachMonitorContext({
             x = rawX,
             y = rawY,
             width = metrics.width,
             height = metrics.height,
-            scale = scale,
+            scale = targetScale,
             metrics = metrics,
             leftTopX = rawX,
             leftTopY = rawY,
             rightTopX = rawX + metrics.width,
             rightTopY = rawY,
-        }
+        }, context)
     end
 
     do
-        local rawWork = work.raw or rawPrimaryWorkArea(SKIN)
-        local inventoryWork = monitorWorkAreaForRect(SKIN, rects.Inventory, rawWork)
-        rects.InventoryBG = {
+        local inventoryContext = contextForMonitor(rects.Inventory.monitor, 'owner', rects.Inventory.fallbackActive, nil)
+        local inventoryWork = inventoryContext.rawWork
+        rects.InventoryBG = attachMonitorContext({
             x = inventoryWork.x,
             y = inventoryWork.y,
             width = inventoryWork.width,
             height = inventoryWork.height,
-            scale = scale,
-        }
+            scale = rects.Inventory.scale,
+        }, inventoryContext)
     end
 
     do
-        local state = M.GetState(SKIN, 'Clock')
-        local metrics = getClockMetrics(SKIN, scale)
+        local state = resolvedState('Clock')
+        local context, metrics = resolveLayoutContext(snapshot, 'Clock', state, nil, function(targetScale)
+            return getClockMetrics(SKIN, targetScale)
+        end, false, forcedMonitor('Clock'))
+        local targetWork = context.work
+        local targetScale = context.scale
         local rawX
         local rawY
         if usesFixedPosition(state) then
-            rawX, rawY = resolveFixedWindow(SKIN, 'Clock', state, work, metrics.width, metrics.height)
+            rawX, rawY = resolveFixedWindow(SKIN, 'Clock', state, targetWork, metrics.width, metrics.contentHeight, context)
+            rawY = rawY - metrics.effectTopInset
+            if context.fallbackActive then
+                rawX, rawY = clampWindow(targetWork, rawX, rawY, metrics.width, metrics.height)
+            end
         else
-            rawX = work.centerX + scaleNumber(state.OffsetXBase, scale, 0) - metrics.centerX
-            rawY = work.y + scaleNumber(state.OffsetYBase, scale, 0)
-            rawX, rawY = clampWindow(work, rawX, rawY, metrics.width, metrics.height)
+            rawX = targetWork.centerX + scaleNumber(state.OffsetXBase, targetScale, 0) - metrics.centerX
+            rawY = targetWork.y + scaleNumber(state.OffsetYBase, targetScale, 0) - metrics.effectTopInset
+            rawX, rawY = clampWindow(targetWork, rawX, rawY, metrics.width, metrics.height)
         end
-        rects.Clock = {
+        rects.Clock = attachMonitorContext({
             x = rawX,
             y = rawY,
             width = metrics.width,
             height = metrics.height,
-            scale = scale,
+            scale = targetScale,
             metrics = metrics,
-        }
+        }, context)
     end
 
     do
-        local state = M.GetState(SKIN, 'ClockSprite')
-        local metrics = getClockSpriteMetrics(SKIN, scale)
+        local state = resolvedState('ClockSprite')
+        local context, metrics = resolveLayoutContext(snapshot, 'ClockSprite', state, nil, function(targetScale)
+            return getClockSpriteMetrics(SKIN, targetScale)
+        end, false, forcedMonitor('ClockSprite'))
+        local targetWork = context.work
+        local targetScale = context.scale
         local rawX
         local rawY
         if usesFixedPosition(state) then
-            rawX, rawY = resolveFixedWindow(SKIN, 'ClockSprite', state, work, metrics.width, metrics.height)
+            rawX, rawY = resolveFixedWindow(SKIN, 'ClockSprite', state, targetWork, metrics.width, metrics.height, context)
         else
-            rawX = work.centerX + scaleNumber(state.OffsetXBase, scale, 0) - round(metrics.width / 2)
-            rawY = work.y + scaleNumber(state.OffsetYBase, scale, 0)
-            rawX, rawY = clampWindow(work, rawX, rawY, metrics.width, metrics.height)
+            rawX = targetWork.centerX + scaleNumber(state.OffsetXBase, targetScale, 0) - round(metrics.width / 2)
+            rawY = targetWork.y + scaleNumber(state.OffsetYBase, targetScale, 0)
+            rawX, rawY = clampWindow(targetWork, rawX, rawY, metrics.width, metrics.height)
         end
-        rects.ClockSprite = {
+        rects.ClockSprite = attachMonitorContext({
             x = rawX,
             y = rawY,
             width = metrics.width,
             height = metrics.height,
-            scale = scale,
+            scale = targetScale,
             metrics = metrics,
-        }
+        }, context)
     end
 
     do
-        local state = M.GetState(SKIN, 'Jukebox')
-        local metrics = getJukeboxMetrics(SKIN, scale)
+        local state = resolvedState('Jukebox')
+        local targetScale = normalizeScale(M.GetScale(SKIN))
+        local context, metrics = resolveLayoutContext(snapshot, 'Jukebox', state, nil, function()
+            return getJukeboxMetrics(SKIN, targetScale)
+        end, false, forcedMonitor('Jukebox'))
+        local targetWork = context.work
         local width = metrics.width
         local height = metrics.height
         local rawX
         local rawY
         if usesFixedPosition(state) then
-            rawX, rawY = resolveFixedWindow(SKIN, 'Jukebox', state, work, metrics.width, metrics.height)
+            rawX, rawY = resolveFixedWindow(SKIN, 'Jukebox', state, targetWork, metrics.width, metrics.height, context)
         else
-            rawX = work.centerX + scaleNumber(state.OffsetXBase, scale, 0) - round(metrics.width / 2)
-            rawY = work.centerY + scaleNumber(state.OffsetYBase, scale, 0) - round(metrics.height / 2)
-            rawX, rawY = clampWindow(work, rawX, rawY, metrics.width, metrics.height)
+            rawX = targetWork.centerX + scaleNumber(state.OffsetXBase, targetScale, 0) - round(metrics.width / 2)
+            rawY = targetWork.centerY + scaleNumber(state.OffsetYBase, targetScale, 0) - round(metrics.height / 2)
+            rawX, rawY = clampWindow(targetWork, rawX, rawY, metrics.width, metrics.height)
         end
-        if M.CurrentSkinId(SKIN) ~= 'Jukebox' then
+        local explicitOwnerRect = ownerRectOverride(ownerRectOverrides, 'Jukebox')
+        if explicitOwnerRect then
+            local liveFallbackActive = context.fallbackActive
+            rawX = round(explicitOwnerRect.WindowX)
+            rawY = round(explicitOwnerRect.WindowY)
+            context = contextForLiveRect(snapshot, buildRect(
+                rawX,
+                rawY,
+                explicitOwnerRect.Width,
+                explicitOwnerRect.Height
+            ))
+            context.fallbackActive = liveFallbackActive
+            metrics = getJukeboxMetrics(SKIN, targetScale)
+            width = metrics.width
+            height = metrics.height
+        elseif M.CurrentSkinId(SKIN) ~= 'Jukebox' then
             local liveState = readLiveState(SKIN, 'Jukebox')
-            if liveState and liveState.Active and liveState.WindowX ~= nil and liveState.WindowY ~= nil then
+            if canFollowLiveOwner(SKIN, 'Jukebox', liveState, snapshot) then
+                local liveFallbackActive = context.fallbackActive
                 rawX = round(liveState.WindowX)
                 rawY = round(liveState.WindowY)
+                context = contextForLiveRect(snapshot, buildRect(
+                    rawX,
+                    rawY,
+                    liveState.Width or metrics.width,
+                    liveState.Height or metrics.height
+                ))
+                context.fallbackActive = liveFallbackActive
+                metrics = getJukeboxMetrics(SKIN, targetScale)
+                width = metrics.width
+                height = metrics.height
             end
         end
-        rects.Jukebox = {
+        rects.Jukebox = attachMonitorContext({
             x = rawX,
             y = rawY,
             width = width,
             height = height,
-            scale = scale,
+            scale = targetScale,
             metrics = metrics,
             topCenterX = rawX + (width / 2),
             topY = rawY,
-        }
+        }, context)
     end
     do
-        local state = M.GetState(SKIN, 'JukeboxDiscSlot')
-        local metrics = getJukeboxDiscSlotMetrics(SKIN, scale)
+        local state = resolvedState('JukeboxDiscSlot')
         local jukebox = rects.Jukebox
+        local targetScale = normalizeScale(M.GetScale(SKIN))
+        local context, metrics = resolveLayoutContext(snapshot, 'JukeboxDiscSlot', state, jukebox.monitor, function()
+            return getJukeboxDiscSlotMetrics(SKIN, targetScale)
+        end, true)
+        if not usesFixedPosition(state) and jukebox.fallbackActive then
+            context.fallbackActive = true
+        end
         local rawX
         local rawY
         if usesFixedPosition(state) then
             local visibleX
-            visibleX, rawY = resolveFixedWindow(SKIN, 'JukeboxDiscSlot', state, work, metrics.visibleWidth, metrics.visibleHeight)
-            local gutterWork = monitorWorkAreaForPoint(SKIN, visibleX, rawY, work)
-            metrics = resolveJukeboxDiscSlotMetricsForVisibleLeft(metrics, visibleX, gutterWork)
+            visibleX, rawY = resolveFixedWindow(
+                SKIN,
+                'JukeboxDiscSlot',
+                state,
+                context.work,
+                metrics.visibleWidth,
+                metrics.visibleHeight,
+                context
+            )
+            metrics = resolveJukeboxDiscSlotMetricsForVisibleLeft(metrics, visibleX, context.work)
             rawX = visibleX - metrics.contentX
         else
-            local clampWork = monitorWorkAreaForPoint(SKIN, jukebox.x, jukebox.y, work)
-            local horizontalClampWork = virtualWorkArea(SKIN, clampWork)
-            local offsetX = scaleNumber(state.OffsetXBase, scale, 0)
-            local offsetY = scaleNumber(state.OffsetYBase, scale, 0)
+            local clampWork = context.work
+            local offsetX = scaleNumber(state.OffsetXBase, targetScale, 0)
+            local offsetY = scaleNumber(state.OffsetYBase, targetScale, 0)
             local topY = jukebox.y - metrics.height - metrics.gap + offsetY
             local bottomY = jukebox.y + jukebox.height + metrics.gap + offsetY
             local jukeboxAnchorX = jukebox.x + (jukebox.width / 2)
             local rightColumnCenterX = metrics.usableX + ((metrics.usableWidth / 3) * 2.5)
-            local visibleSlotX = clampWindowX(horizontalClampWork, jukeboxAnchorX + offsetX - rightColumnCenterX, metrics.visibleWidth)
+            local visibleSlotX = clampWindowX(clampWork, jukeboxAnchorX + offsetX - rightColumnCenterX, metrics.visibleWidth)
             metrics = resolveJukeboxDiscSlotMetricsForVisibleLeft(metrics, visibleSlotX, clampWork)
             rawX = visibleSlotX - metrics.contentX
             if fitsWindowY(clampWork, topY, metrics.windowHeight) then
@@ -183,47 +342,64 @@ function M.ResolveRects(SKIN)
                 rawY = select(2, clampWindow(clampWork, rawX, topY, metrics.windowWidth, metrics.windowHeight))
             end
         end
-        rects.JukeboxDiscSlot = {
+        rects.JukeboxDiscSlot = attachMonitorContext({
             x = rawX,
             y = rawY,
             width = metrics.windowWidth,
             height = metrics.windowHeight,
-            scale = scale,
+            scale = targetScale,
             metrics = metrics,
             visibleLeft = rawX + metrics.contentX,
             visibleTop = rawY,
             visibleRight = rawX + metrics.contentX + metrics.visibleWidth,
             visibleBottom = rawY + metrics.visibleHeight,
-        }
+        }, context)
     end
 
     do
-        local state = M.GetState(SKIN, 'Herobrine')
-        local metrics = getHerobrineMetrics(SKIN, scale)
+        local state = resolvedState('Herobrine')
+        local context, metrics = resolveLayoutContext(snapshot, 'Herobrine', state, nil, function(targetScale)
+            return getHerobrineMetrics(SKIN, targetScale)
+        end, false, forcedMonitor('Herobrine'))
+        local targetWork = context.work
+        local targetScale = context.scale
         local rawX
         local rawY
         if usesFixedPosition(state) then
-            rawX, rawY = resolveFixedWindow(SKIN, 'Herobrine', state, work, metrics.width, metrics.height)
+            rawX, rawY = resolveFixedWindow(SKIN, 'Herobrine', state, targetWork, metrics.width, metrics.height, context)
         else
-            rawX = work.centerX + scaleNumber(state.OffsetXBase, scale, 0) - round(metrics.width / 2)
-            rawY = work.centerY + scaleNumber(state.OffsetYBase, scale, 0) - round(metrics.height / 2)
-            rawX, rawY = clampWindow(work, rawX, rawY, metrics.width, metrics.height)
+            rawX = targetWork.centerX + scaleNumber(state.OffsetXBase, targetScale, 0) - round(metrics.width / 2)
+            rawY = targetWork.centerY + scaleNumber(state.OffsetYBase, targetScale, 0) - round(metrics.height / 2)
+            rawX, rawY = clampWindow(targetWork, rawX, rawY, metrics.width, metrics.height)
         end
-        rects.Herobrine = {
+        rects.Herobrine = attachMonitorContext({
             x = rawX,
             y = rawY,
             width = metrics.width,
             height = metrics.height,
-            scale = scale,
+            scale = targetScale,
             metrics = metrics,
-        }
+        }, context)
     end
 
+    local indicatorAnchorHotbar = resolveIndependentIndicatorAnchorHotbar(
+        SKIN,
+        snapshot,
+        indicatorUserScale,
+        forcedMonitor('Hotbar')
+    ) or rects.Hotbar
     for _, indicatorId in ipairs({ 'IndicatorHeart', 'IndicatorArmor', 'IndicatorFood', 'IndicatorAir', 'IndicatorExp' }) do
-        local state = M.GetState(SKIN, indicatorId)
-        local metrics = getIndicatorMetrics(indicatorId, scale, indicatorUserScale)
-        local hotbar = rects.Hotbar
-        local indicatorLayoutScale = resolvedIndicatorScale(scale, indicatorUserScale)
+        local state = resolvedState(indicatorId)
+        local hotbar = indicatorAnchorHotbar
+        local context, metrics = resolveLayoutContext(snapshot, indicatorId, state, hotbar.monitor, function(targetScale)
+            return getIndicatorMetrics(indicatorId, targetScale, indicatorUserScale)
+        end, false, forcedMonitor(indicatorId))
+        if not usesFixedPosition(state) and hotbar.fallbackActive then
+            context.fallbackActive = true
+        end
+        local targetScale = context.scale
+        local targetWork = context.work
+        local indicatorLayoutScale = resolvedIndicatorScale(targetScale, indicatorUserScale)
         local edgeInset = indicatorLayoutScale < 1 and round((1 - indicatorLayoutScale) * 10) or 0
         local definition = SKINS[indicatorId] or {}
         local offsetXBase = tonumber(state.OffsetXBase) or tonumber(definition.offsetX) or 0
@@ -232,12 +408,20 @@ function M.ResolveRects(SKIN)
         local rawX
         local rawY
         if usesFixedPosition(state) then
-            rawX, rawY = resolveFixedWindow(SKIN, indicatorId, state, work, metrics.width, metrics.height + (metrics.gaugeY or 0))
+            rawX, rawY = resolveFixedWindow(
+                SKIN,
+                indicatorId,
+                state,
+                targetWork,
+                metrics.width,
+                metrics.height + (metrics.gaugeY or 0),
+                context
+            )
         else
-            if state.AnchorKind == 'HotbarVisibleLeftTop' then
+            if state.AnchorKind == 'HotbarVisibleLeftTop' or state.AnchorKind == 'IndicatorBaselineLeftTop' then
                 rawX = hotbar.indicatorAnchorLeft + (offsetXBase * indicatorLayoutScale) + edgeInset
                 rawY = commonIndicatorY
-            elseif state.AnchorKind == 'HotbarVisibleRightTop' then
+            elseif state.AnchorKind == 'HotbarVisibleRightTop' or state.AnchorKind == 'IndicatorBaselineRightTop' then
                 rawX = hotbar.indicatorAnchorRight + (offsetXBase * indicatorLayoutScale) - metrics.width - edgeInset
                 rawY = commonIndicatorY
             elseif indicatorId == 'IndicatorExp' then
@@ -254,48 +438,108 @@ function M.ResolveRects(SKIN)
                 rawX = hotbar.visibleCenterX + (offsetXBase * indicatorLayoutScale) - (metrics.width / 2)
                 rawY = commonIndicatorY
             end
-            rawX, rawY = clampWindow(work, rawX, rawY, metrics.width, metrics.height + (metrics.gaugeY or 0))
+            rawX, rawY = clampWindow(targetWork, rawX, rawY, metrics.width, metrics.height + (metrics.gaugeY or 0))
         end
-        rects[indicatorId] = {
+        rects[indicatorId] = attachMonitorContext({
             x = rawX,
             y = rawY,
             width = metrics.width,
             height = metrics.height,
-            scale = scale,
+            scale = targetScale,
             metrics = metrics,
-        }
+        }, context)
     end
 
     for _, panelId in ipairs({ 'Settings', 'Editor' }) do
-        local state = M.GetState(SKIN, panelId)
-        local metrics = getPanelMetrics(panelId, scale)
+        local state = resolvedState(panelId)
         local inventory = rects.Inventory
+        local context, metrics = resolveLayoutContext(snapshot, panelId, state, inventory.monitor, function(targetScale)
+            return getPanelMetrics(panelId, targetScale)
+        end)
+        if not usesFixedPosition(state) and inventory.fallbackActive then
+            context.fallbackActive = true
+        end
+        local targetScale = context.scale
+        local targetWork = context.work
         local rawX
         local rawY
         if usesFixedPosition(state) then
-            rawX, rawY = resolveFixedWindow(SKIN, panelId, state, work, metrics.width, metrics.height)
+            rawX, rawY = resolveFixedWindow(SKIN, panelId, state, targetWork, metrics.width, metrics.height, context)
         else
             if state.AnchorKind == 'InventoryLeftTop' then
-                rawX = inventory.leftTopX + scaleNumber(state.OffsetXBase, scale, 0)
+                rawX = inventory.leftTopX + scaleNumber(state.OffsetXBase, targetScale, 0)
             else
-                rawX = inventory.rightTopX + scaleNumber(state.OffsetXBase, scale, 0)
+                rawX = inventory.rightTopX + scaleNumber(state.OffsetXBase, targetScale, 0)
             end
-            rawY = inventory.leftTopY + scaleNumber(state.OffsetYBase, scale, 0)
-            rawX, rawY = clampWindow(work, rawX, rawY, metrics.width, metrics.height)
+            rawY = inventory.leftTopY + scaleNumber(state.OffsetYBase, targetScale, 0)
+            rawX, rawY = clampWindow(targetWork, rawX, rawY, metrics.width, metrics.height)
         end
-        rects[panelId] = {
+        rects[panelId] = attachMonitorContext({
             x = rawX,
             y = rawY,
             width = metrics.width,
             height = metrics.height,
-            scale = scale,
+            scale = targetScale,
             metrics = metrics,
-        }
+        }, context)
     end
 
     rects.PrimaryWorkArea = work
     rects.Scale = scale
+    rects.MonitorSnapshot = snapshot
+    rects.TopologySignature = snapshot.signature
     return rects
+end
+
+local function mirrorForcedMonitors(id, monitor)
+    local forcedMonitors = { [id] = monitor }
+    if tostring(id):find('^Indicator') then
+        forcedMonitors.Hotbar = monitor
+    end
+    return forcedMonitors
+end
+
+local function mirrorBaselineStateOverrides(id)
+    local function autoState()
+        return {
+            PositionMode = 'auto',
+            FixedX = '0',
+            FixedY = '0',
+            MonitorFingerprint = '',
+            MonitorRelativeX = '',
+            MonitorRelativeY = '',
+        }
+    end
+    local overrides = { [id] = autoState() }
+    if tostring(id):find('^Indicator') then
+        -- Indicators use the Hotbar's responsive geometry only as a target-
+        -- monitor baseline. Canonical Hotbar affinity must never leak into it.
+        overrides.Hotbar = autoState()
+    end
+    return overrides
+end
+
+function M.ResolveMirrorRect(SKIN, id, monitorFingerprint, monitorIndex, snapshot)
+    if not M.IsMirrorTarget or not M.IsMirrorTarget(id) then
+        return nil
+    end
+    snapshot = snapshot or M.SnapshotMonitors(SKIN)
+    local monitor = M.FindMonitor and M.FindMonitor(snapshot, monitorFingerprint, monitorIndex) or nil
+    if not monitor then
+        return nil
+    end
+    local rects = M.ResolveRects(
+        SKIN,
+        snapshot,
+        nil,
+        mirrorForcedMonitors(id, monitor),
+        mirrorBaselineStateOverrides(id)
+    )
+    local rect = rects and rects[id] or nil
+    if not rect then
+        return nil
+    end
+    return rect, rects, monitor
 end
 
 function M.ResolveGridLayout(SKIN, source)
@@ -434,6 +678,11 @@ local function applyClockVars(SKIN, rect)
     setVariableForConfig(SKIN, 'ClockTimeTextSize', m.timeSize)
     setVariableForConfig(SKIN, 'ClockDateTextSize', m.dateSize)
     setVariableForConfig(SKIN, 'ClockTextGap', m.textGap)
+    setVariableForConfig(SKIN, 'ClockTextShadowYOffset', m.shadowYOffset)
+    setVariableForConfig(SKIN, 'ClockDateTextShadowYOffset', m.dateShadowYOffset)
+    setVariableForConfig(SKIN, 'ClockTextShadowBlur', m.shadowBlur)
+    setVariableForConfig(SKIN, 'ClockTextEffectTopInset', m.effectTopInset)
+    setVariableForConfig(SKIN, 'ClockTextEffectBottomExtent', m.effectBottomExtent)
 end
 
 local function applyClockSpriteVars(SKIN, rect)
@@ -446,12 +695,21 @@ local function applyJukeboxVars(SKIN, rect)
     local m = rect.metrics
     setVariableForConfig(SKIN, 'JukeboxW', m.width)
     setVariableForConfig(SKIN, 'JukeboxH', m.height)
+    setVariableForConfig(SKIN, 'JukeboxMinimizedW', m.minimizedWidth)
+    setVariableForConfig(SKIN, 'JukeboxMinimizedH', m.minimizedHeight)
+    setVariableForConfig(SKIN, 'JukeboxMainFormY', round(rect.y))
     setMeterOption(SKIN, 'MeterJukebox', 'W', m.width)
     setMeterOption(SKIN, 'MeterJukebox', 'H', m.height)
     setMeterOption(SKIN, 'MeterJukeboxAnimator', 'W', m.width)
     setMeterOption(SKIN, 'MeterJukeboxAnimator', 'H', m.height)
+    setMeterOption(SKIN, 'MeterJukeboxMinimized', 'W', m.minimizedWidth)
+    setMeterOption(SKIN, 'MeterJukeboxMinimized', 'H', m.minimizedHeight)
+    setMeterOption(SKIN, 'MeterJukeboxMinimizedAnimator', 'W', m.minimizedWidth)
+    setMeterOption(SKIN, 'MeterJukeboxMinimizedAnimator', 'H', m.minimizedHeight)
     SKIN:Bang('!UpdateMeter', 'MeterJukebox')
     SKIN:Bang('!UpdateMeter', 'MeterJukeboxAnimator')
+    SKIN:Bang('!UpdateMeter', 'MeterJukeboxMinimized')
+    SKIN:Bang('!UpdateMeter', 'MeterJukeboxMinimizedAnimator')
 end
 local function applyJukeboxDiscSlotVars(SKIN, rect)
     local m = rect.metrics
@@ -483,10 +741,46 @@ local function applyHerobrineVars(SKIN, rect)
     SKIN:Bang('!CommandMeasure', 'MeasureHerobrine', 'ReflowApparition()')
 end
 
+local INDICATOR_RENDER_MEASURES = {
+    'MeasureGaugeRatio',
+    'MeasureGaugeRenderedWidth',
+    'MeasureGaugeRenderedHeight',
+    'MeasureGaugeImageOffset',
+    'MeasureGaugeFillWidth',
+    'MeasureGaugeTopCropWidth',
+    'MeasureGaugeX',
+}
+
+local EXP_TEXT_METERS = {
+    'MeterTexto',
+    'MeterTexto2',
+    'MeterTexto3',
+    'MeterTexto4',
+    'MeterText',
+}
+
+local function updateIndicatorRenderConsumers(SKIN, id)
+    for _, measureName in ipairs(INDICATOR_RENDER_MEASURES) do
+        SKIN:Bang('!UpdateMeasure', measureName)
+    end
+    if id == 'IndicatorExp' then
+        SKIN:Bang('!UpdateMeasure', 'MeasureExp')
+    end
+    SKIN:Bang('!UpdateMeter', 'MeterGaugeBottom')
+    SKIN:Bang('!UpdateMeter', 'MeterGaugeTop')
+    if id == 'IndicatorExp' then
+        for _, meterName in ipairs(EXP_TEXT_METERS) do
+            SKIN:Bang('!UpdateMeter', meterName)
+        end
+    end
+    SKIN:Bang('!Redraw')
+end
+
 local function applyIndicatorVars(SKIN, id, rect)
     local m = rect.metrics
     if id == 'IndicatorExp' then
         setVariableForConfig(SKIN, 'SizeRatio', m.sizeRatio)
+        setVariableForConfig(SKIN, 'GaugeY', m.gaugeY)
         setVariableForConfig(SKIN, 'ExpGaugeY', m.gaugeY)
         setVariableForConfig(SKIN, 'ExpTextX', m.textX)
         setVariableForConfig(SKIN, 'ExpTextY', m.textY)
@@ -495,14 +789,92 @@ local function applyIndicatorVars(SKIN, id, rect)
         setVariableForConfig(SKIN, 'DEFAULT_SIZE_RATIO', m.sizeRatio)
         setVariableForConfig(SKIN, 'SizeRatio', m.sizeRatio)
     end
+    updateIndicatorRenderConsumers(SKIN, id)
 end
 
-function M.ApplyCurrentSkin(SKIN)
+local function setMirrorTargetVariable(SKIN, targetConfig, name, value)
+    setVariableForConfig(SKIN, name, value, targetConfig)
+end
+
+function M.ApplyMirrorTarget(SKIN, id, rect, targetConfig)
+    targetConfig = trim(targetConfig or '')
+    if targetConfig == '' or not rect or not M.IsMirrorTarget or not M.IsMirrorTarget(id) then
+        return nil
+    end
+
+    local monitor = rect.monitor
+    local work = rect.workArea or (monitor and monitor.work) or nil
+    local rawWork = rect.rawWorkArea or (monitor and monitor.rawWork) or work
+    if not monitor or not work or not rawWork then
+        return nil
+    end
+
+    setMirrorTargetVariable(SKIN, targetConfig, 'MirrorAssignedMonitorFingerprint', monitor.fingerprint)
+    setMirrorTargetVariable(SKIN, targetConfig, 'MirrorAssignedMonitorIndex', monitor.index)
+    setMirrorTargetVariable(SKIN, targetConfig, 'MirrorAssignedWorkX', round(work.x))
+    setMirrorTargetVariable(SKIN, targetConfig, 'MirrorAssignedWorkY', round(work.y))
+    setMirrorTargetVariable(SKIN, targetConfig, 'MirrorAssignedWorkWidth', round(work.width))
+    setMirrorTargetVariable(SKIN, targetConfig, 'MirrorAssignedWorkHeight', round(work.height))
+    setMirrorTargetVariable(SKIN, targetConfig, 'MirrorExpectedX', round(rect.x))
+    setMirrorTargetVariable(SKIN, targetConfig, 'MirrorExpectedY', round(rect.y))
+    setMirrorTargetVariable(SKIN, targetConfig, 'MirrorExpectedWidth', round(rect.width))
+    setMirrorTargetVariable(SKIN, targetConfig, 'MirrorExpectedHeight', round(rect.height))
+
+    local metrics = rect.metrics or {}
+    if id == 'Hotbar' then
+        setMirrorTargetVariable(SKIN, targetConfig, 'HotbarSlotSize', metrics.slotSize)
+        setMirrorTargetVariable(SKIN, targetConfig, 'HotbarTextYOffset', metrics.textYOffset)
+        setMirrorTargetVariable(SKIN, targetConfig, 'HotbarTextFontSize', metrics.textFontSize)
+        setMirrorTargetVariable(SKIN, targetConfig, 'HotbarItemSizeOffset', metrics.itemOffset)
+    elseif id == 'Clock' then
+        setMirrorTargetVariable(SKIN, targetConfig, 'ClockCenterX', metrics.centerX)
+        setMirrorTargetVariable(SKIN, targetConfig, 'ClockTimeTextSize', metrics.timeSize)
+        setMirrorTargetVariable(SKIN, targetConfig, 'ClockDateTextSize', metrics.dateSize)
+        setMirrorTargetVariable(SKIN, targetConfig, 'ClockTextGap', metrics.textGap)
+        setMirrorTargetVariable(SKIN, targetConfig, 'ClockTextShadowYOffset', metrics.shadowYOffset)
+        setMirrorTargetVariable(SKIN, targetConfig, 'ClockDateTextShadowYOffset', metrics.dateShadowYOffset)
+        setMirrorTargetVariable(SKIN, targetConfig, 'ClockTextShadowBlur', metrics.shadowBlur)
+        setMirrorTargetVariable(SKIN, targetConfig, 'ClockTextEffectTopInset', metrics.effectTopInset)
+        setMirrorTargetVariable(SKIN, targetConfig, 'ClockTextEffectBottomExtent', metrics.effectBottomExtent)
+    elseif id == 'ClockSprite' then
+        setMirrorTargetVariable(SKIN, targetConfig, 'ClockSpriteRenderSize', metrics.size)
+    elseif tostring(id):find('^Indicator') then
+        setMirrorTargetVariable(SKIN, targetConfig, 'SizeRatio', metrics.sizeRatio)
+        if id == 'IndicatorExp' then
+            setMirrorTargetVariable(SKIN, targetConfig, 'GaugeY', metrics.gaugeY)
+            setMirrorTargetVariable(SKIN, targetConfig, 'ExpGaugeY', metrics.gaugeY)
+            setMirrorTargetVariable(SKIN, targetConfig, 'ExpTextX', metrics.textX)
+            setMirrorTargetVariable(SKIN, targetConfig, 'ExpTextY', metrics.textY)
+            setMirrorTargetVariable(SKIN, targetConfig, 'ExpTextFontSize', metrics.textFontSize)
+        else
+            setMirrorTargetVariable(SKIN, targetConfig, 'DEFAULT_SIZE_RATIO', metrics.sizeRatio)
+        end
+    end
+
+    SKIN:Bang('!Move', tostring(round(rect.x)), tostring(round(rect.y)), targetConfig)
+    return {
+        id = id,
+        config = targetConfig,
+        x = round(rect.x),
+        y = round(rect.y),
+        width = round(rect.width),
+        height = round(rect.height),
+        monitorFingerprint = monitor.fingerprint,
+        monitorIndex = monitor.index,
+    }
+end
+
+function M.ApplyCurrentSkin(SKIN, options, snapshot)
     local id = M.CurrentSkinId(SKIN)
     if not id then
         return nil
     end
-    local rects = M.ResolveRects(SKIN)
+    if type(options) == 'table' and options.snapshot then
+        snapshot = options.snapshot
+    end
+    local ownerRectOverrides = type(options) == 'table' and options.ownerRectOverrides or nil
+    local forcedMonitors = type(options) == 'table' and options.forcedMonitors or nil
+    local rects = M.ResolveRects(SKIN, snapshot, ownerRectOverrides, forcedMonitors)
     local rect = rects[id]
     if not rect then
         return nil
@@ -556,25 +928,11 @@ function M.ApplyCurrentSkin(SKIN)
         setMeterOption(SKIN, 'MeterEditorModeBadgeLabel', 'X', round((rect.metrics.width - rect.metrics.badgeW) / 2) + round(rect.metrics.badgeW / 2))
         setMeterOption(SKIN, 'MeterEditorModeBadgeLabel', 'Y', rect.metrics.badgeY + round(rect.metrics.badgeH / 2))
         setMeterOption(SKIN, 'MeterEditorModeBadgeLabel', 'FontSize', rect.metrics.badgeFontSize)
-        for _, meterName in ipairs({
-            'MeterInventory',
-            'MeterPlayerDefault',
-            'MeterPlayerCustom',
-            'MeterSettingsUIButton',
-            'MeterRefreshUIButton',
-            'MeterOpenInfo',
-            'MeterSteveSkinEditButton',
-            'MeterOpenSkinFolder',
-            'MeterEdit',
-            'MeterInventoryClose',
-            'MeterEditorModeBadgeBackground',
-            'MeterEditorModeBadgeLabel',
-        }) do
-            SKIN:Bang('!UpdateMeter', meterName)
-        end
+        SKIN:Bang('!UpdateMeterGroup', 'ResidentUpdateInventory')
         SKIN:Bang('!CommandMeasure', 'MeasureItemInfoInitializer', 'InitInfos()')
         SKIN:Bang('!CommandMeasure', 'MeasureHighlight', 'ResetInteractionState()')
         syncSelectedHighlight(SKIN)
+        SKIN:Bang('!Redraw')
     elseif id == 'Clock' then
         applyClockVars(SKIN, rect)
     elseif id == 'ClockSprite' then
@@ -596,7 +954,13 @@ function M.ApplyCurrentSkin(SKIN)
 
     if id ~= 'Herobrine' then
         applyWindowMove(SKIN, id, rect)
-        syncRainmeterWindowPosition(SKIN, id, rect.x, rect.y, true)
+        local persistWindowPosition = options ~= false and options ~= 0
+        if type(options) == 'table' and options.persistWindowPosition == false then
+            persistWindowPosition = false
+        end
+        if persistWindowPosition and not rect.fallbackActive then
+            syncRainmeterWindowPosition(SKIN, id, rect.x, rect.y, true)
+        end
     end
 
     return {
@@ -638,7 +1002,8 @@ function M.SetPositionModeForIds(SKIN, ids, mode)
     local resolvedMode = normalizePositionMode(mode)
     for _, id in ipairs(normalizedStateTargetIds(ids)) do
         local state = M.GetState(SKIN, id)
-        if state then
+        local fallbackBlocked = resolvedMode == 'fixed' and M.IsMonitorFallback(SKIN, id)
+        if state and not fallbackBlocked and normalizePositionMode(state.PositionMode) ~= resolvedMode then
             state.PositionMode = resolvedMode
             M.WriteState(SKIN, id, state, true)
         end
@@ -651,23 +1016,172 @@ function M.ClearFixedPositionsForIds(SKIN, ids)
         if state then
             state.FixedX = '0'
             state.FixedY = '0'
+            state.MonitorFingerprint = ''
+            state.MonitorRelativeX = ''
+            state.MonitorRelativeY = ''
             M.WriteState(SKIN, id, state, true)
         end
     end
 end
-function M.SetFixedPosition(SKIN, id, x, y)
-    if not id or id == 'InventoryBG' or not SKINS[id] then
-        return false
+
+local function formatRelative(value)
+    return string.format('%.12g', tonumber(value) or 0)
+end
+
+local function relativeCoordinate(position, workStart, workSize, windowSize)
+    local span = (tonumber(workSize) or 0) - (tonumber(windowSize) or 0)
+    if span == 0 then
+        return 0
     end
+    return ((tonumber(position) or 0) - (tonumber(workStart) or 0)) / span
+end
+
+local function logicalRectGeometry(id, rect)
+    if not rect then
+        return nil
+    end
+    if id == 'JukeboxDiscSlot' then
+        return {
+            x = rect.visibleLeft or rect.x,
+            y = rect.visibleTop or rect.y,
+            width = rect.metrics and rect.metrics.visibleWidth or rect.width,
+            height = rect.metrics and rect.metrics.visibleHeight or rect.height,
+            probeX = rect.x,
+            probeY = rect.y,
+            probeWidth = rect.width,
+            probeHeight = rect.height,
+        }
+    end
+    return {
+        x = rect.x,
+        y = rect.y,
+        width = rect.width,
+        height = rect.height,
+        probeX = rect.x,
+        probeY = rect.y,
+        probeWidth = rect.width,
+        probeHeight = rect.height,
+    }
+end
+
+local function logicalSizeForMonitor(SKIN, id, monitor)
+    local targetScale = monitor and monitor.scale or M.GetScale(SKIN)
+    local metrics = nil
+    if id == 'Hotbar' then
+        metrics = getHotbarMetrics(SKIN, targetScale, getIndicatorUserScale(SKIN))
+        return metrics.windowWidth, metrics.windowHeight, metrics
+    elseif id == 'Inventory' then
+        metrics = getInventoryMetrics(SKIN, targetScale)
+    elseif id == 'Clock' then
+        metrics = getClockMetrics(SKIN, targetScale)
+    elseif id == 'ClockSprite' then
+        metrics = getClockSpriteMetrics(SKIN, targetScale)
+    elseif id == 'Jukebox' then
+        metrics = getJukeboxMetrics(SKIN, M.GetScale(SKIN))
+    elseif id == 'JukeboxDiscSlot' then
+        metrics = getJukeboxDiscSlotMetrics(SKIN, M.GetScale(SKIN))
+        return metrics.visibleWidth, metrics.visibleHeight, metrics
+    elseif id == 'Herobrine' then
+        metrics = getHerobrineMetrics(SKIN, targetScale)
+    elseif id == 'Settings' or id == 'Editor' then
+        metrics = getPanelMetrics(id, targetScale)
+    elseif id:find('^Indicator') then
+        metrics = getIndicatorMetrics(id, targetScale, getIndicatorUserScale(SKIN))
+    end
+    if metrics then
+        return metrics.width, metrics.height, metrics
+    end
+    return nil, nil, nil
+end
+
+function M.CommitFixedPosition(SKIN, id, desiredX, desiredY, probeX, probeY, probeWidth, probeHeight, logicalWidth, logicalHeight, snapshot)
+    if not id or id == 'InventoryBG' or not SKINS[id] then
+        return false, nil
+    end
+    local x = tonumber(desiredX)
+    local y = tonumber(desiredY)
+    if x == nil or y == nil then
+        return false, nil
+    end
+
     local state = M.GetState(SKIN, id)
     if not state then
-        return false
+        return false, nil
     end
+    local rects = nil
+    local geometry = nil
+    if tonumber(probeWidth) == nil or tonumber(probeHeight) == nil
+        or tonumber(logicalWidth) == nil or tonumber(logicalHeight) == nil then
+        rects = M.ResolveRects(SKIN, snapshot)
+        geometry = logicalRectGeometry(id, rects and rects[id])
+    end
+
+    local provisionalLogicalWidth = math.max(1, tonumber(logicalWidth) or (geometry and geometry.width) or tonumber(probeWidth) or 1)
+    local provisionalLogicalHeight = math.max(1, tonumber(logicalHeight) or (geometry and geometry.height) or tonumber(probeHeight) or 1)
+    local resolvedProbeX = tonumber(probeX)
+    local resolvedProbeY = tonumber(probeY)
+    local resolvedProbeWidth = math.max(1, tonumber(probeWidth) or (geometry and geometry.probeWidth) or provisionalLogicalWidth)
+    local resolvedProbeHeight = math.max(1, tonumber(probeHeight) or (geometry and geometry.probeHeight) or provisionalLogicalHeight)
+    if resolvedProbeX == nil then
+        if id == 'JukeboxDiscSlot' and geometry then
+            resolvedProbeX = x - ((geometry.x or 0) - (geometry.probeX or 0))
+        else
+            resolvedProbeX = x
+        end
+    end
+    if resolvedProbeY == nil then
+        resolvedProbeY = y
+    end
+
+    local monitorSnapshot = rects and rects.MonitorSnapshot or snapshot or M.SnapshotMonitors(SKIN)
+    local probe = buildRect(resolvedProbeX, resolvedProbeY, resolvedProbeWidth, resolvedProbeHeight)
+    local affinityFallback, _, affinityIsFallback = affinityMonitor(monitorSnapshot, state)
+    if affinityIsFallback then
+        return false, nil
+    end
+    local monitor = M.SelectMonitorForRect(monitorSnapshot, probe, affinityFallback or monitorSnapshot.primary)
+    local targetLogicalWidth, targetLogicalHeight, targetMetrics = logicalSizeForMonitor(SKIN, id, monitor)
+    local storedX = x
+    local storedY = y
+    if id == 'Clock' and targetMetrics then
+        storedY = y + (tonumber(targetMetrics.effectTopInset) or 0)
+        targetLogicalHeight = targetMetrics.contentHeight or targetLogicalHeight
+    end
+    local resolvedLogicalWidth = math.max(1, tonumber(targetLogicalWidth) or tonumber(logicalWidth) or (geometry and geometry.width) or resolvedProbeWidth)
+    local resolvedLogicalHeight = math.max(1, tonumber(targetLogicalHeight) or tonumber(logicalHeight) or (geometry and geometry.height) or resolvedProbeHeight)
+    local relativeX = relativeCoordinate(storedX, monitor.work.x, monitor.work.width, resolvedLogicalWidth)
+    local relativeY = relativeCoordinate(storedY, monitor.work.y, monitor.work.height, resolvedLogicalHeight)
+    local fixedX = tostring(round(storedX))
+    local fixedY = tostring(round(storedY))
+    local affinity = {
+        MonitorFingerprint = monitor.fingerprint,
+        MonitorRelativeX = formatRelative(relativeX),
+        MonitorRelativeY = formatRelative(relativeY),
+        monitor = monitor,
+    }
+
+    local changed = normalizePositionMode(state.PositionMode) ~= 'fixed'
+        or tostring(state.FixedX or '') ~= fixedX
+        or tostring(state.FixedY or '') ~= fixedY
+        or tostring(state.MonitorFingerprint or '') ~= affinity.MonitorFingerprint
+        or tostring(state.MonitorRelativeX or '') ~= affinity.MonitorRelativeX
+        or tostring(state.MonitorRelativeY or '') ~= affinity.MonitorRelativeY
+    if not changed then
+        return false, affinity
+    end
+
     state.PositionMode = 'fixed'
-    state.FixedX = tostring(round(tonumber(x) or 0))
-    state.FixedY = tostring(round(tonumber(y) or 0))
-    M.WriteState(SKIN, id, state, true)
-    return true
+    state.FixedX = fixedX
+    state.FixedY = fixedY
+    state.MonitorFingerprint = affinity.MonitorFingerprint
+    state.MonitorRelativeX = affinity.MonitorRelativeX
+    state.MonitorRelativeY = affinity.MonitorRelativeY
+    M.WriteState(SKIN, id, state, true, { syncRainmeterPosition = false })
+    return true, affinity
+end
+
+function M.SetFixedPosition(SKIN, id, x, y)
+    return M.CommitFixedPosition(SKIN, id, x, y)
 end
 
 function M.CaptureFixedPositionsForIds(SKIN, ids, positionsById)
@@ -676,51 +1190,116 @@ function M.CaptureFixedPositionsForIds(SKIN, ids, positionsById)
         local state = M.GetState(SKIN, id)
         local position = positionsById[id]
         if state and position then
-            state.FixedX = tostring(round(tonumber(position.x) or 0))
-            state.FixedY = tostring(round(tonumber(position.y) or 0))
-            state.PositionMode = 'fixed'
-            M.WriteState(SKIN, id, state, true)
+            M.CommitFixedPosition(SKIN, id, position.x, position.y)
         end
     end
+end
+
+function M.AutoMonitorOwner(id)
+    return AUTO_MONITOR_OWNER[id]
+end
+
+local function exportedMonitorContext(monitor, fallbackActive)
+    local work = monitor.work
+    local rawWork = monitor.rawWork
+    return {
+        Fingerprint = monitor.fingerprint,
+        MonitorIndex = monitor.index,
+        WorkX = round(work.x),
+        WorkY = round(work.y),
+        WorkWidth = round(work.width),
+        WorkHeight = round(work.height),
+        RawWorkX = round(rawWork.x),
+        RawWorkY = round(rawWork.y),
+        RawWorkWidth = round(rawWork.width),
+        RawWorkHeight = round(rawWork.height),
+        Scale = monitor.scale or M.ScaleForWorkArea(work),
+        FallbackActive = fallbackActive == true,
+    }
+end
+
+function M.CurrentMonitorContext(SKIN, id, x, y, width, height, snapshot)
+    if tonumber(x) ~= nil and tonumber(y) ~= nil and tonumber(width) ~= nil and tonumber(height) ~= nil then
+        snapshot = snapshot or M.SnapshotMonitors(SKIN)
+        local fallback = snapshot.primary
+        if id and SKINS[id] then
+            local state = M.GetState(SKIN, id)
+            local affinityFallback, _, affinityIsFallback = affinityMonitor(snapshot, state)
+            if affinityFallback and not affinityIsFallback then
+                fallback = affinityFallback
+            end
+        end
+        local monitor = M.SelectMonitorForRect(snapshot, buildRect(x, y, width, height), fallback)
+        local exported = exportedMonitorContext(monitor, false)
+        if id == 'Jukebox' or id == 'JukeboxDiscSlot' then
+            exported.Scale = M.GetScale(SKIN)
+        end
+        return exported
+    end
+    id = id or M.CurrentSkinId(SKIN)
+    local rects = M.ResolveRects(SKIN, snapshot)
+    local rect = rects and rects[id]
+    if not rect or not rect.monitor then
+        return exportedMonitorContext(rects.MonitorSnapshot.primary, false)
+    end
+    local exported = exportedMonitorContext(rect.monitor, rect.fallbackActive)
+    if id == 'Jukebox' or id == 'JukeboxDiscSlot' then
+        exported.Scale = M.GetScale(SKIN)
+    end
+    return exported
 end
 
 function M.ResolveInventoryLiveWindowPosition(SKIN)     local rects = M.ResolveRects(SKIN)     local inventory = rects and rects.Inventory     if not inventory then         return nil     end     return { x = round(inventory.x), y = round(inventory.y) } end  function M.LiveWindowPositionForId(SKIN, id, fallbackRects)
     if not SKINS[id] then
         return nil
     end
+    local fallback = fallbackRects and fallbackRects[id]
     local function visiblePosition(position)
         if id ~= 'JukeboxDiscSlot' or not position then
             return position
         end
-        local metrics = getJukeboxDiscSlotMetrics(SKIN, M.GetScale(SKIN))
-        local gutter = nil
-        if tonumber(position.width) then
-            gutter = math.max(0, round((tonumber(position.width) or 0) - metrics.visibleWidth))
+        local metrics = fallback and fallback.metrics or nil
+        local work = fallback and fallback.workArea or nil
+        local width = tonumber(position.width)
+        local height = tonumber(position.height)
+        if width and height then
+            local snapshot = fallbackRects and fallbackRects.MonitorSnapshot or M.SnapshotMonitors(SKIN)
+            local monitor = M.SelectMonitorForRect(snapshot, buildRect(position.x, position.y, width, height), snapshot.primary)
+            metrics = getJukeboxDiscSlotMetrics(SKIN, M.GetScale(SKIN))
+            work = monitor.work
         end
-        if gutter == nil then
-            gutter = tonumber(trim(SKIN:GetVariable('JukeboxDiscSlotContentX', '')))
+        metrics = metrics or getJukeboxDiscSlotMetrics(SKIN, M.GetScale(SKIN))
+        local contentX = tonumber(metrics.contentX) or 0
+        if width then
+            local visibleWidth = tonumber(metrics.visibleWidth) or tonumber(metrics.width) or 1
+            local actionGutter = tonumber(metrics.actionGutter or metrics.controlRightGutter) or 0
+            local extraWidth = math.max(0, round(width - visibleWidth))
+            local rightContentX = math.max(0, extraWidth - actionGutter)
+            local rightVisibleX = (tonumber(position.x) or 0) + rightContentX
+            if work and (rightVisibleX + visibleWidth + actionGutter) <= (work.right + 0.5) then
+                contentX = rightContentX
+            else
+                contentX = extraWidth
+            end
         end
-        if gutter == nil then
-            gutter = metrics.tooltipLeftGutter
-        end
-        gutter = clamp(gutter, 0, metrics.tooltipLeftGutterMax or metrics.tooltipLeftGutter)
         return {
-            x = round((tonumber(position.x) or 0) + gutter),
+            x = round((tonumber(position.x) or 0) + contentX),
             y = round(tonumber(position.y) or 0),
         }
     end
     local sameSkinPosition = sameSkinCurrentWindowPosition(SKIN, id)
     if sameSkinPosition then
+        sameSkinPosition.width = tonumber(trim(SKIN:GetVariable('CURRENTCONFIGWIDTH', '')))
+        sameSkinPosition.height = tonumber(trim(SKIN:GetVariable('CURRENTCONFIGHEIGHT', '')))
         return visiblePosition(sameSkinPosition)
     end
     local liveState = readLiveState(SKIN, id)
     if liveState and liveState.Active then
         if liveState.WindowX ~= nil and liveState.WindowY ~= nil then
-            return visiblePosition({ x = liveState.WindowX, y = liveState.WindowY, width = liveState.Width })
+            return visiblePosition({ x = liveState.WindowX, y = liveState.WindowY, width = liveState.Width, height = liveState.Height })
         end
         return nil
     end
-    local fallback = fallbackRects and fallbackRects[id]
     if fallback then
         if id == 'JukeboxDiscSlot' and fallback.visibleLeft ~= nil then
             return { x = fallback.visibleLeft, y = fallback.y }
@@ -826,17 +1405,29 @@ function M.PersistCurrentFixedPosition(SKIN, id, x, y)
         end
     end
 
-    local roundedX = tostring(position.x)
-    local roundedY = tostring(position.y)
-    if mode == 'fixed' and tostring(state.FixedX or '') == roundedX and tostring(state.FixedY or '') == roundedY then
-        return false
+    fallbackRects = fallbackRects or M.ResolveRects(SKIN)
+    local geometry = logicalRectGeometry(id, fallbackRects and fallbackRects[id])
+    local probeX = position.x
+    local probeY = position.y
+    if id == 'JukeboxDiscSlot' and geometry then
+        probeX = position.x - ((geometry.x or 0) - (geometry.probeX or 0))
     end
-
-    state.PositionMode = 'fixed'
-    state.FixedX = roundedX
-    state.FixedY = roundedY
-    M.WriteState(SKIN, id, state, true)
-    return true
+    return M.CommitFixedPosition(
+        SKIN,
+        id,
+        position.x,
+        position.y,
+        probeX,
+        probeY,
+        geometry and geometry.probeWidth,
+        geometry and geometry.probeHeight,
+        geometry and geometry.width,
+        geometry and geometry.height
+    )
 end
 
-function M.CaptureCurrentSkinState(SKIN)     local id = M.CurrentSkinId(SKIN)     if not id then         return nil     end     return M.GetState(SKIN, id) end  return M
+function M.CaptureCurrentSkinState(SKIN)     local id = M.CurrentSkinId(SKIN)     if not id then         return nil     end     return M.GetState(SKIN, id) end
+
+TAB_TARGETS.jukebox = { 'Jukebox', 'JukeboxDiscSlot' }
+
+return M

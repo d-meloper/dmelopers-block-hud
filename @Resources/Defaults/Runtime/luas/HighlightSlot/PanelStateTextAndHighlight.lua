@@ -8,8 +8,12 @@ local lastHighlightSource = nil
 local lastClickT = 0
 local useClickSound = 0
 local lastItemName = 'NONE'
-local lastLanguageCode = nil
-local lastCreatorProfileLanguageCode = nil
+local languageState = {
+    itemTextCode = nil,
+    rawCode = nil,
+    normalizedCode = nil,
+    creatorProfileCode = nil,
+}
 local lastHighlightHlx = nil
 local lastHighlightHly = nil
 local lastSelectedHighlightKey = nil
@@ -36,7 +40,7 @@ local LocalizationTextFit = nil
 HighlightSlotActionLaunch = nil
 local IsMissingHintVisible = true
 local isOptionHovering = false
-local isTooltipVisible = false
+local isTooltipVisible = nil
 local R = ''
 local UpdateItemText
 local isRainmeterConfigActive = nil
@@ -72,7 +76,7 @@ local dragThreshold = 8
 local activeDragVisual = false
 local dragPayloadKey = nil
 local dragPayload = nil
-local dragVisualImagePath = nil
+local dragVisualImage = { path = nil, crop = nil }
 local dragVisualImageX = nil
 local dragVisualImageY = nil
 local dragVisualImageSize = nil
@@ -139,7 +143,15 @@ end
 local function isSettingsPanelActive()
     return isPanelActive('Settings') and isSettingsOpen()
 end
+function IsHudMirrorReplica()
+    local role = tostring(SKIN:GetVariable('MirrorRole', '') or '')
+    role = role:match('^%s*(.-)%s*$'):lower()
+    return role == 'replica' or tonumber(SKIN:GetVariable('HudMirrorReplica', '0')) == 1
+end
 isEditorInteractive = function()
+    if IsHudMirrorReplica() then
+        return false
+    end
     return isEditorOpen()
 end
 getEditorInteractionMode = function()
@@ -430,6 +442,10 @@ local function LoadEssentials()
     LanguageBranching = dofile(R .. 'Defaults\\Runtime\\luas\\LanguageBranching.lua')
     LanguageRegistry = dofile(R .. 'Defaults\\Runtime\\luas\\LanguageRegistry.lua')
     LocalizationTextFit = dofile(R .. 'Defaults\\Runtime\\luas\\LocalizationTextFit.lua')
+    LocalizationTextFit = LocalizationTextFit.Create(SKIN, {
+        widthProbeMeterName = 'MeterInventoryTextFitProbe',
+        wrapProbeMeterName = 'MeterInventoryTextFitWrapProbe',
+    })
     local skinRoot = tostring(SKIN:GetVariable('ROOTCONFIGPATH', '') or '')
     skinRoot = skinRoot:gsub('^%s+', ''):gsub('%s+$', '')
     if skinRoot ~= '' and skinRoot:sub(-1) ~= '\\' and skinRoot:sub(-1) ~= '/' then
@@ -444,16 +460,16 @@ local function LoadEssentials()
     SKIN:Bang(_G.DMeloper.BANG_SET_VARIABLE, 'HighlightShapeSize', tostring(SlotSize + HighlightSizeOffset))
 end
 function ApplyInventoryStaticLocalizationTextFits()
-    if IsHotbar or not LocalizationTextFit or not LocalizationTextFit.ApplyMeterTextFit then
+    if IsHotbar or not LocalizationTextFit then
         return
     end
-    LocalizationTextFit.ApplyMeterTextFit(SKIN, 'MeterEditorModeBadgeLabel', '#Loc_Inventory_EditorModeBadgeText#', {
+    return LocalizationTextFit:Apply({
+        meterName = 'MeterEditorModeBadgeLabel',
+        text = '#Loc_Inventory_EditorModeBadgeText#',
         baseFontSize = GetSkinNumber('EditorModeBadgeFontSize', 20),
         widthPx = math.max(0, GetSkinNumber('EditorModeBadgeW', 245) - 18),
-        minScale = 0.55,
-        probeMeterName = 'MeterInventoryTextFitProbe',
-        setText = false,
-        update = false,
+        heightPx = GetSkinNumber('EditorModeBadgeH', 40),
+        policy = 'wrap4',
     })
 end
 local function callHerobrine(methodName, ...)
@@ -489,6 +505,9 @@ local function RunTooltipShowAt(text, isOption, x, y)
     RunTooltipCommand(string.format('ShowItemNameAt(%q, %s, %s, %s)', tostring(text or ''), isOption and 'true' or 'false', tostring(x), tostring(y)))
 end
 local function RunTooltipHide()
+    if isTooltipVisible == false then
+        return
+    end
     isTooltipVisible = false
     RunTooltipCommand('Hide()')
 end
@@ -652,6 +671,7 @@ function InventoryLifecycle.InventoryVisibleMirrorConfigs(rootPath)
         rootPath .. '\\HUD\\Inventory',
         rootPath .. '\\HUD\\InventoryBG',
         rootPath .. '\\HUD\\Editor',
+        rootPath .. '\\HUD\\Mirror\\Controller',
     }
 end
 function InventoryLifecycle.IsInventoryFeatureEnabled()
@@ -780,7 +800,12 @@ local function IsInventoryItem(s)
     return s == _G.DMeloper.OPEN_INVENTORY_KEY
 end
 local function CurrentLanguageCode()
-    return LanguageRegistry.NormalizeLanguageCode(SKIN, LanguageBranching.CurrentSkinLanguageCode(SKIN, 'en-US'), 'en-US')
+    local rawLanguageCode = LanguageBranching.CurrentSkinLanguageCode(SKIN, 'en-US')
+    if languageState.normalizedCode == nil or languageState.rawCode ~= rawLanguageCode then
+        languageState.rawCode = rawLanguageCode
+        languageState.normalizedCode = LanguageRegistry.NormalizeLanguageCode(SKIN, rawLanguageCode, 'en-US')
+    end
+    return languageState.normalizedCode
 end
 local function ReservedInventoryDisplayName()
     return LanguageRegistry.GetInventoryLabel(SKIN, CurrentLanguageCode())
@@ -803,10 +828,10 @@ local function SyncCreatorProfileLink()
         return
     end
     local currentLanguageCode = CurrentLanguageCode()
-    if lastCreatorProfileLanguageCode == currentLanguageCode then
+    if languageState.creatorProfileCode == currentLanguageCode then
         return
     end
-    lastCreatorProfileLanguageCode = currentLanguageCode
+    languageState.creatorProfileCode = currentLanguageCode
     local action = '["' .. CreatorProfileUrl() .. '"]'
     for _, meterName in ipairs(CREATOR_PROFILE_METERS) do
         SKIN:Bang(_G.DMeloper.BANG_SET_OPTION, meterName, 'LeftMouseUpAction', action)
@@ -821,10 +846,10 @@ local function ResetItemTextCache()
 end
 local function SyncLanguageSensitiveItemText()
     local currentLanguageCode = CurrentLanguageCode()
-    if lastLanguageCode == currentLanguageCode then
+    if languageState.itemTextCode == currentLanguageCode then
         return
     end
-    lastLanguageCode = currentLanguageCode
+    languageState.itemTextCode = currentLanguageCode
     if ItemInfosHolder and type(ItemInfosHolder.RefreshInfos) == 'function' then
         ItemInfosHolder.RefreshInfos()
     end
@@ -846,7 +871,7 @@ local function ShowHotbarText()
     SKIN:Bang('!CommandMeasure', 'MeasureFade', 'Show()')
 end
 local function AddNotice(origin, notice, isHotbar)
-    if not IsMissingHintVisible then return end
+    if not IsMissingHintVisible then return origin end
     if origin == '' then return notice end
     if isHotbar then return origin .. ' ' .. notice end
     return origin .. '\n' .. notice
@@ -889,11 +914,35 @@ local function showExternalHotbarText(text, pinnedOwner, textMode)
     ShowHotbarText()
     return true
 end
+function BroadcastHudMirrorHotbarCommand(command)
+    if not IsHotbar or IsHudMirrorReplica() then
+        return false
+    end
+    local root = trimText(SKIN:GetVariable('ROOTCONFIG', ''))
+    if root == '' or trimText(command) == '' then
+        return false
+    end
+    SKIN:Bang(
+        '!CommandMeasure',
+        'MeasureHudMirrorController',
+        'BroadcastHotbarCommand(' .. string.format('%q', command) .. ')',
+        root .. '\\HUD\\Mirror\\Controller'
+    )
+    return true
+end
 function ShowExternalHotbarText(text, mode)
-    return showExternalHotbarText(text, nil, mode)
+    local shown = showExternalHotbarText(text, nil, mode)
+    if shown then
+        BroadcastHudMirrorHotbarCommand(string.format('ShowExternalHotbarText(%q,%q)', tostring(text or ''), tostring(mode or '')))
+    end
+    return shown
 end
 function ShowPinnedExternalHotbarText(owner, text, mode)
-    return showExternalHotbarText(text, owner, mode)
+    local shown = showExternalHotbarText(text, owner, mode)
+    if shown then
+        BroadcastHudMirrorHotbarCommand(string.format('ShowPinnedExternalHotbarText(%q,%q,%q)', tostring(owner or ''), tostring(text or ''), tostring(mode or '')))
+    end
+    return shown
 end
 function ReleasePinnedExternalHotbarText(owner)
     LoadEssentials()
@@ -906,6 +955,7 @@ function ReleasePinnedExternalHotbarText(owner)
     end
     pinnedExternalHotbarTextOwner = ''
     SKIN:Bang('!CommandMeasure', 'MeasureFade', 'Unpin()')
+    BroadcastHudMirrorHotbarCommand(string.format('ReleasePinnedExternalHotbarText(%q)', owner))
     return true
 end
 function ShowBackgroundHotbarText(owner, text, mode)
@@ -923,6 +973,7 @@ function ShowBackgroundHotbarText(owner, text, mode)
         hotbarTextMode = 'static'
     end
     SKIN:Bang('!CommandMeasure', 'MeasureFade', string.format('SetBackgroundText(%q,%q,%q)', owner, text, hotbarTextMode))
+    BroadcastHudMirrorHotbarCommand(string.format('ShowBackgroundHotbarText(%q,%q,%q)', owner, text, hotbarTextMode))
     return true
 end
 function ClearBackgroundHotbarText(owner)
@@ -935,5 +986,6 @@ function ClearBackgroundHotbarText(owner)
         return false
     end
     SKIN:Bang('!CommandMeasure', 'MeasureFade', string.format('ClearBackgroundText(%q)', owner))
+    BroadcastHudMirrorHotbarCommand(string.format('ClearBackgroundHotbarText(%q)', owner))
     return true
 end

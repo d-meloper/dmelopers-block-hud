@@ -26,9 +26,11 @@ local function readEntries(skin)
         local prefix = 'Language_' .. tostring(index) .. '_'
         local code = skinValue(skin, prefix .. 'Code', '')
         if code ~= '' then
+            local displayName = skinValue(skin, prefix .. 'DisplayName', code)
             local entry = {
                 code = code,
-                displayName = skinValue(skin, prefix .. 'DisplayName', code),
+                englishName = skinValue(skin, prefix .. 'EnglishName', displayName),
+                displayName = displayName,
                 inventoryLabel = skinValue(skin, prefix .. 'InventoryLabel', ''),
             }
             entries[#entries + 1] = entry
@@ -126,6 +128,14 @@ end
 
 function LanguageRegistry.GetDropdownOptions(skin)
     local entries = readEntries(skin)
+    table.sort(entries, function(left, right)
+        local leftName = lower(left.englishName)
+        local rightName = lower(right.englishName)
+        if leftName == rightName then
+            return lower(left.code) < lower(right.code)
+        end
+        return leftName < rightName
+    end)
     local options = {}
     for _, entry in ipairs(entries) do
         options[#options + 1] = {

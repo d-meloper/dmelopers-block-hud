@@ -6,6 +6,31 @@ return function(app)
     local shallowCopy = app.shallowCopy
     local logNotice = app.logNotice
     local setVariable = app.setVariable
+    local HUD_MIRROR_TARGETS = {
+        Hotbar = true,
+        IndicatorHeart = true,
+        IndicatorArmor = true,
+        IndicatorFood = true,
+        IndicatorAir = true,
+        IndicatorExp = true,
+        Clock = true,
+        ClockSprite = true,
+    }
+    local function fanoutHudMirrorTarget(targetName)
+        if methods.normalizeToggleValue(SKIN:GetVariable('EnableHudMirrorMode', '0')) ~= '1' then
+            return false
+        end
+        if HUD_MIRROR_TARGETS[targetName] and state.rootConfig ~= '' then
+            SKIN:Bang(
+                '!CommandMeasure',
+                'MeasureHudMirrorController',
+                "Fanout('" .. targetName .. "','RefreshView')",
+                state.rootConfig .. '\\HUD\\Mirror\\Controller'
+            )
+            return true
+        end
+        return false
+    end
     function methods.isWindowOptionToggleField(field)
         local optionName = methods.windowOptionNameForField(field)
         if optionName == '' then
@@ -126,14 +151,23 @@ return function(app)
         methods.ensurePaths()
         local literal = methods.normalizeToggleValue(resolved) == '1' and '1' or '0'
         local optionName = methods.windowOptionNameForField(field)
+        local jukeboxApplyStarted = false
         for _, targetName in ipairs(methods.windowOptionTargetIdsForField(field)) do
             local isRefreshable = methods.isConfigTargetRefreshable and methods.isConfigTargetRefreshable(targetName) or methods.isConfigTargetActive(targetName)
             if isRefreshable then
+                if targetName == 'Jukebox' and not jukeboxApplyStarted then
+                    methods.BeginJukeboxSettingsApply('ready')
+                    jukeboxApplyStarted = true
+                end
                 local target = schema.refreshTargetsByName[targetName]
                 local configPath = state.rootConfig .. '\\' .. target.config
                 SKIN:Bang('!SetVariable', field.variableName, literal, configPath)
                 SKIN:Bang('!' .. optionName, literal, configPath)
+                fanoutHudMirrorTarget(targetName)
             end
+        end
+        if jukeboxApplyStarted then
+            methods.RequestJukeboxSettingsApplyAck()
         end
         return true
     end
@@ -260,6 +294,35 @@ return function(app)
         local allowStoredWidePath = options.verified == true or methods.isMinecraftSkinImagePathVerified(imagePath)
         local resolvedImagePath = methods.resolveStoredMinecraftSkinImagePath(username, imagePath, { allowStoredWidePath = allowStoredWidePath })
         local resolvedImagePathVerified = resolvedImagePath ~= '' and allowStoredWidePath
+        local requestedTexturePath = options.texturePath
+        if requestedTexturePath == nil then
+            requestedTexturePath = SKIN:GetVariable('MinecraftSkinTexturePath', '')
+        end
+        local resolvedTexturePath = methods.resolveStoredMinecraftSkinTexturePath(username, requestedTexturePath, {
+            allowStoredTexturePath = resolvedImagePathVerified,
+        })
+        local requestedModel = options.model
+        if requestedModel == nil then
+            requestedModel = SKIN:GetVariable('MinecraftSkinModel', 'wide')
+        end
+        local resolvedModel = methods.normalizeMinecraftSkinModelInput
+            and methods.normalizeMinecraftSkinModelInput(requestedModel)
+            or (string.lower(trim(tostring(requestedModel or ''))) == 'slim' and 'slim' or 'wide')
+        local requestedAtlasPath = options.atlasPath
+        if requestedAtlasPath == nil then
+            requestedAtlasPath = SKIN:GetVariable('MinecraftSkinAtlasPath', '')
+        end
+        local atlasVerified = options.atlasVerified
+        if atlasVerified == nil then
+            local storedAtlasVerified = string.lower(trim(SKIN:GetVariable('MinecraftSkinAtlasPathVerified', '0')))
+            atlasVerified = storedAtlasVerified == '1' or storedAtlasVerified == 'true'
+        end
+        local atlasManaged = options.atlasManaged
+        if atlasManaged == nil then
+            local storedAtlasManaged = string.lower(trim(SKIN:GetVariable('MinecraftSkinAtlasManaged', '0')))
+            atlasManaged = storedAtlasManaged == '1' or storedAtlasManaged == 'true'
+        end
+        local resolvedAtlasPath = atlasVerified == true and trim(requestedAtlasPath or '') or ''
         local inventoryActive = methods.isConfigTargetActive('Inventory')
         local inventoryRefreshable = inventoryActive or (methods.isConfigTargetRefreshable and methods.isConfigTargetRefreshable('Inventory'))
         if not inventoryRefreshable then
@@ -273,8 +336,13 @@ return function(app)
         SKIN:Bang('!SetVariable', 'MinecraftSkinUsername', tostring(username or ''), configPath)
         SKIN:Bang('!SetVariable', 'MinecraftSkinImagePath', resolvedImagePath, configPath)
         SKIN:Bang('!SetVariable', 'MinecraftSkinImagePathVerified', resolvedImagePathVerified and '1' or '0', configPath)
+        SKIN:Bang('!SetVariable', 'MinecraftSkinTexturePath', resolvedTexturePath, configPath)
+        SKIN:Bang('!SetVariable', 'MinecraftSkinModel', resolvedModel, configPath)
+        SKIN:Bang('!SetVariable', 'MinecraftSkinAtlasPath', resolvedAtlasPath, configPath)
+        SKIN:Bang('!SetVariable', 'MinecraftSkinAtlasPathVerified', resolvedAtlasPath ~= '' and '1' or '0', configPath)
+        SKIN:Bang('!SetVariable', 'MinecraftSkinAtlasManaged', atlasManaged == true and '1' or '0', configPath)
         if inventoryActive then
-            SKIN:Bang('!CommandMeasure', 'MeasurePlayerSkinState', 'Sync()', configPath)
+            SKIN:Bang('!CommandMeasure', 'MeasurePlayerSkinState', 'AdoptVerifiedAtlas()', configPath)
 
         end
         if targetSet then
@@ -342,9 +410,28 @@ return function(app)
 
 
 
-    function methods.clockLiveMeterNames()
+    function methods.clockPrimaryMeterNames()
 
         return { 'MeterTime24', 'MeterDate24', 'MeterTime12', 'MeterDate12', 'MeterTime12NoMeridiem', 'MeterDate12NoMeridiem' }
+
+    end
+
+    function methods.clockShadowMeterNames()
+
+        return { 'MeterClockTime24Shadow', 'MeterClockDate24Shadow', 'MeterClockTime12Shadow', 'MeterClockDate12Shadow', 'MeterClockTime12NoMeridiemShadow', 'MeterClockDate12NoMeridiemShadow' }
+
+    end
+
+    function methods.clockLiveMeterNames()
+
+        local names = {}
+        for _, meterName in ipairs(methods.clockPrimaryMeterNames()) do
+            names[#names + 1] = meterName
+        end
+        for _, meterName in ipairs(methods.clockShadowMeterNames()) do
+            names[#names + 1] = meterName
+        end
+        return names
 
     end
 
@@ -432,6 +519,7 @@ return function(app)
                 SKIN:Bang('!Redraw', configPath)
             end
         end
+        fanoutHudMirrorTarget('ClockSprite')
         return true
     end
 
@@ -517,9 +605,11 @@ return function(app)
 
                 SKIN:Bang('!UpdateMeasure', 'MeasureTime12NoMeridiem', configPath)
 
-                SKIN:Bang('!UpdateMeter', 'MeterTime12', configPath)
+                for _, meterName in ipairs(methods.clockLiveMeterNames()) do
 
-                SKIN:Bang('!UpdateMeter', 'MeterTime12NoMeridiem', configPath)
+                    SKIN:Bang('!UpdateMeter', meterName, configPath)
+
+                end
 
                 SKIN:Bang('!Redraw', configPath)
 
@@ -565,6 +655,8 @@ return function(app)
 
         end
 
+        fanoutHudMirrorTarget('Clock')
+
         return true
 
     end
@@ -591,7 +683,7 @@ return function(app)
 
                 SKIN:Bang('!SetVariable', field.variableName, tostring(resolved), configPath)
 
-                for _, meterName in ipairs(methods.clockLiveMeterNames()) do
+                for _, meterName in ipairs(methods.clockPrimaryMeterNames()) do
 
                     SKIN:Bang('!SetOption', meterName, 'FontColor', tostring(resolved), configPath)
 
@@ -692,7 +784,7 @@ return function(app)
 
         local literal = methods.normalizeToggleValue(methods.readFieldValue(clock24HourField))
 
-        local colorLiteral = methods.normalizeStoredClockColorValue(methods.readFieldValue(clockTextColorField), '255,255,255,255')
+        local colorLiteral = methods.normalizeClockColorValue(methods.readFieldValue(clockTextColorField), '255,255,255,255')
 
         SKIN:Bang('!SetVariable', clock24HourField.variableName, literal, configPath)
 
@@ -702,9 +794,13 @@ return function(app)
 
         SKIN:Bang('!UpdateMeasure', 'MeasureTime12NoMeridiem', configPath)
 
-        for _, meterName in ipairs(methods.clockLiveMeterNames()) do
+        for _, meterName in ipairs(methods.clockPrimaryMeterNames()) do
 
             SKIN:Bang('!SetOption', meterName, 'FontColor', colorLiteral, configPath)
+
+        end
+
+        for _, meterName in ipairs(methods.clockLiveMeterNames()) do
 
             SKIN:Bang('!UpdateMeter', meterName, configPath)
 

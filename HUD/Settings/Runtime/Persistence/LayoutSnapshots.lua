@@ -14,7 +14,11 @@ return function(app)
 
             local field = methods.getField(fieldKey)
 
-            snapshot[fieldKey] = methods.normalizeFieldValue(field, methods.readFieldValue(field), '')
+            if field and field.externalState ~= true then
+
+                snapshot[fieldKey] = methods.normalizeFieldValue(field, methods.readFieldValue(field), '')
+
+            end
 
         end
 
@@ -27,6 +31,12 @@ return function(app)
             allowStoredTexturePath = snapshotMinecraftSkinImagePathVerified,
 
         })
+        local snapshotAtlasPath = trim(SKIN:GetVariable('MinecraftSkinAtlasPath', ''))
+        local snapshotAtlasVerified = trim(SKIN:GetVariable('MinecraftSkinAtlasPathVerified', '0'))
+        local snapshotAtlasManaged = trim(SKIN:GetVariable('MinecraftSkinAtlasManaged', '0'))
+        snapshot.minecraftSkinAtlasPath = (snapshotAtlasVerified == '1' or snapshotAtlasVerified == 'true') and snapshotAtlasPath or ''
+        snapshot.minecraftSkinAtlasPathVerified = snapshot.minecraftSkinAtlasPath ~= '' and '1' or '0'
+        snapshot.minecraftSkinAtlasManaged = (snapshotAtlasManaged == '1' or snapshotAtlasManaged == 'true') and '1' or '0'
 
         return snapshot
 
@@ -36,7 +46,12 @@ return function(app)
 
     function methods.toggleSemanticValue(field, storedValue)
 
-        local storedEnabled = methods.normalizeToggleValue(storedValue) == '1'
+        local storedEnabled
+        if field.toggleNonZeroIsOn == true then
+            storedEnabled = (tonumber(storedValue) or 0) > 0
+        else
+            storedEnabled = methods.normalizeToggleValue(storedValue) == '1'
+        end
 
         if field.invert then
 
@@ -53,20 +68,27 @@ return function(app)
     function methods.nextStoredToggleValue(field)
 
         local nextSemantic = not methods.toggleSemanticValue(field, methods.readFieldValue(field))
+        local onValue = tostring(field.toggleOnValue or '1')
+        local offValue = tostring(field.toggleOffValue or '0')
 
         if field.invert then
 
-            return nextSemantic and '0' or '1'
+            return nextSemantic and offValue or onValue
 
         end
 
-        return nextSemantic and '1' or '0'
+        return nextSemantic and onValue or offValue
 
     end
 
 
 
     function methods.defaultSnapshotFallbackValue(fieldKey)
+
+        local field = methods.getField(fieldKey)
+        if field and field.defaultSnapshotValue ~= nil then
+            return tostring(field.defaultSnapshotValue)
+        end
 
         local fallbackByFieldKey = {
 
@@ -77,6 +99,8 @@ return function(app)
             hotbarDragSnap = '0',
 
             itemCountTextFontSize = '18',
+
+            hudMirrorModeEnabled = '0',
 
             indicatorsDragSnap = '0',
 
@@ -357,6 +381,18 @@ return function(app)
         end
 
         if #reflowIds > 0 then
+
+            for _, id in ipairs(reflowIds) do
+
+                if id == 'Jukebox' and methods.isConfigTargetActive('Jukebox') then
+
+                    methods.BeginJukeboxSettingsApply('ready')
+
+                    break
+
+                end
+
+            end
 
             core.ReflowTargets(SKIN, reflowIds, { forceRefresh = forceRefresh })
 

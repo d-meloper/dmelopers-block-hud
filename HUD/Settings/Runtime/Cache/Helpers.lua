@@ -12,6 +12,11 @@ return function(app)
     local parseStartupAutoRunResult = helpers.parseStartupAutoRunResult
     local defaultLoadingMessage = helpers.defaultLoadingMessage
     local showModalAlert = helpers.showModalAlert
+    function methods.nextStartupAutoRunRequestToken()
+        state.startupAutoRunRequestCounter = (tonumber(state.startupAutoRunRequestCounter) or 0) + 1
+        local clockPart = tostring(os.clock() or 0):gsub('[^0-9]', '')
+        return 'SettingsStartup-' .. clockPart .. '-' .. tostring(state.startupAutoRunRequestCounter)
+    end
     function methods.startRunCommandHelper(helperKind, measureName, argsVariableName, args, options)
         options = options or {}
         local loadKind = trim(options.loadKind or state.pendingLoadKind or '')
@@ -194,36 +199,19 @@ return function(app)
 
     end
 
-    function methods.applyComputerInfoStartupAutoRunLiteral(literal)
-
-        local field = methods.getField('startupAutoRun')
-
-        if not field then
-
-            return '0'
-
-        end
-
-        local currentLiteral = methods.normalizeToggleValue(methods.readFieldValue(field))
-
+    function methods.applyComputerInfoStartupAutoRunLiteral(literal, fastLiteral)
+        local current = methods.currentStartupAutoRunState()
         local helperLiteral = trim(literal)
-
         if helperLiteral ~= '0' and helperLiteral ~= '1' then
-
-            return currentLiteral
-
+            return current
         end
 
-        local actualLiteral = methods.normalizeToggleValue(helperLiteral)
+        local helperFastLiteral = trim(fastLiteral)
+        if helperFastLiteral ~= '0' and helperFastLiteral ~= '1' then
+            helperFastLiteral = '0'
+        end
 
-        methods.persistStartupAutoRunCache(actualLiteral)
-
-        methods.setFieldSessionValue(field, actualLiteral)
-
-        methods.persistStartupAutoRunSetting(actualLiteral, { currentLiteral = currentLiteral })
-
-        return actualLiteral
-
+        return methods.applyStartupAutoRunState(helperLiteral, helperFastLiteral) or current
     end
 
     function methods.minecraftSkinFetchArguments(username, model)
@@ -327,7 +315,7 @@ return function(app)
         )
     end
 
-    function methods.startupAutoRunHelperArguments(mode)
+    function methods.startupAutoRunHelperArguments(mode, startupMethod, requestToken)
 
         return '-NoProfile -ExecutionPolicy Bypass -File '
 
@@ -337,13 +325,30 @@ return function(app)
 
             .. tostring(mode or 'probe')
 
+            .. ' -Method '
+
+            .. tostring(startupMethod or 'all')
+            .. (trim(requestToken or '') ~= ''
+                and (' -RequestToken ' .. methods.escapeCommandArgument(trim(requestToken)))
+                or '')
+
     end
 
-    function methods.startStartupAutoRunHelper(desiredLiteral)
+    function methods.startStartupAutoRunHelper(desiredLiteral, startupMethod, requestToken)
 
         local mode = desiredLiteral == nil and 'probe' or (methods.normalizeToggleValue(desiredLiteral) == '1' and 'enable' or 'disable')
 
-        local args = methods.startupAutoRunHelperArguments(mode)
+        local method = trim(startupMethod or '')
+        if mode == 'probe' then
+            method = 'all'
+        elseif mode == 'disable' then
+            method = 'all'
+        elseif method ~= 'task' then
+            method = 'shortcut'
+        end
+
+        local resolvedRequestToken = trim(requestToken or state.pendingStartupAutoRunRequestToken or '')
+        local args = methods.startupAutoRunHelperArguments(mode, method, resolvedRequestToken)
 
         return methods.startRunCommandHelper(
 
@@ -353,7 +358,11 @@ return function(app)
 
             'SettingsStartupAutoRunHelperArgs',
 
-            args
+            args,
+            {
+                loadKind = trim(state.pendingLoadKind or '') ~= '' and trim(state.pendingLoadKind or '') or 'startupAutoRunProbe',
+                timeoutSeconds = 40,
+            }
 
         )
 
@@ -424,7 +433,6 @@ return function(app)
         local launchToken = ''
         if methods.beginVersionManagerLaunchPending then
             launchToken = methods.beginVersionManagerLaunchPending()
-            methods.renderActivePage()
         end
         local started = methods.startDetachedRunCommandHelper(
             'openVersionManager',

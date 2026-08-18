@@ -66,9 +66,15 @@ function Normalize-ImportedMinecraftSkinState {
     $currentImagePath = if ($supportVariables.Contains('MinecraftSkinImagePath')) { ([string]$supportVariables['MinecraftSkinImagePath']).Trim() } else { '' }
     $currentTexturePath = if ($supportVariables.Contains('MinecraftSkinTexturePath')) { ([string]$supportVariables['MinecraftSkinTexturePath']).Trim() } else { '' }
     $currentImagePathVerified = if ($supportVariables.Contains('MinecraftSkinImagePathVerified')) { ([string]$supportVariables['MinecraftSkinImagePathVerified']).Trim() } else { '' }
+    $currentAtlasPath = if ($supportVariables.Contains('MinecraftSkinAtlasPath')) { ([string]$supportVariables['MinecraftSkinAtlasPath']).Trim() } else { '' }
+    $currentAtlasPathVerified = if ($supportVariables.Contains('MinecraftSkinAtlasPathVerified')) { ([string]$supportVariables['MinecraftSkinAtlasPathVerified']).Trim() } else { '' }
+    $currentAtlasManaged = if ($supportVariables.Contains('MinecraftSkinAtlasManaged')) { ([string]$supportVariables['MinecraftSkinAtlasManaged']).Trim() } else { '' }
     $playerImageDirectory = Join-RootPath -Root $TargetRoot -RelativePath '@Resources\Customs\Images\Player'
     $normalizedImagePath = ''
     $normalizedTexturePath = ''
+    $normalizedAtlasPath = ''
+    $normalizedAtlasPathVerified = '0'
+    $normalizedAtlasManaged = '0'
 
     if ($username -ne '') {
         $imageFileName = ''
@@ -128,13 +134,34 @@ function Normalize-ImportedMinecraftSkinState {
 
     $normalizedImagePathVerified = if ($normalizedImagePath -ne '') { '1' } else { '0' }
 
-    if ($currentImagePath -eq $normalizedImagePath -and $currentTexturePath -eq $normalizedTexturePath -and $currentImagePathVerified -eq $normalizedImagePathVerified) {
+    if ($normalizedImagePath -ne '') {
+        $bodyName = [System.IO.Path]::GetFileNameWithoutExtension($normalizedImagePath)
+        $cacheKey = if ($bodyName -match '^MinecraftSkinBody_(.+)$') { $matches[1] } else { '' }
+        $model = if ($supportVariables.Contains('MinecraftSkinModel') -and ([string]$supportVariables['MinecraftSkinModel']).Trim().ToLowerInvariant() -eq 'slim') { 'slim' } else { 'wide' }
+        if ($cacheKey -ne '' -and $null -ne (Get-Command Resolve-BlockHudMinecraftSkinLookAtlas -ErrorAction SilentlyContinue)) {
+            $atlasResult = Resolve-BlockHudMinecraftSkinLookAtlas `
+                -OutputDirectory $playerImageDirectory -CacheKey $cacheKey -Model $model `
+                -TexturePath $normalizedTexturePath -BodyPath $normalizedImagePath `
+                -AllowLegacyBodyOnly:($normalizedTexturePath -eq '')
+            if ($atlasResult.Ready -eq $true) {
+                $normalizedAtlasPath = [System.IO.Path]::GetFullPath([string]$atlasResult.AtlasPath)
+                $normalizedAtlasPathVerified = '1'
+                $normalizedAtlasManaged = '1'
+            }
+        }
+    }
+
+    if ($currentImagePath -eq $normalizedImagePath -and $currentTexturePath -eq $normalizedTexturePath -and $currentImagePathVerified -eq $normalizedImagePathVerified -and
+        $currentAtlasPath -eq $normalizedAtlasPath -and $currentAtlasPathVerified -eq $normalizedAtlasPathVerified -and $currentAtlasManaged -eq $normalizedAtlasManaged) {
         return
     }
 
     Set-MapValue -Map $supportVariables -Key 'MinecraftSkinImagePath' -Value $normalizedImagePath
     Set-MapValue -Map $supportVariables -Key 'MinecraftSkinTexturePath' -Value $normalizedTexturePath
     Set-MapValue -Map $supportVariables -Key 'MinecraftSkinImagePathVerified' -Value $normalizedImagePathVerified
+    Set-MapValue -Map $supportVariables -Key 'MinecraftSkinAtlasPath' -Value $normalizedAtlasPath
+    Set-MapValue -Map $supportVariables -Key 'MinecraftSkinAtlasPathVerified' -Value $normalizedAtlasPathVerified
+    Set-MapValue -Map $supportVariables -Key 'MinecraftSkinAtlasManaged' -Value $normalizedAtlasManaged
     $content = ConvertTo-VariablesContent -Variables $supportVariables
     $null = Invoke-MigrationAction -Action 'Normalize imported Minecraft skin cache path' -Target $supportPath -ScriptBlock {
         Write-Utf16Text -Path $supportPath -Content $content
@@ -189,6 +216,7 @@ function Test-ReservedHotbarSlot10Section {
 
 function Get-ImportItemFields {
     @('Image', 'Label', 'Action', 'Qty', 'ConfirmBeforeRun')
+    @('ActionType', 'FolderCountSync')
 }
 
 function Normalize-ImportItemFieldValue {
@@ -211,6 +239,18 @@ function Normalize-ImportItemFieldValue {
         }
         return '0'
     }
+    if ($Field -eq 'ActionType') {
+        if (([string]$Value).Trim().ToLowerInvariant() -eq 'folder') {
+            return 'folder'
+        }
+        return ''
+    }
+    if ($Field -eq 'FolderCountSync') {
+        if ([string]$Value -eq '1') {
+            return '1'
+        }
+        return '0'
+    }
 
     return [string]$Value
 }
@@ -228,6 +268,8 @@ function Add-ItemConfirmBeforeRunBackfill {
         for ($index = 1; $index -le 10; $index++) {
             $section = 'Slot{0:D2}' -f $index
             Set-MapValue -Map $Backfill -Key "HotbarItem_${section}_ConfirmBeforeRun" -Value '0'
+            Set-MapValue -Map $Backfill -Key "HotbarItem_${section}_ActionType" -Value ''
+            Set-MapValue -Map $Backfill -Key "HotbarItem_${section}_FolderCountSync" -Value '0'
         }
         return
     }
@@ -236,7 +278,63 @@ function Add-ItemConfirmBeforeRunBackfill {
         for ($column = 1; $column -le 9; $column++) {
             $section = "SlotX${column}Y${row}"
             Set-MapValue -Map $Backfill -Key "InventoryItem_${section}_ConfirmBeforeRun" -Value '0'
+            Set-MapValue -Map $Backfill -Key "InventoryItem_${section}_ActionType" -Value ''
+            Set-MapValue -Map $Backfill -Key "InventoryItem_${section}_FolderCountSync" -Value '0'
         }
+    }
+}
+
+function Normalize-ImportedItemMetadataInPlace {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Specialized.OrderedDictionary]$Variables,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Hotbar', 'Inventory')]
+        [string]$Kind
+    )
+
+    $prefix = if ($Kind -eq 'Hotbar') { 'HotbarItem' } else { 'InventoryItem' }
+    $sections = if ($Kind -eq 'Hotbar') {
+        @(for ($index = 1; $index -le 10; $index++) { 'Slot{0:D2}' -f $index })
+    }
+    else {
+        @(for ($row = 1; $row -le 4; $row++) {
+            for ($column = 1; $column -le 9; $column++) {
+                "SlotX${column}Y${row}"
+            }
+        })
+    }
+
+    foreach ($section in $sections) {
+        $actionTypeKey = "${prefix}_${section}_ActionType"
+        $folderCountSyncKey = "${prefix}_${section}_FolderCountSync"
+        $actionType = Normalize-ImportItemFieldValue -Field 'ActionType' -Value (Get-ItemFieldValue -Variables $Variables -Prefix "${prefix}_${section}" -Field 'ActionType')
+        $folderCountSync = Normalize-ImportItemFieldValue -Field 'FolderCountSync' -Value (Get-ItemFieldValue -Variables $Variables -Prefix "${prefix}_${section}" -Field 'FolderCountSync')
+
+        if ($Kind -eq 'Hotbar' -and $section -eq 'Slot10') {
+            $actionType = ''
+            $folderCountSync = '0'
+        }
+        elseif ($actionType -ne 'folder') {
+            $folderCountSync = '0'
+        }
+
+        Set-MapValue -Map $Variables -Key $actionTypeKey -Value $actionType
+        Set-MapValue -Map $Variables -Key $folderCountSyncKey -Value $folderCountSync
+    }
+}
+
+function Normalize-ImportedItemMetadataFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][ValidateSet('Hotbar', 'Inventory')][string]$Kind
+    )
+
+    $variables = Read-VariablesFile -Path $Path
+    Normalize-ImportedItemMetadataInPlace -Variables $variables -Kind $Kind
+    $content = ConvertTo-VariablesContent -Variables $variables
+    $null = Invoke-MigrationAction -Action 'Normalize imported item metadata' -Target $Path -ScriptBlock {
+        Write-Utf16Text -Path $Path -Content $content
     }
 }
 
@@ -275,6 +373,8 @@ function Get-ItemSectionValues {
         Action = Get-ItemFieldValue -Variables $Variables -Prefix $Prefix -Field 'Action'
         Qty = Get-ItemFieldValue -Variables $Variables -Prefix $Prefix -Field 'Qty'
         ConfirmBeforeRun = Get-ItemFieldValue -Variables $Variables -Prefix $Prefix -Field 'ConfirmBeforeRun'
+        ActionType = Get-ItemFieldValue -Variables $Variables -Prefix $Prefix -Field 'ActionType'
+        FolderCountSync = Get-ItemFieldValue -Variables $Variables -Prefix $Prefix -Field 'FolderCountSync'
     }
 }
 
@@ -390,7 +490,7 @@ function Commit-EditorDraftIfActive {
     $draftSlot10 = New-VariablesMap
 
     foreach ($key in $sourceVariables.Keys) {
-        if ($key -notmatch '^EditorDraftItem_(Slot\d\d|SlotX\dY\d)_(Image|Label|Action|Qty|ConfirmBeforeRun)$') {
+        if ($key -notmatch '^EditorDraftItem_(Slot\d\d|SlotX\dY\d)_(Image|Label|Action|Qty|ConfirmBeforeRun|ActionType|FolderCountSync)$') {
             continue
         }
 
@@ -472,8 +572,8 @@ function Merge-EditorDraftIfActive {
         if ($key -match '_Image$') {
             $value = Repair-ImportImageValue -Value $value -ImageRenameMap $ImageRenameMap -RepairContext 'active source EditorDraft.inc' -RepairKey $key
         }
-        elseif ($key -match '_ConfirmBeforeRun$') {
-            $value = if ([string]$value -eq '1') { '1' } else { '0' }
+        elseif ($key -match '_(ConfirmBeforeRun|ActionType|FolderCountSync)$') {
+            $value = Normalize-ImportItemFieldValue -Field $matches[1] -Value ([string]$value)
         }
 
         Set-MapValue -Map $targetVariables -Key $key -Value $value
@@ -687,6 +787,7 @@ function Invoke-Migration {
     $targetInventoryPath = Join-RootPath -Root $targetData -RelativePath 'InventoryItems.inc'
     $sourceItemImageDirectory = Join-RootPath -Root $resolvedSourceRoot -RelativePath '@Resources\Customs\Images\Items'
     $targetItemImageDirectory = Join-RootPath -Root $resolvedTargetRoot -RelativePath '@Resources\Customs\Images\Items'
+    $script:ImportedItemGifAtlasProfiles = ''
     $importedLanguageCode = $null
 
     Initialize-ImportProgress -OwnerRoot $ProgressOwnerRoot -Token $ProgressToken -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
@@ -698,6 +799,8 @@ function Invoke-Migration {
         $importedLanguageCode = Resolve-ImportedLanguageCode -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
         Assert-MigrationTargetImportState -Root $resolvedTargetRoot -ImportedLanguageCode $importedLanguageCode
         $script:ItemImageCompatibilityPlan = New-ItemImageCompatibilityPlan -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceEditorDraftPath $sourceEditorDraftPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
+        $itemGifAtlasPlan = New-ItemGifAtlasImportPlan -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
+        foreach ($invalidation in @($itemGifAtlasPlan.Invalidations)) { Write-Log ('Item GIF atlas validate-only invalidation plan: ' + [string]$invalidation) }
         Set-ItemImageCompatibilityResult -Plan $script:ItemImageCompatibilityPlan
         if ($script:ItemImageCompatibilityPlan.Compatibility -eq 'REPAIRABLE' -and -not $AllowItemImageRepair) {
             $script:PreserveRepairableCompatibilityOnError = $true
@@ -715,6 +818,8 @@ function Invoke-Migration {
     Assert-MigrationTargetImportState -Root $resolvedTargetRoot -ImportedLanguageCode $importedLanguageCode
 
     $script:ItemImageCompatibilityPlan = New-ItemImageCompatibilityPlan -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceEditorDraftPath $sourceEditorDraftPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
+    $itemGifAtlasPlan = New-ItemGifAtlasImportPlan -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
+    foreach ($invalidation in @($itemGifAtlasPlan.Invalidations)) { Write-Log ('Rejected invalid item GIF atlas ownership record: ' + [string]$invalidation) }
     Set-ItemImageCompatibilityResult -Plan $script:ItemImageCompatibilityPlan
     if ($script:ItemImageCompatibilityPlan.Compatibility -eq 'REPAIRABLE') {
         if (-not $AllowItemImageRepair) {
@@ -730,7 +835,7 @@ function Invoke-Migration {
 
     Backup-TargetStateToTemporaryRollback -TargetRoot $resolvedTargetRoot
     $script:ImportTargetMutationStarted = $true
-    Replace-ItemImageDirectoryForImport -SourceDirectory $sourceItemImageDirectory -TargetDirectory $targetItemImageDirectory -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceEditorDraftPath $sourceEditorDraftPath
+    Replace-ItemImageDirectoryForImport -SourceDirectory $sourceItemImageDirectory -TargetDirectory $targetItemImageDirectory -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceEditorDraftPath $sourceEditorDraftPath -ItemGifAtlasPlan $itemGifAtlasPlan
     $hotbarBackfill = New-HotbarSlot10ReservedBackfill -LanguageCode $importedLanguageCode -TargetRoot $resolvedTargetRoot
     Add-ItemConfirmBeforeRunBackfill -Backfill $hotbarBackfill -Kind Hotbar
     $inventoryBackfill = New-VariablesMap
@@ -746,6 +851,8 @@ function Invoke-Migration {
     Assert-ImportedImageAdjustmentIntegrity -SourcePath $sourceImageAdjustmentsPath -TargetPath $targetImageAdjustmentsPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory -ImageRenameMap $imageRenameMap
     Move-LegacyHotbarSlot10IfCustom -SourceHotbarPath $sourceHotbarPath -TargetInventoryPath $targetInventoryPath -ImageRenameMap $imageRenameMap
     Commit-EditorDraftIfActive -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'EditorDraft.inc') -TargetHotbarPath $targetHotbarPath -TargetInventoryPath $targetInventoryPath -ImageRenameMap $imageRenameMap | Out-Null
+    Normalize-ImportedItemMetadataFile -Path $targetHotbarPath -Kind Hotbar
+    Normalize-ImportedItemMetadataFile -Path $targetInventoryPath -Kind Inventory
     Rebuild-EditorDraftFromImportedItems -TargetRoot $resolvedTargetRoot
     Assert-ImportedItemImageIntegrity -TargetRoot $resolvedTargetRoot -TargetHotbarPath $targetHotbarPath -TargetInventoryPath $targetInventoryPath -TargetImageDirectory $targetItemImageDirectory
     Merge-ResponsiveLayoutState -SourcePath (Join-RootPath -Root $sourceData -RelativePath 'ResponsiveLayoutState.inc') -TargetPath (Join-RootPath -Root $targetData -RelativePath 'ResponsiveLayoutState.inc') -SourceRoot $resolvedSourceRoot

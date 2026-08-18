@@ -12,8 +12,10 @@ function Get-SettingsBackfill {
                 UseClickSound = '1'
                 ShowMissingHintText = '1'
                 EnableRainmeterStartup = '0'
+                EnableRainmeterFastStartup = '0'
                 ItemCountTextFontSize = '18'
                 LanguageCode = 'ko-KR'
+                EnableHudMirrorMode = '0'
                 EnableJukeboxSkin = '1'
                 EnableJukebox2DMode = '0'
                 DisableJukeboxNoteAnimation = '0'
@@ -43,6 +45,13 @@ function Get-SettingsBackfill {
                 EnableClockSpriteSkin = '1'
                 ClockSpriteSize = '128'
                 ClockTextColor = '255,255,255,255'
+                ClockTextWeight = '0'
+                ClockTextBorderSize = '0'
+                ClockTextBorderColor = '0,0,0'
+                ClockTextShadowYOffset = '0'
+                ClockTextShadowColor = '0,0,0'
+                ClockTextShadowBlur = '0'
+                ClockTextShadowOpacity = '50'
             })
         }
         'Support.inc' {
@@ -53,7 +62,27 @@ function Get-SettingsBackfill {
                 MinecraftSkinImagePath = ''
                 MinecraftSkinTexturePath = ''
                 MinecraftSkinImagePathVerified = '0'
+                MinecraftSkinAtlasPath = ''
+                MinecraftSkinAtlasPathVerified = '0'
+                MinecraftSkinAtlasManaged = '0'
             })
+        }
+        'HudMirror.inc' {
+            $values = @{
+                HudMirrorSchemaVersion = '1'
+                AllowHudMirrorReplicaDrag = '0'
+                AllowHudMirrorReplicaSnapEdges = '0'
+            }
+            $targetIds = @('Hotbar', 'IndicatorHeart', 'IndicatorArmor', 'IndicatorFood', 'IndicatorAir', 'IndicatorExp', 'Clock', 'ClockSprite')
+            for ($slot = 1; $slot -le 31; $slot++) {
+                $slotId = '{0:D2}' -f $slot
+                $values["HudMirrorSlot${slotId}Fingerprint"] = ''
+                $values["HudMirrorSlot${slotId}Selection"] = '0'
+                foreach ($targetId in $targetIds) {
+                    $values["HudMirrorSlot${slotId}${targetId}Position"] = ''
+                }
+            }
+            return (New-BackfillMap -Values $values)
         }
         default {
             return $null
@@ -61,6 +90,81 @@ function Get-SettingsBackfill {
     }
 }
 
+# DMEL_COMPAT:import.hud-mirror-settings-v1
+function Assert-HudMirrorImportSettings {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Specialized.OrderedDictionary]$Variables,
+        [Parameter(Mandatory = $true)]
+        [string]$Context
+    )
+
+    if (-not $Variables.Contains('HudMirrorSchemaVersion') -or [string]$Variables['HudMirrorSchemaVersion'] -ne '1') {
+        throw "Unsupported HUD mirror settings schema in $Context"
+    }
+    foreach ($key in @('AllowHudMirrorReplicaDrag', 'AllowHudMirrorReplicaSnapEdges')) {
+        if (-not $Variables.Contains($key) -or [string]$Variables[$key] -notmatch '^[01]$') {
+            throw "Invalid HUD mirror boolean '$key' in $Context"
+        }
+    }
+
+    $fingerprintPattern = '^-?\d+,-?\d+,\d+,\d+\|-?\d+,-?\d+,\d+,\d+$'
+    $number = '[+-]?(?:\d+(?:\.\d*)?|\.\d+)'
+    $positionPattern = "^${number},${number}$"
+    $targetIds = @('Hotbar', 'IndicatorHeart', 'IndicatorArmor', 'IndicatorFood', 'IndicatorAir', 'IndicatorExp', 'Clock', 'ClockSprite')
+    $seenFingerprints = New-CaseInsensitiveHashtable
+
+    for ($slot = 1; $slot -le 31; $slot++) {
+        $slotId = '{0:D2}' -f $slot
+        $fingerprintKey = "HudMirrorSlot${slotId}Fingerprint"
+        $selectionKey = "HudMirrorSlot${slotId}Selection"
+        $fingerprint = if ($Variables.Contains($fingerprintKey)) { ([string]$Variables[$fingerprintKey]).Trim() } else { '' }
+        if ($fingerprint -ne '' -and $fingerprint -notmatch $fingerprintPattern) {
+            throw "Invalid HUD mirror fingerprint for slot $slotId in $Context"
+        }
+        if ($fingerprint -ne '') {
+            if ($seenFingerprints.ContainsKey($fingerprint)) {
+                throw "Duplicate HUD mirror fingerprint in $Context"
+            }
+            $seenFingerprints[$fingerprint] = $true
+        }
+
+        $selectionLiteral = if ($Variables.Contains($selectionKey)) { ([string]$Variables[$selectionKey]).Trim() } else { '0' }
+        $selection = 0
+        if (-not [int]::TryParse($selectionLiteral, [ref]$selection) -or $selection -lt 0 -or $selection -gt 511) {
+            throw "Invalid HUD mirror selection for slot $slotId in $Context"
+        }
+        if ($fingerprint -eq '' -and $selection -ne 0) {
+            throw "HUD mirror slot $slotId selects content without a monitor fingerprint in $Context"
+        }
+
+        foreach ($targetId in $targetIds) {
+            $positionKey = "HudMirrorSlot${slotId}${targetId}Position"
+            $position = if ($Variables.Contains($positionKey)) { ([string]$Variables[$positionKey]).Trim() } else { '' }
+            if ($position -ne '' -and $position -notmatch $positionPattern) {
+                throw "Invalid HUD mirror position for slot $slotId target $targetId in $Context"
+            }
+            if ($fingerprint -eq '' -and $position -ne '') {
+                throw "HUD mirror slot $slotId stores a position without a monitor fingerprint in $Context"
+            }
+        }
+    }
+}
+
+function Assert-HudMirrorImportSourcePreflight {
+    param([Parameter(Mandatory = $true)][string]$SourceRoot)
+
+    $sourcePath = Join-RootPath -Root $SourceRoot -RelativePath '@Resources\Customs\Settings\HudMirror.inc'
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        Write-Log "Source HUD mirror settings are absent: $sourcePath; current target defaults will be preserved."
+        return
+    }
+
+    Test-ReadableSourceFile -Path $sourcePath
+    Assert-HudMirrorImportSettings -Variables (Read-VariablesFile -Path $sourcePath) -Context $sourcePath
+}
+
+# DMEL_COMPAT:import.pre-v131-zpos-bootstrap
 function Test-LegacyUpdaterZPosBootstrapSource {
     param([Parameter(Mandatory = $true)][version]$SourceVersion)
 
@@ -143,8 +247,14 @@ function Get-TargetFallbackItemImageAssets {
         return @()
     }
 
-    $sourceAssets = if (Test-Path -LiteralPath $SourceImageDirectory -PathType Container) { Get-DirectoryItemImageAssetMap -Directory $SourceImageDirectory } else { New-CaseInsensitiveHashtable }
-    $targetAssets = if (Test-Path -LiteralPath $TargetImageDirectory -PathType Container) { Get-DirectoryItemImageAssetMap -Directory $TargetImageDirectory } else { New-CaseInsensitiveHashtable }
+    $sourceAssets = New-CaseInsensitiveHashtable
+    if (Test-Path -LiteralPath $SourceImageDirectory -PathType Container) {
+        foreach ($asset in @(Get-DirectoryItemImageAssets -Directory $SourceImageDirectory)) { $sourceAssets[$asset] = $true }
+    }
+    $targetAssets = New-CaseInsensitiveHashtable
+    if (Test-Path -LiteralPath $TargetImageDirectory -PathType Container) {
+        foreach ($asset in @(Get-DirectoryItemImageAssets -Directory $TargetImageDirectory)) { $targetAssets[$asset] = $true }
+    }
     $fallbackAssets = New-Object System.Collections.Generic.List[string]
     foreach ($asset in $referencedAssets) {
         if ($sourceAssets.ContainsKey($asset)) {
@@ -158,13 +268,64 @@ function Get-TargetFallbackItemImageAssets {
     return $fallbackAssets.ToArray()
 }
 
+# DMEL_COMPAT:import.item-gif-atlas-cache-v1
+function New-ItemGifAtlasImportPlan {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceImageDirectory,
+        [Parameter(Mandatory = $true)][string]$TargetImageDirectory
+    )
+
+    $validSource = New-Object System.Collections.Generic.List[object]
+    $validTarget = New-Object System.Collections.Generic.List[object]
+    $invalidations = New-Object System.Collections.Generic.List[string]
+    foreach ($side in @(
+        @{ Name = 'source'; Directory = $SourceImageDirectory; Output = $validSource },
+        @{ Name = 'target'; Directory = $TargetImageDirectory; Output = $validTarget }
+    )) {
+        $directory = [string]$side.Directory
+        if (-not (Test-Path -LiteralPath $directory -PathType Container)) { continue }
+        $customsRoot = Split-Path -Parent (Split-Path -Parent $directory)
+        $manifestPath = Join-Path $customsRoot 'Data\ItemImages.inc'
+        $parsed = ConvertFrom-BlockHudItemGifAtlasProfiles -Value (Get-BlockHudItemGifAtlasProfilesValue -ManifestPath $manifestPath)
+        foreach ($invalidRecord in @($parsed.InvalidRecords)) {
+            $invalidations.Add(('{0}:invalid-profile:{1}' -f $side.Name, [string]$invalidRecord))
+        }
+        $preservedAtlasNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($entry in @($parsed.Entries)) {
+            if (Test-BlockHudItemGifAtlasProfileFiles -Entry $entry -ItemImageDirectory $directory) {
+                $side.Output.Add($entry)
+                [void]$preservedAtlasNames.Add([string]$entry.AtlasName)
+            }
+            else {
+                $invalidations.Add(('{0}:invalid-authoritative-atlas:{1}' -f $side.Name, [string]$entry.SourceName))
+            }
+        }
+        $atlasDirectory = Join-Path $directory 'atlas'
+        if (Test-Path -LiteralPath $atlasDirectory -PathType Container) {
+            foreach ($atlasFile in @(Get-SourceDirectoryFilesLoopSafe -SourceDirectory $atlasDirectory)) {
+                $atlasName = [System.IO.Path]::GetFileName($atlasFile)
+                if (-not $preservedAtlasNames.Contains($atlasName)) {
+                    $invalidations.Add(('{0}:orphan-managed-atlas:{1}' -f $side.Name, $atlasName))
+                }
+            }
+        }
+    }
+
+    return [PSCustomObject]@{
+        SourceEntries = $validSource.ToArray()
+        TargetEntries = $validTarget.ToArray()
+        Invalidations = $invalidations.ToArray()
+    }
+}
+
 function Replace-ItemImageDirectoryForImport {
     param(
         [Parameter(Mandatory = $true)][string]$SourceDirectory,
         [Parameter(Mandatory = $true)][string]$TargetDirectory,
         [Parameter(Mandatory = $true)][string]$SourceHotbarPath,
         [Parameter(Mandatory = $true)][string]$SourceInventoryPath,
-        [string]$SourceEditorDraftPath = ''
+        [string]$SourceEditorDraftPath = '',
+        [Parameter(Mandatory = $true)][object]$ItemGifAtlasPlan
     )
 
     $fallbackAssets = @(Get-TargetFallbackItemImageAssets -SourceHotbarPath $SourceHotbarPath -SourceInventoryPath $SourceInventoryPath -SourceEditorDraftPath $SourceEditorDraftPath -SourceImageDirectory $SourceDirectory -TargetImageDirectory $TargetDirectory)
@@ -181,27 +342,56 @@ function Replace-ItemImageDirectoryForImport {
                     Copy-Item -LiteralPath $sourceFallback -Destination $tempFallback -Force
                 }
             }
+            foreach ($entry in @($ItemGifAtlasPlan.TargetEntries)) {
+                if ($fallbackAssets -notcontains [string]$entry.SourceName) { continue }
+                $sourceAtlas = Resolve-BlockHudItemGifAtlasPath -ItemImageDirectory $TargetDirectory -AtlasName ([string]$entry.AtlasName)
+                $tempAtlas = Join-Path (Join-Path $fallbackRoot 'atlas') ([string]$entry.AtlasName)
+                Ensure-Directory -Path (Split-Path -Parent $tempAtlas)
+                Copy-Item -LiteralPath $sourceAtlas -Destination $tempAtlas -Force
+            }
         }
 
         Replace-DirectorySnapshot -SourceDirectory $SourceDirectory -TargetDirectory $TargetDirectory
+        $targetAtlasDirectory = Join-Path $TargetDirectory 'atlas'
+        Clear-TargetPath -Path $targetAtlasDirectory
+        Ensure-Directory -Path $targetAtlasDirectory
+        $installedProfiles = New-Object System.Collections.Generic.List[object]
+        foreach ($entry in @($ItemGifAtlasPlan.SourceEntries)) {
+            $sourceAtlas = Resolve-BlockHudItemGifAtlasPath -ItemImageDirectory $SourceDirectory -AtlasName ([string]$entry.AtlasName)
+            $targetAtlas = Resolve-BlockHudItemGifAtlasPath -ItemImageDirectory $TargetDirectory -AtlasName ([string]$entry.AtlasName)
+            Copy-Item -LiteralPath $sourceAtlas -Destination $targetAtlas -Force
+            $installedProfiles.Add($entry)
+        }
 
         foreach ($asset in $fallbackAssets) {
             $tempFallback = Join-RootPath -Root $fallbackRoot -RelativePath $asset
-            if (-not (Test-Path -LiteralPath $tempFallback -PathType Leaf)) {
-                continue
+            if (Test-Path -LiteralPath $tempFallback -PathType Leaf) {
+                $targetFallback = Join-RootPath -Root $TargetDirectory -RelativePath $asset
+                Assert-SafeTargetPath -Path $targetFallback
+                if (-not (Test-Path -LiteralPath $targetFallback -PathType Leaf)) {
+                    $null = Invoke-MigrationAction -Action 'Restore target-only fallback item image' -Target $targetFallback -ScriptBlock {
+                        Ensure-Directory -Path (Split-Path -Parent $targetFallback)
+                        Copy-Item -LiteralPath $tempFallback -Destination $targetFallback -Force
+                    }
+                }
             }
-
-            $targetFallback = Join-RootPath -Root $TargetDirectory -RelativePath $asset
-            Assert-SafeTargetPath -Path $targetFallback
-            if (Test-Path -LiteralPath $targetFallback -PathType Leaf) {
-                continue
-            }
-
-            $null = Invoke-MigrationAction -Action 'Restore target-only fallback item image' -Target $targetFallback -ScriptBlock {
-                Ensure-Directory -Path (Split-Path -Parent $targetFallback)
-                Copy-Item -LiteralPath $tempFallback -Destination $targetFallback -Force
+            foreach ($entry in @($ItemGifAtlasPlan.TargetEntries)) {
+                if (-not [string]::Equals([string]$entry.SourceName, [string]$asset, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+                $tempAtlas = Join-Path (Join-Path $fallbackRoot 'atlas') ([string]$entry.AtlasName)
+                $targetAtlas = Resolve-BlockHudItemGifAtlasPath -ItemImageDirectory $TargetDirectory -AtlasName ([string]$entry.AtlasName)
+                if (Test-Path -LiteralPath $tempAtlas -PathType Leaf) {
+                    Copy-Item -LiteralPath $tempAtlas -Destination $targetAtlas -Force
+                    $installedProfiles.Add($entry)
+                }
             }
         }
+        foreach ($entry in @($installedProfiles.ToArray())) {
+            $authoritativeSourcePath = Resolve-BlockHudItemImageAssetPath -ItemImageDirectory $TargetDirectory -AssetName ([string]$entry.SourceName)
+            if (Test-Path -LiteralPath $authoritativeSourcePath -PathType Leaf) {
+                Clear-TargetPath -Path $authoritativeSourcePath
+            }
+        }
+        $script:ImportedItemGifAtlasProfiles = ConvertTo-BlockHudItemGifAtlasProfiles -Entries @($installedProfiles.ToArray())
     }
     finally {
         if (-not [string]::IsNullOrWhiteSpace($fallbackRoot) -and (Test-Path -LiteralPath $fallbackRoot)) {
@@ -235,7 +425,8 @@ function Merge-SettingsFiles {
         'Inventory.inc',
         'Clock.inc',
         'Indicators.inc',
-        'Support.inc'
+        'Support.inc',
+        'HudMirror.inc'
     )
 
     foreach ($fileName in $targetFiles) {
@@ -247,8 +438,17 @@ function Merge-SettingsFiles {
 
         $sourcePath = Join-RootPath -Root $sourceSettings -RelativePath $fileName
         $backfill = Get-SettingsBackfill -FileName $fileName
+        if ($fileName -eq 'HudMirror.inc' -and (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+            Assert-HudMirrorImportSettings -Variables (Read-VariablesFile -Path $sourcePath) -Context $sourcePath
+        }
         $excludeKeyPatterns = @()
-        if ($fileName -eq 'Support.inc') {
+        if ($fileName -eq 'General.inc') {
+            $excludeKeyPatterns = @('^EnableHudMirrorMode$')
+        }
+        elseif ($fileName -eq 'HudMirror.inc') {
+            $excludeKeyPatterns = @('^HudMirrorSchemaVersion$')
+        }
+        elseif ($fileName -eq 'Support.inc') {
             $excludeKeyPatterns = @(
                 '^UpdateProvider$',
                 '^UpdateGithubOwner$',
@@ -283,6 +483,7 @@ function Normalize-SettingBoolValue {
     return '0'
 }
 
+# DMEL_COMPAT:import.low-spec-single-toggle
 function Apply-LowSpecSettingsCompatibility {
     param(
         [Parameter(Mandatory = $true)]
@@ -558,6 +759,7 @@ function Merge-ItemImagesCatalog {
     $assetList = ($assets -join '|')
     Set-MapValue -Map $targetVariables -Key 'ItemImageAssets' -Value $assetList
     Set-MapValue -Map $targetVariables -Key 'ItemImageKeys' -Value $assetList
+    Set-MapValue -Map $targetVariables -Key 'ItemImageAtlasProfiles' -Value ([string]$script:ImportedItemGifAtlasProfiles)
 
     $content = ConvertTo-VariablesContent -Variables $targetVariables
     $null = Invoke-MigrationAction -Action 'Merge item image catalog' -Target $TargetPath -ScriptBlock {
@@ -655,6 +857,12 @@ function Merge-ImageAdjustmentsFile {
             $targetAdjustmentKeys[$adjustKey] = $true
         }
     }
+    $pendingTargetProfiles = ConvertFrom-BlockHudItemGifAtlasProfiles -Value ([string]$script:ImportedItemGifAtlasProfiles)
+    foreach ($entry in @($pendingTargetProfiles.Entries)) {
+        if (-not (Test-BlockHudItemGifAtlasProfileFiles -Entry $entry -ItemImageDirectory $TargetImageDirectory)) { continue }
+        $adjustKey = Get-ImageAdjustmentKeyForMigration -Value ([string]$entry.SourceName)
+        if (-not [string]::IsNullOrWhiteSpace($adjustKey)) { $targetAdjustmentKeys[$adjustKey] = $true }
+    }
 
     foreach ($key in $sourceVariables.Keys) {
         if ($key -eq 'ImageAdjustKeys') {
@@ -698,17 +906,19 @@ function Assert-ImportedImageAdjustmentIntegrity {
     }
 
     $sourceAssets = New-CaseInsensitiveHashtable
+    $sourceProfiles = @(Get-BlockHudValidItemGifAtlasProfiles -ItemImageDirectory $SourceImageDirectory)
     foreach ($asset in (Get-DirectoryItemImageAssets -Directory $SourceImageDirectory)) {
         $adjustKey = Get-ImageAdjustmentKeyForMigration -Value $asset
         if (-not [string]::IsNullOrWhiteSpace($adjustKey)) {
-            $sourceAssets[$adjustKey] = Join-Path $SourceImageDirectory $asset
+            $sourceAssets[$adjustKey] = Resolve-BlockHudItemImageBackingPath -ItemImageDirectory $SourceImageDirectory -AssetName $asset -ValidAtlasProfiles $sourceProfiles
         }
     }
     $targetAssets = New-CaseInsensitiveHashtable
+    $targetProfiles = @(Get-BlockHudValidItemGifAtlasProfiles -ItemImageDirectory $TargetImageDirectory)
     foreach ($asset in (Get-DirectoryItemImageAssets -Directory $TargetImageDirectory)) {
         $adjustKey = Get-ImageAdjustmentKeyForMigration -Value $asset
         if (-not [string]::IsNullOrWhiteSpace($adjustKey)) {
-            $targetAssets[$adjustKey] = Join-Path $TargetImageDirectory $asset
+            $targetAssets[$adjustKey] = Resolve-BlockHudItemImageBackingPath -ItemImageDirectory $TargetImageDirectory -AssetName $asset -ValidAtlasProfiles $targetProfiles
         }
     }
 
@@ -895,6 +1105,18 @@ function Test-TruthyLegacySetting {
     return (([string]$Value).Trim().ToLowerInvariant() -in @('1', 'true', 'yes', 'on'))
 }
 
+function Test-SourceResponsiveLayoutHasMonitorAffinitySchema {
+    param([Parameter(Mandatory = $true)][System.Collections.Specialized.OrderedDictionary]$SourceVariables)
+
+    foreach ($key in $SourceVariables.Keys) {
+        if ([string]$key -match '^ResponsiveLayout_.+_Monitor(Fingerprint|RelativeX|RelativeY)$') {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Apply-LegacyPositionLocks {
     param(
         [Parameter(Mandatory = $true)]
@@ -904,6 +1126,10 @@ function Apply-LegacyPositionLocks {
         [Parameter(Mandatory = $true)]
         [System.Collections.Specialized.OrderedDictionary]$SourceVariables
     )
+
+    if (Test-SourceResponsiveLayoutHasMonitorAffinitySchema -SourceVariables $SourceVariables) {
+        return
+    }
 
     $lockSpecs = @(
         @{
@@ -938,6 +1164,9 @@ function Apply-LegacyPositionLocks {
         foreach ($targetName in $spec.Targets) {
             $prefix = "ResponsiveLayout_${targetName}_"
             Set-MapValue -Map $Variables -Key "${prefix}PositionMode" -Value 'fixed'
+            foreach ($field in @('MonitorFingerprint', 'MonitorRelativeX', 'MonitorRelativeY')) {
+                Set-MapValue -Map $Variables -Key "${prefix}${field}" -Value ''
+            }
             foreach ($axis in @('X', 'Y')) {
                 $liveKey = "${prefix}LiveWindow${axis}"
                 $fixedKey = "${prefix}Fixed${axis}"
@@ -957,6 +1186,10 @@ function Clear-ResponsiveLiveState {
             $Variables[$key] = '0'
         }
     }
+
+    if ($Variables.Contains('ResponsiveLayout_Jukebox_FormResetPending')) {
+        $Variables['ResponsiveLayout_Jukebox_FormResetPending'] = '0'
+    }
 }
 
 function Reset-ResponsiveLayoutPositionsFromDefaults {
@@ -975,7 +1208,7 @@ function Reset-ResponsiveLayoutPositionsFromDefaults {
 
     $defaultVariables = Read-VariablesFile -Path $defaultsPath
     foreach ($key in @($Variables.Keys)) {
-        if ($key -notmatch '^ResponsiveLayout_(.+)_(PositionMode|FixedX|FixedY)$') {
+        if ($key -notmatch '^ResponsiveLayout_(.+)_(PositionMode|FixedX|FixedY|MonitorFingerprint|MonitorRelativeX|MonitorRelativeY)$') {
             continue
         }
 
@@ -1008,7 +1241,7 @@ function Merge-ResponsiveLayoutState {
     $targetVariables = Read-VariablesFile -Path $TargetPath
     $sourceVariables = Read-VariablesFile -Path $SourcePath
     foreach ($key in $sourceVariables.Keys) {
-        if ($key -match '_Live') {
+        if ($key -match '_Live' -or $key -eq 'ResponsiveLayout_Jukebox_FormResetPending') {
             continue
         }
         if (-not $targetVariables.Contains($key)) {
@@ -1021,7 +1254,7 @@ function Merge-ResponsiveLayoutState {
 
     if ($ResetPositions) {
         Reset-ResponsiveLayoutPositionsFromDefaults -Variables $targetVariables -TargetPath $TargetPath
-        Write-Log 'ResetPositions enabled: layout PositionMode/FixedX/FixedY values were restored from target responsive defaults.'
+        Write-Log 'ResetPositions enabled: layout PositionMode/FixedX/FixedY and monitor-affinity values were restored from target responsive defaults.'
     }
 
     Clear-ResponsiveLiveState -Variables $targetVariables
@@ -1032,6 +1265,7 @@ function Merge-ResponsiveLayoutState {
     }
 }
 
+# DMEL_COMPAT:import.player-cache-derived-invalidation
 function Copy-PlayerSkinCacheFiles {
     param(
         [Parameter(Mandatory = $true)][string]$SourceDirectory,
@@ -1048,7 +1282,48 @@ function Copy-PlayerSkinCacheFiles {
     }
 
     $sourceBase = [System.IO.Path]::GetFullPath($SourceDirectory).TrimEnd('\', '/') + '\'
-    foreach ($file in (Get-SourceDirectoryFilesLoopSafe -SourceDirectory $SourceDirectory)) {
+    $sourceFiles = @(Get-SourceDirectoryFilesLoopSafe -SourceDirectory $SourceDirectory)
+    $sourceBodies = @{}
+    $sourceTextures = @{}
+    foreach ($file in $sourceFiles) {
+        if (Test-SkippedSourcePath -Path $file) {
+            continue
+        }
+        $leafName = [System.IO.Path]::GetFileName($file)
+        if ($leafName -match '^MinecraftSkinBody_(.+)\.png$') {
+            $sourceBodies[$matches[1]] = $file
+        }
+        elseif ($leafName -match '^MinecraftSkinTexture_(.+)\.png$') {
+            $sourceTextures[$matches[1]] = $file
+        }
+    }
+
+    foreach ($cacheKey in $sourceTextures.Keys) {
+        $targetTexture = Join-Path $TargetDirectory ("MinecraftSkinTexture_{0}.png" -f $cacheKey)
+        $textureChanged = -not (Test-Path -LiteralPath $targetTexture -PathType Leaf)
+        if (-not $textureChanged) {
+            $textureChanged = (Get-Sha256HashString -Path $sourceTextures[$cacheKey]) -ne (Get-Sha256HashString -Path $targetTexture)
+        }
+        if ($textureChanged) {
+            Remove-PlayerSkinDerivedCacheFiles -TargetDirectory $TargetDirectory -CacheKey $cacheKey
+        }
+    }
+
+    foreach ($cacheKey in $sourceBodies.Keys) {
+        if ($sourceTextures.ContainsKey($cacheKey)) {
+            continue
+        }
+        $targetBody = Join-Path $TargetDirectory ("MinecraftSkinBody_{0}.png" -f $cacheKey)
+        $bodyChanged = -not (Test-Path -LiteralPath $targetBody -PathType Leaf)
+        if (-not $bodyChanged) {
+            $bodyChanged = (Get-Sha256HashString -Path $sourceBodies[$cacheKey]) -ne (Get-Sha256HashString -Path $targetBody)
+        }
+        if ($bodyChanged) {
+            Remove-PlayerSkinDerivedCacheFiles -TargetDirectory $TargetDirectory -CacheKey $cacheKey -RemoveTexture
+        }
+    }
+
+    foreach ($file in $sourceFiles) {
         if (Test-SkippedSourcePath -Path $file) {
             continue
         }
@@ -1080,6 +1355,117 @@ function Copy-PlayerSkinCacheFiles {
         $null = Invoke-MigrationAction -Action 'Copy player skin cache file' -Target $targetFile -ScriptBlock {
             Ensure-Directory -Path (Split-Path -Parent $targetFile)
             Copy-Item -LiteralPath $file -Destination $targetFile -Force
+        }
+    }
+
+    $cacheModulePath = [System.IO.Path]::GetFullPath((Join-Path $TargetDirectory '..\..\..\Defaults\Runtime\helpers\MinecraftSkinLookAtlasCache.Common.ps1'))
+    if (-not (Test-Path -LiteralPath $cacheModulePath -PathType Leaf)) {
+        Write-Log "Skipped player atlas import because the target cache module is missing: $cacheModulePath" 'WARN'
+        return
+    }
+    . $cacheModulePath
+    $sourceAtlasByName = @{}
+    foreach ($file in $sourceFiles) {
+        $leafName = [System.IO.Path]::GetFileName($file)
+        if ($leafName -notmatch '^MinecraftSkinLookAtlas_v([12])_(.+)_(wide|slim)\.png$') {
+            continue
+        }
+        $relativeParent = ([string][System.IO.Path]::GetDirectoryName($file.Substring($sourceBase.Length))).Trim('.', '\', '/')
+        if ($relativeParent -ne '' -and $relativeParent -ine 'atlas') {
+            continue
+        }
+        if (-not $sourceAtlasByName.ContainsKey($leafName) -or $relativeParent -ieq 'atlas') {
+            $sourceAtlasByName[$leafName] = $file
+        }
+    }
+
+    foreach ($leafName in $sourceAtlasByName.Keys) {
+        $sourceAtlasPath = $sourceAtlasByName[$leafName]
+        $match = [System.Text.RegularExpressions.Regex]::Match($leafName, '^MinecraftSkinLookAtlas_v([12])_(.+)_(wide|slim)\.png$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        $version = [int]$match.Groups[1].Value
+        $cacheKey = $match.Groups[2].Value
+        $model = $match.Groups[3].Value.ToLowerInvariant()
+        $sourceBodyPath = Join-Path $SourceDirectory ("MinecraftSkinBody_{0}.png" -f $cacheKey)
+        $targetBodyPath = Join-Path $TargetDirectory ("MinecraftSkinBody_{0}.png" -f $cacheKey)
+        if (-not (Test-Path -LiteralPath $sourceBodyPath -PathType Leaf) -or -not (Test-Path -LiteralPath $targetBodyPath -PathType Leaf) -or
+            (Get-Sha256HashString -Path $sourceBodyPath) -ne (Get-Sha256HashString -Path $targetBodyPath) -or
+            -not (Test-BlockHudMinecraftSkinLookAtlas -Path $sourceAtlasPath)) {
+            continue
+        }
+        $sourceTexturePath = Join-Path $SourceDirectory ("MinecraftSkinTexture_{0}.png" -f $cacheKey)
+        $targetTexturePath = Join-Path $TargetDirectory ("MinecraftSkinTexture_{0}.png" -f $cacheKey)
+        $hasTexture = Test-Path -LiteralPath $sourceTexturePath -PathType Leaf
+        if ($hasTexture -and (-not (Test-Path -LiteralPath $targetTexturePath -PathType Leaf) -or
+            (Get-Sha256HashString -Path $sourceTexturePath) -ne (Get-Sha256HashString -Path $targetTexturePath))) {
+            continue
+        }
+
+        $sourceSidecarPath = [System.IO.Path]::ChangeExtension($sourceAtlasPath, '.render-v2')
+        $sourceSidecarValid = $version -eq 2 -and (Test-BlockHudMinecraftSkinLookAtlasSidecar `
+            -Path $sourceSidecarPath -CacheKey $cacheKey -Model $model `
+            -TexturePath $(if ($hasTexture) { $sourceTexturePath } else { '' }) `
+            -BodyPath $sourceBodyPath -AtlasPath $sourceAtlasPath)
+        if ($version -eq 2 -and -not $sourceSidecarValid -and $hasTexture) {
+            $sourceMarkerPath = Get-BlockHudMinecraftSkinRenderMarkerPath -OutputDirectory $SourceDirectory -CacheKey $cacheKey
+            if (-not (Test-BlockHudMinecraftSkinRenderMarker -Path $sourceMarkerPath -Model $model -TexturePath $sourceTexturePath) -or
+                [System.IO.File]::GetLastWriteTimeUtc($sourceAtlasPath) -lt [System.IO.File]::GetLastWriteTimeUtc($sourceTexturePath)) {
+                continue
+            }
+        }
+
+        $targetAtlasDirectory = Join-Path $TargetDirectory 'atlas'
+        $targetAtlasPath = Get-BlockHudMinecraftSkinLookAtlasPath -OutputDirectory $TargetDirectory -CacheKey $cacheKey -Model $model
+        $targetSidecarPath = [System.IO.Path]::ChangeExtension($targetAtlasPath, '.render-v2')
+        if (Test-BlockHudMinecraftSkinLookAtlasSidecar `
+            -Path $targetSidecarPath -CacheKey $cacheKey -Model $model `
+            -TexturePath $(if ($hasTexture) { $targetTexturePath } else { '' }) `
+            -BodyPath $targetBodyPath -AtlasPath $targetAtlasPath) {
+            continue
+        }
+        $null = Invoke-MigrationAction -Action 'Normalize imported player skin atlas cache' -Target $targetAtlasPath -ScriptBlock {
+            Ensure-Directory -Path $targetAtlasDirectory
+            Copy-Item -LiteralPath $sourceAtlasPath -Destination $targetAtlasPath -Force
+            Write-BlockHudMinecraftSkinLookAtlasSidecar `
+                -Path $targetSidecarPath -CacheKey $cacheKey -Model $model `
+                -TexturePath $(if ($hasTexture) { $targetTexturePath } else { '' }) `
+                -BodyPath $targetBodyPath -AtlasPath $targetAtlasPath
+        }
+    }
+
+    foreach ($warning in @(Move-BlockHudLegacyMinecraftSkinLookAtlases -OutputDirectory $TargetDirectory)) {
+        Write-Log ('Player atlas cache cleanup warning: ' + [string]$warning) 'WARN'
+    }
+}
+
+function Remove-PlayerSkinDerivedCacheFiles {
+    param(
+        [Parameter(Mandatory = $true)][string]$TargetDirectory,
+        [Parameter(Mandatory = $true)][string]$CacheKey,
+        [switch]$RemoveTexture
+    )
+
+    $leafNames = @(
+        ("MinecraftSkinBody_{0}.render-v1" -f $CacheKey),
+        ("MinecraftSkinLookAtlas_v1_{0}_wide.png" -f $CacheKey),
+        ("MinecraftSkinLookAtlas_v1_{0}_slim.png" -f $CacheKey),
+        ("MinecraftSkinLookAtlas_v2_{0}_wide.png" -f $CacheKey),
+        ("MinecraftSkinLookAtlas_v2_{0}_slim.png" -f $CacheKey),
+        ("MinecraftSkinLookAtlas_v2_{0}_wide.render-v2" -f $CacheKey),
+        ("MinecraftSkinLookAtlas_v2_{0}_slim.render-v2" -f $CacheKey)
+    )
+    if ($RemoveTexture) {
+        $leafNames += ("MinecraftSkinTexture_{0}.png" -f $CacheKey)
+    }
+
+    foreach ($leafName in $leafNames) {
+        foreach ($path in @((Join-Path $TargetDirectory $leafName), (Join-Path (Join-Path $TargetDirectory 'atlas') $leafName))) {
+            Assert-SafeTargetPath -Path $path
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                continue
+            }
+            $null = Invoke-MigrationAction -Action 'Invalidate imported player skin derived cache' -Target $path -ScriptBlock {
+                Remove-Item -LiteralPath $path -Force
+            }
         }
     }
 }

@@ -233,195 +233,52 @@ return function(app)
 
 
     function methods.ToggleField(fieldKey)
-
-
-
-
-
-
-
         if methods.isLoadingVisible() then
-
-
-
-
-
-
-
             return
-
-
-
-
-
-
-
         end
 
-
-
-
-
-
+        if fieldKey == 'startupFastAutoRun'
+            and methods.isStartupFastAutoRunConfirmationPending
+            and methods.isStartupFastAutoRunConfirmationPending() then
+            return
+        end
 
         methods.clearPendingConfirmation()
 
-
-
-
-
-
-
         local field = methods.getField(fieldKey)
-
-
-
-
-
-
-
         if not field then
-
-
-
-
-
-
-
             return
-
-
-
-
-
-
-
         end
-
-
-
-
-
-
-
-        local beforeSnapshot = methods.captureSnapshot()
-
-
-
-
-
-
 
         if methods.isFieldDisabled and methods.isFieldDisabled(field) then
             return
         end
 
         if field.key == 'startupAutoRun' then
-
-
-
-
-
-
-
-            methods.ScheduleDropdownDataLoad(field.key, 0, 'startupAutoRunApply', false, {
-
-
-
-
-
-
-
-                pendingValue = methods.nextStoredToggleValue(field),
-
-
-
-
-
-
-
-                beforeSnapshot = beforeSnapshot,
-
-
-
-
-
-
-
-                historyLabel = field.historyLabel,
-
-
-
-
-
-
-
-                loadingText = methods.localize('Settings_Loading_StartupApply', 'Applying startup setting...\\nPlease wait.'),
-
-
-
-
-
-
-
-            })
-
-
-
-
-
-
-
+            local nextLiteral = methods.nextStoredToggleValue(field)
+            methods.ScheduleStartupAutoRunTransition(
+                field.key,
+                nextLiteral,
+                nextLiteral == '1' and 'shortcut' or 'all')
             return
-
-
-
-
-
-
-
         end
 
+        if field.key == 'startupFastAutoRun' then
+            if methods.normalizeToggleValue(methods.readFieldValue(field)) == '1' then
+                methods.ScheduleStartupAutoRunTransition(field.key, '1', 'shortcut')
+            else
+                methods.RequestStartupFastAutoRunConfirmation()
+            end
+            return
+        end
 
-
-
-
-
-
+        local beforeSnapshot = methods.captureSnapshot()
         methods.applyFieldValue(field, methods.nextStoredToggleValue(field))
-
-
-
-
-
-
-
         methods.pushHistory(field.historyLabel, beforeSnapshot)
-
-
-
-
-
-
-
         methods.renderActivePage()
-
-
-
-
-
-
-
     end
 
-
-
-
-
-
-
     function methods.AdjustField(fieldKey, direction)
-
 
 
 

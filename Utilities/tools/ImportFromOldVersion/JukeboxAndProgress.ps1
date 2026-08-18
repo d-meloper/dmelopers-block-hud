@@ -256,13 +256,21 @@ function Get-TopLevelRegularFilesStrict {
 
     $rootItem = Get-Item -LiteralPath $Directory -Force -ErrorAction Stop
     if (($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Refusing migration because $Context is a reparse point: $Directory"
+        $reason = ''
+        if (-not (Test-NonRedirectingReparsePoint -Item $rootItem -Reason ([ref]$reason))) {
+            throw "Refusing migration because $Context is an unsafe reparse point ($reason): $Directory"
+        }
+        Write-Log "Allowed $Context root as $reason`: $Directory"
     }
 
     $files = New-Object System.Collections.Generic.List[System.IO.FileInfo]
     foreach ($item in @(Get-ChildItem -LiteralPath $Directory -Force -ErrorAction Stop)) {
         if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "Refusing migration because $Context contains a reparse point: $($item.FullName)"
+            $reason = ''
+            if (-not (Test-NonRedirectingReparsePoint -Item $item -Reason ([ref]$reason))) {
+                throw "Refusing migration because $Context contains an unsafe reparse point ($reason): $($item.FullName)"
+            }
+            Write-Log "Allowed $Context item as $reason`: $($item.FullName)"
         }
         if (-not $item.PSIsContainer) {
             $files.Add([System.IO.FileInfo]$item)

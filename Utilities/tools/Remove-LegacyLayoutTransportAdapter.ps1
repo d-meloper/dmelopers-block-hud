@@ -45,6 +45,98 @@ function Read-TextFile {
     }
 }
 
+function Complete-FixedRootActivationHandoffIfRequested {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $paths = Get-BlockHudFixedRootHandoffPaths -Root $Root
+    if (-not (Test-Path -LiteralPath $paths.RequestPath -PathType Leaf)) {
+        return
+    }
+
+    $request = [System.IO.File]::ReadAllText($paths.RequestPath, $utf8NoBom) | ConvertFrom-Json
+    $token = [string]$request.Token
+    $requestedRoot = [string]$request.CurrentRoot
+    $resolvedRoot = Resolve-BlockHudFullPath -Path $Root
+    if ([int]$request.SchemaVersion -ne 1 -or $token -notmatch '^[a-f0-9]{32}$') {
+        throw 'Fixed-root activation handoff request identity is invalid.'
+    }
+    if (-not [string]::Equals($requestedRoot, $resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Fixed-root activation handoff request targeted a different installed root.'
+    }
+
+    Assert-BlockHudFixedRootRuntimeContract `
+        -Root $resolvedRoot `
+        -Context 'Bootstrap-completed fixed root' `
+        -RequireTransportAdapterAbsent
+    $ack = [ordered]@{
+        SchemaVersion = 1
+        Token = $token
+        CurrentRoot = $resolvedRoot
+        Status = 'OK'
+        CompletedAtUtc = [DateTime]::UtcNow.ToString('o')
+    }
+    if (-not (Test-Path -LiteralPath $paths.DataRoot -PathType Container)) {
+        New-Item -ItemType Directory -Path $paths.DataRoot -Force | Out-Null
+    }
+    $temporaryPath = [string]$paths.AckPath + '.tmp'
+    [System.IO.File]::WriteAllText($temporaryPath, ($ack | ConvertTo-Json -Depth 3), $utf8NoBom)
+    Move-Item -LiteralPath $temporaryPath -Destination $paths.AckPath -Force
+}
+
+function Remove-FixedRootCompatibilityAssetsWhenSafe {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Specs,
+        [switch]$WaitForHandoffRequestRemoval,
+        [ValidateRange(1, 120)][int]$TimeoutSeconds = 30
+    )
+
+    $existing = New-Object System.Collections.Generic.List[object]
+    foreach ($spec in @($Specs)) {
+        if (-not [string]::Equals([string]$spec.kind, 'fixedRootCompatibilityAsset', [System.StringComparison]::Ordinal)) {
+            throw "Unknown fixed-root compatibility asset kind: $([string]$spec.kind)"
+        }
+        $relativePath = ([string]$spec.relativePath).Trim('\', '/')
+        $path = Join-Path $Root $relativePath
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            continue
+        }
+        if (-not [string]::Equals((Get-Sha256Hex -Path $path), [string]$spec.sha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to remove modified or unsigned fixed-root compatibility asset: $relativePath"
+        }
+        [void]$existing.Add([PSCustomObject]@{
+            RelativePath = $relativePath
+            Path = $path
+            Sha256 = [string]$spec.sha256
+        })
+    }
+    if ($existing.Count -eq 0) {
+        return
+    }
+
+    if ($WaitForHandoffRequestRemoval) {
+        $paths = Get-BlockHudFixedRootHandoffPaths -Root $Root
+        $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+        while ((Test-Path -LiteralPath $paths.RequestPath -PathType Leaf) -and [DateTime]::UtcNow -lt $deadline) {
+            Start-Sleep -Milliseconds 100
+        }
+        if (Test-Path -LiteralPath $paths.RequestPath -PathType Leaf) {
+            Write-Warning 'Fixed-root compatibility asset cleanup was deferred because the updater handoff request is still active.'
+            return
+        }
+    }
+
+    foreach ($asset in $existing) {
+        if (-not (Test-Path -LiteralPath $asset.Path -PathType Leaf)) {
+            continue
+        }
+        if (-not [string]::Equals((Get-Sha256Hex -Path $asset.Path), $asset.Sha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to remove fixed-root compatibility asset changed during handoff: $($asset.RelativePath)"
+        }
+        Remove-Item -LiteralPath $asset.Path -Force
+    }
+}
+
 function Resolve-RainmeterSettingsIniPath {
     param([AllowNull()][string]$Path)
 
@@ -193,8 +285,19 @@ if ($null -eq $contract -or $null -eq $contract.legacyTransportAdapter) {
 }
 
 $adapter = $contract.legacyTransportAdapter
+$fixedRootCompatibilityAssets = @()
+if ($adapter.PSObject.Properties.Name -contains 'fixedRootCompatibilityAssets') {
+    $fixedRootCompatibilityAssets = @($adapter.fixedRootCompatibilityAssets)
+}
 $manifestPath = Join-Path $root ([string]$adapter.manifestRelativePath)
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+    $handoffPaths = Get-BlockHudFixedRootHandoffPaths -Root $root
+    $handoffWasRequested = Test-Path -LiteralPath $handoffPaths.RequestPath -PathType Leaf
+    Complete-FixedRootActivationHandoffIfRequested -Root $root
+    Remove-FixedRootCompatibilityAssetsWhenSafe `
+        -Root $root `
+        -Specs $fixedRootCompatibilityAssets `
+        -WaitForHandoffRequestRemoval:$handoffWasRequested
     Write-Output 'Legacy layout transport adapter is already absent.'
     exit 0
 }
@@ -264,4 +367,11 @@ foreach ($directory in $directories) {
     }
 }
 
+$handoffPaths = Get-BlockHudFixedRootHandoffPaths -Root $root
+$handoffWasRequested = Test-Path -LiteralPath $handoffPaths.RequestPath -PathType Leaf
+Complete-FixedRootActivationHandoffIfRequested -Root $root
+Remove-FixedRootCompatibilityAssetsWhenSafe `
+    -Root $root `
+    -Specs $fixedRootCompatibilityAssets `
+    -WaitForHandoffRequestRemoval:$handoffWasRequested
 Write-Output 'Legacy layout transport adapter cleanup completed.'

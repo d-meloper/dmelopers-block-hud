@@ -343,6 +343,8 @@ function Preflight-SourceState {
         }
     }
 
+    Assert-HudMirrorImportSourcePreflight -SourceRoot $SourceRoot
+
     foreach ($optionalDirectory in @(
         '@Resources\Customs\Images\Items',
         '@Resources\Customs\Images\Player',
@@ -546,8 +548,12 @@ function Get-DirectoryItemImageAssets {
 
     $assets = New-Object System.Collections.Generic.List[string]
     $seen = New-CaseInsensitiveHashtable
+    $atlasPrefix = [System.IO.Path]::Combine([System.IO.Path]::GetFullPath($Directory).TrimEnd([char[]]@('\', '/')), 'atlas') + [System.IO.Path]::DirectorySeparatorChar
     foreach ($file in (Get-SourceDirectoryFilesLoopSafe -SourceDirectory $Directory | Sort-Object { [System.IO.Path]::GetFileName($_) })) {
         if (Test-SkippedSourcePath -Path $file) {
+            continue
+        }
+        if ([System.IO.Path]::GetFullPath($file).StartsWith($atlasPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
             continue
         }
 
@@ -559,6 +565,9 @@ function Get-DirectoryItemImageAssets {
         if ($asset.Equals('more.png', [System.StringComparison]::OrdinalIgnoreCase)) {
             continue
         }
+        if (Test-BlockHudManagedItemGifAtlasName -Value $asset) {
+            continue
+        }
 
         if ($seen.ContainsKey($asset)) {
             continue
@@ -567,7 +576,15 @@ function Get-DirectoryItemImageAssets {
         $assets.Add($asset)
     }
 
-    return $assets.ToArray()
+    foreach ($entry in @(Get-BlockHudValidItemGifAtlasProfiles -ItemImageDirectory $Directory | Sort-Object SourceName)) {
+        $asset = [string]$entry.SourceName
+        if (-not $seen.ContainsKey($asset)) {
+            $seen[$asset] = $true
+            $assets.Add($asset)
+        }
+    }
+
+    return @($assets.ToArray() | Sort-Object)
 }
 
 function Merge-MinecraftSkinHistory {

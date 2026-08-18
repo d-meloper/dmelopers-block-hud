@@ -147,6 +147,7 @@ function Get-UserPSModulePathCandidates {
     return @($candidates | Sort-Object -Property Index | ForEach-Object { [string]$_.Path })
 }
 
+# DMEL_COMPAT:import.v120-root-config-autoload
 function Test-SourceInstallerNeedsRootConfigNameCompat {
     param([Parameter(Mandatory = $true)][string]$SourceRoot)
 
@@ -182,7 +183,7 @@ function New-RootConfigNameCompatManifestContent {
     return @'
 @{
     RootModule = 'DMeloperBlockHudCompat.psm1'
-    ModuleVersion = '1.4.0'
+    ModuleVersion = '1.4.1'
     GUID = '7e2698fc-2f2e-4cda-b6e8-b0df5cbf8931'
     Author = 'DMeloper'
     CompanyName = 'DMeloper'

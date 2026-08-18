@@ -9,12 +9,18 @@ EditorInputCommitPixelBridge = {
     localize = function(key, fallback)
         return L(key, fallback)
     end,
+    languageCode = function()
+        return currentLanguageCode()
+    end,
     userAlert = function(message)
         local summary = trim(message)
         if summary == '' then
             summary = 'Image pixelation failed.'
         end
         return showEditorModalAlert('error', '', summary)
+    end,
+    unsupportedAlert = function(message)
+        return showEditorModalAlert('warn', '', trim(message))
     end,
     setLoadingVisible = setEditorLoadingVisible,
     commitImageKey = function(imageKey)

@@ -117,6 +117,11 @@ function PrepareInputTarget(target)
 
     local record = getSelectedRecord()
 
+    if normalizedTarget == 'qty' and record
+        and normalizeFolderCountSync(record.FolderCountSync, record.ActionType) == '1' then
+        return
+    end
+
 
 
     clearPreparedInputTarget()
@@ -161,11 +166,11 @@ function PrepareInputTarget(target)
 
 end
 
-function CommitPath(value, displayLabel)
+function CommitPath(value, displayLabel, actionType)
 
 
 
-    commitPathForLocator(value, nil, displayLabel)
+    commitPathForLocator(value, nil, displayLabel, actionType)
 
 
 
@@ -624,6 +629,10 @@ function AddSelectedDraftItem()
     record.Qty = tonumber(resolveCommittedQtyValue(trim(SKIN:GetVariable('EditorLabeledInput3Value', '0')), '0')) or 0
 
     record.ConfirmBeforeRun = normalizeConfirmBeforeRun(SKIN:GetVariable('EditorRunConfirmToggleValue', '0'))
+
+    record.ActionType = normalizeActionType(SKIN:GetVariable('EditorActionTypeValue', ''))
+
+    record.FolderCountSync = normalizeFolderCountSync(SKIN:GetVariable('EditorFolderCountSyncValue', '0'), record.ActionType)
 
 
 

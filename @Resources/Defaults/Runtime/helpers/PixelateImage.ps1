@@ -35,8 +35,13 @@ $script:PixelateSourceLength = ''
 $script:PixelateSourceFormat = ''
 $script:PixelateDecodeMethod = ''
 $script:ItemImageAssets = ''
+$script:ItemImageAtlasProfiles = ''
 $script:CleanupPixelSiblings = $false
 $ItemImageManifestExtensions = @('.png', '.jpg', '.jpeg', '.jpe', '.bmp', '.gif', '.tif', '.tiff', '.ico', '.jxr', '.wdp', '.dds')
+$PixelateSkinRoot = [System.IO.Directory]::GetParent([System.IO.Directory]::GetParent([System.IO.Directory]::GetParent([System.IO.Directory]::GetParent($PSScriptRoot).FullName).FullName).FullName).FullName
+$ItemImageAssetPolicyPath = [System.IO.Path]::Combine($PixelateSkinRoot, 'Utilities', 'tools', 'ItemImageAsset.Policy.ps1')
+if (-not [System.IO.File]::Exists($ItemImageAssetPolicyPath)) { throw "Shared item-image asset policy was not found: $ItemImageAssetPolicyPath" }
+. $ItemImageAssetPolicyPath
 
 function Write-DmelPair {
     param(
@@ -60,7 +65,8 @@ function Write-DmelResult {
         [string]$SourceLength = '',
         [string]$SourceFormat = '',
         [string]$DecodeMethod = '',
-        [string]$ItemImageAssets = ''
+        [string]$ItemImageAssets = '',
+        [string]$ItemImageAtlasProfiles = $script:ItemImageAtlasProfiles
     )
 
     Write-DmelPair -Name 'DMEL_STATUS' -Value $Status
@@ -73,6 +79,7 @@ function Write-DmelResult {
     Write-DmelPair -Name 'DMEL_SOURCE_FORMAT' -Value $SourceFormat
     Write-DmelPair -Name 'DMEL_DECODE_METHOD' -Value $DecodeMethod
     Write-DmelPair -Name 'DMEL_ITEMIMAGEASSETS' -Value $ItemImageAssets
+    Write-DmelPair -Name 'DMEL_ITEMIMAGEATLASPROFILES' -Value $ItemImageAtlasProfiles
 }
 
 function Get-RequestPropertyValue {
@@ -303,16 +310,30 @@ function Update-ItemImageManifest {
         Where-Object { $ItemImageManifestExtensions -contains $_.Extension.ToLowerInvariant() -and $_.Name -ne 'more.png' } |
         Sort-Object Name
 
-    $names = @($files | ForEach-Object { $_.Name })
+    $names = New-Object System.Collections.Generic.List[string]
+    $seenNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($file in $files) {
+        if ($seenNames.Add([string]$file.Name)) { $names.Add([string]$file.Name) }
+    }
     $manifestPath = Get-ItemImageManifestPath -Directory $root
     if (-not [string]::IsNullOrWhiteSpace($manifestPath)) {
         $manifestDirectory = [System.IO.Path]::GetDirectoryName($manifestPath)
         [System.IO.Directory]::CreateDirectory($manifestDirectory) | Out-Null
-        $content = "[Variables]`r`nItemImageAssets=$($names -join '|')`r`n"
+        $parsedProfiles = ConvertFrom-BlockHudItemGifAtlasProfiles -Value (Get-BlockHudItemGifAtlasProfilesValue -ManifestPath $manifestPath)
+        $profiles = @($parsedProfiles.Entries | Where-Object {
+            Test-BlockHudItemGifAtlasProfileFiles -Entry $_ -ItemImageDirectory $root
+        })
+        foreach ($entry in @($profiles | Sort-Object SourceName)) {
+            if ($seenNames.Add([string]$entry.SourceName)) { $names.Add([string]$entry.SourceName) }
+        }
+        $orderedNames = @($names.ToArray() | Sort-Object)
+        $script:ItemImageAtlasProfiles = ConvertTo-BlockHudItemGifAtlasProfiles -Entries $profiles
+        $content = "[Variables]`r`nItemImageAssets=$($orderedNames -join '|')`r`nItemImageAtlasProfiles=$($script:ItemImageAtlasProfiles)`r`n"
         $unicode = New-Object System.Text.UnicodeEncoding($false, $true)
         [System.IO.File]::WriteAllText($manifestPath, $content, $unicode)
+        return ($orderedNames -join '|')
     }
-    return ($names -join '|')
+    return (@($names.ToArray() | Sort-Object) -join '|')
 }
 
 function Test-SafeItemImageName {
@@ -409,6 +430,7 @@ function Invoke-PixelSiblingCleanup {
         Write-DmelPair -Name 'DMEL_ERROR_CODE' -Value ''
         Write-DmelPair -Name 'DMEL_ERROR_DETAIL' -Value ''
         Write-DmelPair -Name 'DMEL_ITEMIMAGEASSETS' -Value ''
+        Write-DmelPair -Name 'DMEL_ITEMIMAGEATLASPROFILES' -Value ''
         return
     }
     if ($ItemImageDirectory.Contains([string][char]0xFFFD)) {
@@ -425,6 +447,7 @@ function Invoke-PixelSiblingCleanup {
         Write-DmelPair -Name 'DMEL_ERROR_CODE' -Value ''
         Write-DmelPair -Name 'DMEL_ERROR_DETAIL' -Value ''
         Write-DmelPair -Name 'DMEL_ITEMIMAGEASSETS' -Value ''
+        Write-DmelPair -Name 'DMEL_ITEMIMAGEATLASPROFILES' -Value ''
         return
     }
 
@@ -484,6 +507,7 @@ function Invoke-PixelSiblingCleanup {
     Write-DmelPair -Name 'DMEL_ERROR_CODE' -Value $(if ($errors.Count -gt 0) { 'PIXEL_CLEANUP_WARN' } else { '' })
     Write-DmelPair -Name 'DMEL_ERROR_DETAIL' -Value ($errors -join ' | ')
     Write-DmelPair -Name 'DMEL_ITEMIMAGEASSETS' -Value $assets
+    Write-DmelPair -Name 'DMEL_ITEMIMAGEATLASPROFILES' -Value $script:ItemImageAtlasProfiles
 }
 
 function Get-SourceImageFormat {
@@ -504,6 +528,25 @@ function Get-SourceImageFormat {
     finally {
         if ($null -ne $stream) { $stream.Dispose() }
     }
+}
+
+function Test-GifPixelationUnsupportedSource {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$Directory = ''
+    )
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $leaf = [System.IO.Path]::GetFileName($fullPath)
+    if ([System.IO.Path]::GetExtension($leaf) -ieq '.gif' -or
+        (Test-BlockHudManagedItemGifAtlasName -Value $leaf)) {
+        return $true
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Directory)) {
+        $atlasPrefix = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($Directory, 'atlas')).TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
+        if ($fullPath.StartsWith($atlasPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return (Get-SourceImageFormat -Path $fullPath) -eq 'GIF'
 }
 
 function Get-CoverSourceRectangle {
@@ -770,6 +813,12 @@ try {
         $script:PixelateErrorCode = 'SOURCE_MISSING'
         $script:PixelateErrorDetail = 'sourcePath={0}' -f $sourceFullPath
         throw "Source image file is missing: $sourceFullPath"
+    }
+    if (Test-GifPixelationUnsupportedSource -Path $sourceFullPath -Directory $ItemImageDirectory) {
+        $script:PixelateErrorCode = 'GIF_PIXELATION_UNSUPPORTED'
+        $script:PixelateErrorDetail = 'sourcePath={0}' -f $sourceFullPath
+        $script:PixelateSourceFormat = Get-SourceImageFormat -Path $sourceFullPath
+        throw 'GIF images do not support pixelation.'
     }
 
     $resolvedOutputPath = Resolve-OutputPath -ExplicitOutputPath $OutputPath

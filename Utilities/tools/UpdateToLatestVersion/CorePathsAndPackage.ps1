@@ -321,47 +321,7 @@ function Assert-ZipPackageSafeToExtract {
         [Parameter(Mandatory = $true)][string]$ExtractRoot
     )
 
-    Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop
-    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
-
-    $resolvedExtractRoot = Resolve-FullPath -Path $ExtractRoot -AllowMissing
-    $extractPrefix = $resolvedExtractRoot.TrimEnd('\', '/') + '\'
-    $seenEntries = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
-    $archive = [System.IO.Compression.ZipFile]::OpenRead($PackagePath)
-    try {
-        foreach ($entry in $archive.Entries) {
-            $entryName = ([string]$entry.FullName).Replace('/', '\')
-            if ([string]::IsNullOrWhiteSpace($entryName)) {
-                throw 'ZIP package contains an empty entry name.'
-            }
-            if ([System.IO.Path]::IsPathRooted($entryName) -or $entryName.StartsWith('\') -or $entryName.Contains(':')) {
-                throw "ZIP package contains a rooted entry: $entryName"
-            }
-
-            $segments = @($entryName.Split([char[]]@('\'), [System.StringSplitOptions]::RemoveEmptyEntries))
-            if ($segments.Count -eq 0 -or @($segments | Where-Object { $_ -eq '.' -or $_ -eq '..' }).Count -gt 0) {
-                throw "ZIP package contains an unsafe path segment: $entryName"
-            }
-
-            $entryKey = $entryName.TrimEnd('\')
-            if (-not $seenEntries.Add($entryKey)) {
-                throw "ZIP package contains a duplicate case-insensitive entry: $entryName"
-            }
-
-            $destination = [System.IO.Path]::GetFullPath((Join-Path $resolvedExtractRoot $entryName))
-            if (-not $destination.StartsWith($extractPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-                throw "ZIP package entry escapes the extraction root: $entryName"
-            }
-
-            $unixFileType = (($entry.ExternalAttributes -shr 16) -band 0xF000)
-            if ($unixFileType -eq 0xA000) {
-                throw "ZIP package contains a symbolic-link entry: $entryName"
-            }
-        }
-    }
-    finally {
-        $archive.Dispose()
-    }
+    Assert-BlockHudZipPackageSafeToExtract -PackagePath $PackagePath -ExtractRoot $ExtractRoot
 }
 
 function Assert-NoReparsePoints {

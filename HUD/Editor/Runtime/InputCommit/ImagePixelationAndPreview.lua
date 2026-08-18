@@ -132,6 +132,43 @@ function EditorImagePixelationAndPreview.localize(key, fallback)
     return fallback or ''
 end
 
+function EditorImagePixelationAndPreview.isGifOrManagedAtlas(value)
+    local normalized = EditorImagePixelationAndPreview.trim(value):gsub('/', '\\'):lower()
+    local leaf = EditorImagePixelationAndPreview.fileName(normalized)
+    if leaf:sub(-4) == '.gif' then
+        return true
+    end
+    if leaf:match('^itemgifatlas_v1_[0-9a-f]+_[0-9a-f]+%.png$') then
+        return true
+    end
+    return normalized:find('\\items\\atlas\\', 1, true) ~= nil
+        or normalized:match('^atlas\\') ~= nil
+end
+
+function EditorImagePixelationAndPreview.gifUnsupportedMessage()
+    local bridge = EditorImagePixelationAndPreview.bridge()
+    local languageCode = ''
+    if bridge and type(bridge.languageCode) == 'function' then
+        languageCode = EditorImagePixelationAndPreview.trim(bridge.languageCode()):lower()
+    end
+    if languageCode == 'ko-kr' then
+        return 'gif 이미지는 픽셀화 기능을 지원하지 않습니다.'
+    end
+    return 'GIF images do not support pixelation.'
+end
+
+function EditorImagePixelationAndPreview.showGifUnsupported()
+    local message = EditorImagePixelationAndPreview.gifUnsupportedMessage()
+    EditorImagePixelationAndPreview.logWarning(message)
+    local bridge = EditorImagePixelationAndPreview.bridge()
+    if bridge and type(bridge.unsupportedAlert) == 'function' then
+        bridge.unsupportedAlert(message)
+    else
+        EditorImagePixelationAndPreview.userAlert(message)
+    end
+    return false
+end
+
 function EditorImagePixelationAndPreview.localizedFormat(key, fallback, ...)
     local text = EditorImagePixelationAndPreview.localize(key, fallback)
     local replacements = { ... }
@@ -256,14 +293,20 @@ function EditorImagePixelationAndPreview.tooltipForStage(stage)
     return '#Loc_Editor_PixelateTooltip' .. tostring(stage) .. '#'
 end
 
-function EditorImagePixelationAndPreview.updateTooltip(stage)
-    SKIN:Bang('!SetVariable', 'EditorPixelateButtonTooltip', EditorImagePixelationAndPreview.tooltipForStage(stage))
+function EditorImagePixelationAndPreview.updateButtonState(imageKey)
+    local blocked = EditorImagePixelationAndPreview.isGifOrManagedAtlas(imageKey)
+    local parsed = EditorImagePixelationAndPreview.parseKey(imageKey)
+    SKIN:Bang('!SetVariable', 'EditorPixelateButtonTooltip', blocked and EditorImagePixelationAndPreview.gifUnsupportedMessage() or EditorImagePixelationAndPreview.tooltipForStage(parsed.stage))
+    SKIN:Bang('!SetVariable', 'EditorPixelateButtonBgColor', blocked and '#EditorButtonDisabledBgColor#' or '#EditorButtonBgColor#')
+    SKIN:Bang('!SetVariable', 'EditorPixelateButtonTextColor', blocked and '#EditorButtonDisabledTextColor#' or '#EditorButtonTextColor#')
+    SKIN:Bang('!SetVariable', 'EditorPixelateButtonCommand', blocked and '' or '[!CommandMeasure MeasureInputCommit "ApplyImagePixelation()"]')
+    SKIN:Bang('!SetVariable', 'EditorPixelateButtonCursor', blocked and '0' or '1')
     SKIN:Bang('!UpdateMeter', 'MeterViewerPixelButtonBackground')
     SKIN:Bang('!UpdateMeter', 'MeterViewerPixelButtonLabel')
 end
 
 function EditorImagePixelationAndPreview.syncState(imageKey)
-    EditorImagePixelationAndPreview.updateTooltip(EditorImagePixelationAndPreview.parseKey(imageKey or SKIN:GetVariable('EditorImageKeyValue', '')).stage)
+    EditorImagePixelationAndPreview.updateButtonState(imageKey or SKIN:GetVariable('EditorImageKeyValue', ''))
 end
 
 EditorImagePixelationAndPreview.bridge().syncPixelationState = function(imageKey)
@@ -411,6 +454,9 @@ function EditorImagePixelationAndPreview.setLoading(stage, visible)
 end
 
 function EditorImagePixelationAndPreview.start(currentImageKey, parsed, nextStage)
+    if EditorImagePixelationAndPreview.isGifOrManagedAtlas(currentImageKey) then
+        return false, EditorImagePixelationAndPreview.gifUnsupportedMessage(), true
+    end
     local pixelator = EditorImagePixelationAndPreview.load()
     if not pixelator then
         return false, 'Image pixelation could not be started.'
@@ -421,6 +467,10 @@ function EditorImagePixelationAndPreview.start(currentImageKey, parsed, nextStag
     local outputKey = parsed.baseStem .. '_p' .. tostring(nextStage) .. '.png'
     local blockSize = EditorImagePixelationAndPreview.strengths[nextStage] or EditorImagePixelationAndPreview.strengths[1]
     local sourcePath = EditorImagePixelationAndPreview.itemImagePath(sourceImageKey)
+    if EditorImagePixelationAndPreview.isGifOrManagedAtlas(sourceImageKey)
+        or EditorImagePixelationAndPreview.isGifOrManagedAtlas(sourcePath) then
+        return false, EditorImagePixelationAndPreview.gifUnsupportedMessage(), true
+    end
     local outputPath = EditorImagePixelationAndPreview.joinPath(itemImageDirectory, outputKey)
     local signature = table.concat({
         EditorImagePixelationAndPreview.trim(sourcePath),
@@ -486,7 +536,11 @@ function ApplyImagePixelation()
         return false
     end
 
-    local currentImageKey = EditorImagePixelationAndPreview.bridge().normalizeImageAsset(SKIN:GetVariable('EditorImageKeyValue', ''))
+    local rawImageKey = SKIN:GetVariable('EditorImageKeyValue', '')
+    if EditorImagePixelationAndPreview.isGifOrManagedAtlas(rawImageKey) then
+        return EditorImagePixelationAndPreview.showGifUnsupported()
+    end
+    local currentImageKey = EditorImagePixelationAndPreview.bridge().normalizeImageAsset(rawImageKey)
     if currentImageKey == '' then
         currentImageKey = EditorImagePixelationAndPreview.bridge().defaultImageKey
     end
@@ -507,8 +561,11 @@ function ApplyImagePixelation()
     end
 
     local nextStage = parsed.stage + 1
-    local ok, message = EditorImagePixelationAndPreview.start(currentImageKey, parsed, nextStage)
+    local ok, message, unsupported = EditorImagePixelationAndPreview.start(currentImageKey, parsed, nextStage)
     if not ok then
+        if unsupported then
+            return EditorImagePixelationAndPreview.showGifUnsupported()
+        end
         EditorImagePixelationAndPreview.logWarning('Editor image pixelation could not start. ' .. tostring(message))
         EditorImagePixelationAndPreview.userAlert(message)
         EditorImagePixelationAndPreview.setLoading(nextStage, false)
@@ -554,6 +611,13 @@ function HandleEditorPixelationComplete()
     end
 
     local result = pixelator:handleComplete(output)
+    if EditorImagePixelationAndPreview.trim(result.errorCode):upper() == 'GIF_PIXELATION_UNSUPPORTED'
+        or (pending and (EditorImagePixelationAndPreview.isGifOrManagedAtlas(pending.sourceKey)
+            or EditorImagePixelationAndPreview.isGifOrManagedAtlas(pending.sourcePath))) then
+        EditorImagePixelationAndPreview.syncState(SKIN:GetVariable('EditorImageKeyValue', ''))
+        return EditorImagePixelationAndPreview.showGifUnsupported()
+    end
+
     if not result.accepted then
         local userMessage = EditorImagePixelationAndPreview.trim(result.userMessage) ~= '' and result.userMessage or result.message
         EditorImagePixelationAndPreview.logWarning('Editor image pixelation completion rejected. ' .. tostring(result.message or ''))
@@ -563,6 +627,10 @@ function HandleEditorPixelationComplete()
 
     if result.itemImageAssets and EditorImagePixelationAndPreview.trim(result.itemImageAssets) ~= '' then
         SKIN:Bang('!SetVariable', 'ItemImageAssets', result.itemImageAssets)
+    end
+    if result.itemImageAtlasProfilesPresent then
+        SKIN:Bang('!SetVariable', 'ItemImageAtlasProfiles', result.itemImageAtlasProfiles or '')
+        SKIN:Bang('!SetVariableGroup', 'ItemImageAtlasProfiles', result.itemImageAtlasProfiles or '', 'DMeloper')
     end
 
     local resolvedOutputKey = pending and pending.outputKey or EditorImagePixelationAndPreview.fileName(result.outputPath)
@@ -604,6 +672,8 @@ function HandleEditorPixelCleanupComplete()
     local deleted = EditorImagePixelationAndPreview.trim(values.DMEL_DELETED)
     local errorDetail = EditorImagePixelationAndPreview.trim(values.DMEL_ERROR_DETAIL)
     local itemImageAssets = EditorImagePixelationAndPreview.trim(values.DMEL_ITEMIMAGEASSETS)
+    local itemImageAtlasProfiles = EditorImagePixelationAndPreview.trim(values.DMEL_ITEMIMAGEATLASPROFILES)
+    local itemImageAtlasProfilesPresent = values.DMEL_ITEMIMAGEATLASPROFILES ~= nil
     if expectedToken == '' or token == '' or token ~= expectedToken then
         EditorImagePixelationAndPreview.logWarning(table.concat({
             'Editor image pixelation cleanup completion rejected.',
@@ -618,6 +688,10 @@ function HandleEditorPixelCleanupComplete()
 
     if itemImageAssets ~= '' then
         SKIN:Bang('!SetVariable', 'ItemImageAssets', itemImageAssets)
+    end
+    if itemImageAtlasProfilesPresent then
+        SKIN:Bang('!SetVariable', 'ItemImageAtlasProfiles', itemImageAtlasProfiles)
+        SKIN:Bang('!SetVariableGroup', 'ItemImageAtlasProfiles', itemImageAtlasProfiles, 'DMeloper')
     end
     if status == 'OK' then
         EditorImagePixelationAndPreview.logDebug('Editor image pixelation cleanup completed. deleted=' .. (deleted ~= '' and deleted or '<none>'))

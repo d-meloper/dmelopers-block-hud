@@ -117,6 +117,7 @@ return function(app)
         methods.ensurePaths()
         options = options or {}
         local resolvedLanguage = methods.normalizeLanguageCode(languageCode, methods.normalizeLanguageCode(nil, nil))
+        local shouldSyncHelperLocalizationCache = options.syncHelperLocalizationCache == true
         local measureName = 'MeasureSettingsDefaultItemLabelsRun'
         if not SKIN:GetMeasure(measureName) then
             methods.appendSettingsRuntimeLog('Default item label localization run measure is missing.')
@@ -129,9 +130,13 @@ return function(app)
             .. quoteCommandArgument(skinRoot)
             .. ' -LanguageCode '
             .. quoteCommandArgument(resolvedLanguage)
+        if shouldSyncHelperLocalizationCache then
+            args = args .. ' -UpdateHelperLocalizationCache'
+        end
 
         state.pendingDefaultItemLocalizationRunning = true
         state.pendingDefaultItemLocalizationLanguage = resolvedLanguage
+        state.pendingDefaultItemLocalizationSyncHelperCache = shouldSyncHelperLocalizationCache
         state.pendingDefaultItemLocalizationRefreshApp = options.refreshAppOnComplete == true
         state.pendingDefaultItemLocalizationTargetSet = options.targetSet
         state.pendingDefaultItemLocalizationRefreshOptions = options.refreshOptions
@@ -142,6 +147,7 @@ return function(app)
         return true
     end
 
+    -- DMEL_COMPAT:settings.sync-helper-fallback
     function methods.syncItemLabelsForLanguage(languageCode, options)
         options = options or {}
         local resolved = methods.normalizeLanguageCode(languageCode, methods.normalizeLanguageCode(nil, nil))
@@ -164,11 +170,13 @@ return function(app)
             reservedLabel
         ) or changed
 
+        options.syncHelperLocalizationCache = true
         if methods.startDefaultItemLabelLocalization(resolved, options) then
             return true
         end
 
-        return changed
+        methods.syncHelperLocalizationCache(resolved)
+        return false
     end
 
     function methods.HandleDefaultItemLabelsComplete()
@@ -179,6 +187,7 @@ return function(app)
         end
         local values = methods.parseCommandCaptureVariables and methods.parseCommandCaptureVariables(raw) or {}
         local status = string.upper(trim(values.DMEL_STATUS or ''))
+        local cacheStatus = string.upper(trim(values.DMEL_CACHESTATUS or ''))
         if status ~= 'OK' then
             local message = trim(values.DMEL_MESSAGE or '')
             if message == '' then
@@ -188,16 +197,28 @@ return function(app)
         end
 
         local shouldRefreshApp = state.pendingDefaultItemLocalizationRefreshApp == true
+        local shouldSyncHelperLocalizationCache = state.pendingDefaultItemLocalizationSyncHelperCache == true
+        local pendingLanguage = state.pendingDefaultItemLocalizationLanguage
         local targetSet = state.pendingDefaultItemLocalizationTargetSet
         local refreshOptions = state.pendingDefaultItemLocalizationRefreshOptions
         state.pendingDefaultItemLocalizationRunning = false
         state.pendingDefaultItemLocalizationLanguage = nil
+        state.pendingDefaultItemLocalizationSyncHelperCache = nil
         state.pendingDefaultItemLocalizationRefreshApp = nil
         state.pendingDefaultItemLocalizationTargetSet = nil
         state.pendingDefaultItemLocalizationRefreshOptions = nil
 
+        if shouldSyncHelperLocalizationCache and cacheStatus ~= 'OK' then
+            local cacheMessage = trim(values.DMEL_CACHEMESSAGE or '')
+            if cacheMessage == '' then
+                cacheMessage = 'Combined helper localization cache update did not report success.'
+            end
+            methods.appendSettingsRuntimeLog(cacheMessage)
+            methods.syncHelperLocalizationCache(pendingLanguage)
+        end
+
         if shouldRefreshApp then
-            SKIN:Bang('!RefreshApp')
+            methods.ScheduleRefreshApp()
             return true
         end
 

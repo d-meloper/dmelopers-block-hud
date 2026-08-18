@@ -18,6 +18,7 @@ return function(app)
         inventory = 'Settings_Tab_Inventory',
         clock = 'Settings_Tab_Clock',
         ui = 'Settings_Tab_UI',
+        hudMirror = 'Settings_Tab_HudMirror',
         jukebox = 'Settings_Content_Jukebox',
         herobrine = 'Settings_Content_Herobrine',
     }
@@ -27,17 +28,20 @@ return function(app)
         indicatorsDraggable = 'Settings_Field_CommonDraggable_Label',
         inventoryDraggable = 'Settings_Field_CommonDraggable_Label',
         clockDraggable = 'Settings_Field_CommonDraggable_Label',
+        hudMirrorReplicaDraggable = 'Settings_Field_CommonDraggable_Label',
         jukeboxDragSnap = 'Settings_Field_CommonDragSnap_Label',
         hotbarDragSnap = 'Settings_Field_CommonDragSnap_Label',
         indicatorsDragSnap = 'Settings_Field_CommonDragSnap_Label',
         inventoryDragSnap = 'Settings_Field_CommonDragSnap_Label',
         clockDragSnap = 'Settings_Field_CommonDragSnap_Label',
+        hudMirrorReplicaSnapEdges = 'Settings_Field_CommonDragSnap_Label',
         resetAllSettings = 'Settings_Field_CommonResetSettings_Label',
         resetHotbarSettings = 'Settings_Field_CommonResetSettings_Label',
         resetIndicatorsSettings = 'Settings_Field_CommonResetSettings_Label',
         resetInventorySettings = 'Settings_Field_CommonResetSettings_Label',
         resetClockSettings = 'Settings_Field_CommonResetSettings_Label',
         resetJukeboxSettings = 'Settings_Field_CommonResetSettings_Label',
+        resetHudMirrorSettings = 'Settings_Field_CommonResetSettings_Label',
         resetHotbarSkinPositions = 'Settings_Field_CommonResetSkinPositions_Label',
         resetIndicatorsSkinPositions = 'Settings_Field_CommonResetSkinPositions_Label',
         resetInventorySkinPositions = 'Settings_Field_CommonResetSkinPositions_Label',
@@ -86,7 +90,7 @@ return function(app)
         local rowGap = methods.numericVariable('SettingsTabRowGap', 0) or 0
         local row2Y = row1Y + tabH + rowGap
         local row1W = math.max(0, (contentW - (3 * gap)) / 4)
-        local row2W = math.max(0, (contentW - (2 * gap)) / 3)
+        local row2W = math.max(0, (contentW - (3 * gap)) / 4)
 
         setTabSlotGeometry(1, contentX, row1Y, row1W, tabH, labelPad)
         setTabSlotGeometry(3, contentX + row1W + gap, row1Y, row1W, tabH, labelPad)
@@ -95,6 +99,7 @@ return function(app)
         setTabSlotGeometry(5, contentX, row2Y, row2W, tabH, labelPad)
         setTabSlotGeometry(4, contentX + row2W + gap, row2Y, row2W, tabH, labelPad)
         setTabSlotGeometry(2, contentX + ((row2W + gap) * 2), row2Y, row2W, tabH, labelPad)
+        setTabSlotGeometry(8, contentX + ((row2W + gap) * 3), row2Y, row2W, tabH, labelPad)
     end
 
     local function applyContentTabGeometry(tabCount)
@@ -106,7 +111,7 @@ return function(app)
         local h = methods.numericVariable('SettingsTabSlotH', methods.numericVariable('SettingsTall1H', 40)) or 40
         local labelPad = methods.numericVariable('SettingsTabLabelPad', 3) or 3
         local w = math.max(0, (contentW - ((count - 1) * gap)) / count)
-        for index = 1, 7 do
+        for index = 1, 8 do
             if index <= count then
                 local x = contentX + ((index - 1) * (w + gap))
                 setTabSlotGeometry(index, x, y, w, h, labelPad)
@@ -172,10 +177,10 @@ return function(app)
         end
         if applyTextFit then
             for index, tab in ipairs(activeTabs) do
-                local key = settingsTabLocalizationKeyById[trim(tab and tab.id or '')]
                 local text = methods.tabDisplayText(tab)
                 local width = methods.numericVariable('SlotSettingsTab' .. tostring(index) .. '_LabelW', 0) or 0
-                applyTextFit('MeterSettingsTab' .. tostring(index) .. 'Label', key, text, 'SettingsTabFontSize', width, 0.70)
+                local height = methods.numericVariable('SlotSettingsTab' .. tostring(index) .. '_H', 0) or 0
+                applyTextFit('MeterSettingsTab' .. tostring(index) .. 'Label', text, 'SettingsTabFontSize', width, height, 'wrap4')
             end
         end
         applyRowSlotGeometry(state.contentMode == true)
@@ -228,6 +233,7 @@ return function(app)
             resetClockSettings = 'Settings_Field_resetTab_Action',
             resetHerobrineSettings = 'Settings_Field_resetTab_Action',
             resetJukeboxSettings = 'Settings_Field_resetTab_Action',
+            resetHudMirrorSettings = 'Settings_Field_resetTab_Action',
             resetHotbarSkinPositions = 'Settings_Field_resetPosition_Action',
             resetIndicatorsSkinPositions = 'Settings_Field_resetPosition_Action',
             resetInventorySkinPositions = 'Settings_Field_resetPosition_Action',
@@ -315,14 +321,47 @@ return function(app)
             end
         end
 
+        local disabledWhenFieldZero = trim(field.disabledWhenFieldZero or '')
+        if disabledWhenFieldZero ~= '' then
+            local dependencyField = methods.getField(disabledWhenFieldZero)
+            if dependencyField and (tonumber(methods.readFieldValue(dependencyField)) or 0) == 0 then
+                return true
+            end
+        end
+
+        if field.disabledWhenNoHudMirrorMonitor == true and state.hudMirrorHasSecondaryMonitor ~= true then
+            return true
+        end
+
         return false
     end
 
     function methods.applyRowEnabledVisualState(rowIndex, isEnabled)
-        local labelTextColor = isEnabled and SKIN:GetVariable('SettingsInputTextColor', '') or SKIN:GetVariable('SettingsButtonDisabledTextColor', '')
-        local toggleBgColor = isEnabled and SKIN:GetVariable('SettingsButtonBgColor', '') or SKIN:GetVariable('SettingsButtonDisabledBgColor', '')
+        local prefix = 'SettingsRow' .. rowIndex .. '_'
+        local disabledBgColor = SKIN:GetVariable('SettingsButtonDisabledBgColor', '')
+        local disabledTextColor = SKIN:GetVariable('SettingsButtonDisabledTextColor', '')
+        local textColor = isEnabled and SKIN:GetVariable('SettingsInputTextColor', '') or disabledTextColor
+        local fieldBgColor = isEnabled and SKIN:GetVariable('SettingsInputBgColor', '') or disabledBgColor
+        local buttonBgColor = isEnabled and SKIN:GetVariable('SettingsButtonBgColor', '') or disabledBgColor
+        local buttonTextColor = isEnabled and SKIN:GetVariable('SettingsButtonTextColor', '') or disabledTextColor
+        local fieldStrokeColor = isEnabled and SKIN:GetVariable('SettingsInputStrokeColor', '') or disabledTextColor
+        local buttonStrokeColor = isEnabled and SKIN:GetVariable('SettingsButtonStrokeColor', '') or disabledTextColor
+        local cursor = isEnabled and '1' or '0'
 
-        setVariable('SettingsRow' .. rowIndex .. '_LabelTextColor', labelTextColor)
-        setVariable('SettingsRow' .. rowIndex .. '_ToggleBgColor', toggleBgColor)
+        setVariable(prefix .. 'LabelTextColor', textColor)
+        setVariable(prefix .. 'ControlCursor', cursor)
+        setVariable(prefix .. 'FieldStrokeColor', fieldStrokeColor)
+        setVariable(prefix .. 'ButtonStrokeColor', buttonStrokeColor)
+        setVariable(prefix .. 'FieldBgColor', fieldBgColor)
+        setVariable(prefix .. 'FieldTextColor', textColor)
+        setVariable(prefix .. 'DropdownButtonBgColor', buttonBgColor)
+        setVariable(prefix .. 'DropdownButtonTextColor', buttonTextColor)
+        setVariable(prefix .. 'ToggleBgColor', buttonBgColor)
+        setVariable(prefix .. 'StepperFieldBgColor', fieldBgColor)
+        setVariable(prefix .. 'StepperFieldTextColor', textColor)
+        setVariable(prefix .. 'StepperButtonBgColor', buttonBgColor)
+        setVariable(prefix .. 'StepperButtonTextColor', buttonTextColor)
+        setVariable(prefix .. 'ActionCursor', cursor)
+        setVariable(prefix .. 'ActionSecondaryCursor', cursor)
     end
 end

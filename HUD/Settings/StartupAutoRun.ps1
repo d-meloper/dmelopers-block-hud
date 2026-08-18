@@ -3,8 +3,12 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('probe', 'enable', 'disable')]
     [string]$Mode,
+    [ValidateSet('shortcut', 'task', 'all')]
+    [string]$Method,
     [string]$StartupFolderOverride,
-    [string]$RainmeterExecutablePathOverride
+    [string]$RainmeterExecutablePathOverride,
+    [string]$ScheduledTaskNameOverride,
+    [string]$RequestToken
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +17,10 @@ Set-StrictMode -Version Latest
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $script:Utf8NoBom
 $OutputEncoding = $script:Utf8NoBom
+
+$entrypointDirectory = $PSScriptRoot
+$commonHelperPath = Join-Path $entrypointDirectory 'Runtime\Helpers\StartupAutoRun.Common.ps1'
+. $commonHelperPath
 
 function ConvertTo-SingleLineText {
     param([AllowNull()][string]$Value)
@@ -28,310 +36,134 @@ function Write-StartupResult {
         [Parameter(Mandatory = $true)][string]$Status,
         [AllowEmptyString()][string]$Value,
         [AllowEmptyString()][string]$Code,
-        [AllowEmptyString()][string]$Message
+        [AllowEmptyString()][string]$Message,
+        [AllowEmptyString()][string]$FastValue,
+        [AllowEmptyString()][string]$ShortcutValue,
+        [AllowEmptyString()][string]$ResolvedMethod,
+        [AllowEmptyString()][string]$TaskState,
+        [AllowEmptyString()][string]$Recovery,
+        [AllowEmptyString()][string]$RecoveryCode,
+        [AllowEmptyString()][string]$ResultRequestToken
     )
 
-    $lines = @(
+    @(
         'DMEL_STATUS=' + $Status
         'DMEL_VALUE=' + $Value
         'DMEL_CODE=' + $Code
         'DMEL_MESSAGE=' + (ConvertTo-SingleLineText -Value $Message)
-    )
+        'DMEL_FAST_VALUE=' + $FastValue
+        'DMEL_SHORTCUT_VALUE=' + $ShortcutValue
+        'DMEL_METHOD=' + $ResolvedMethod
+        'DMEL_TASK_STATE=' + $TaskState
+        'DMEL_RECOVERY=' + $Recovery
+        'DMEL_RECOVERY_CODE=' + $RecoveryCode
+        'DMEL_REQUEST_TOKEN=' + (ConvertTo-SingleLineText -Value $ResultRequestToken)
+    ) | Write-Output
 
-    $lines | Write-Output
     if ($Status -eq 'OK' -and ($Value -eq '0' -or $Value -eq '1')) {
         Write-Output $Value
     }
 }
 
-function New-ShortcutShell {
-    return (New-Object -ComObject WScript.Shell)
-}
-
-function Close-ComObject {
-    param([AllowNull()][object]$Value)
-
-    if ($null -ne $Value -and [System.Runtime.InteropServices.Marshal]::IsComObject($Value)) {
-        [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Value)
-    }
-}
-
-function ConvertTo-ShortcutComPath {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [switch]$ExistingFile
-    )
-
-    $fullPath = [System.IO.Path]::GetFullPath($Path)
-    $fileSystem = $null
-    $entry = $null
-    try {
-        $fileSystem = New-Object -ComObject Scripting.FileSystemObject
-        if ($ExistingFile) {
-            $entry = $fileSystem.GetFile($fullPath)
-            $shortPath = [string]$entry.ShortPath
-            if (-not [string]::IsNullOrWhiteSpace($shortPath)) {
-                return $shortPath
-            }
-        }
-
-        $parentPath = [System.IO.Path]::GetDirectoryName($fullPath)
-        $entry = $fileSystem.GetFolder($parentPath)
-        $shortParent = [string]$entry.ShortPath
-        if (-not [string]::IsNullOrWhiteSpace($shortParent)) {
-            return (Join-Path $shortParent ([System.IO.Path]::GetFileName($fullPath)))
-        }
-        return $fullPath
-    }
-    finally {
-        Close-ComObject -Value $entry
-        Close-ComObject -Value $fileSystem
-    }
-}
-
-function Get-StartupFolderPath {
-    if (-not [string]::IsNullOrWhiteSpace($StartupFolderOverride)) {
-        return [System.IO.Path]::GetFullPath($StartupFolderOverride)
-    }
-    [Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)
-}
-
-function Resolve-ShortcutTargetPath {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$ShortcutPath
-    )
-
-    $shell = $null
-    $shortcut = $null
-    try {
-        $shell = New-ShortcutShell
-        $shortcut = $shell.CreateShortcut((ConvertTo-ShortcutComPath -Path $ShortcutPath -ExistingFile))
-        $targetPath = [string]$shortcut.TargetPath
-        if ([string]::IsNullOrWhiteSpace($targetPath)) {
-            return $null
-        }
-        return $targetPath
-    }
-    catch {
-        return $null
-    }
-    finally {
-        Close-ComObject -Value $shortcut
-        Close-ComObject -Value $shell
-    }
-}
-
-function Test-RainmeterShortcutTarget {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$TargetPath
-    )
-
-    if ([string]::IsNullOrWhiteSpace($TargetPath)) {
-        return $false
-    }
-
-    $leafName = [System.IO.Path]::GetFileName($TargetPath)
-    return [string]::Equals($leafName, 'Rainmeter.exe', [System.StringComparison]::OrdinalIgnoreCase)
-}
-
-function Get-RainmeterStartupShortcuts {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$StartupFolder
-    )
-
-    $matches = @()
-    if ([string]::IsNullOrWhiteSpace($StartupFolder)) {
-        return $matches
-    }
-    if (-not (Test-Path -LiteralPath $StartupFolder)) {
-        return $matches
-    }
-
-    Get-ChildItem -LiteralPath $StartupFolder -Filter '*.lnk' -File -ErrorAction SilentlyContinue | ForEach-Object {
-        $targetPath = Resolve-ShortcutTargetPath -ShortcutPath $_.FullName
-        if (-not [string]::IsNullOrWhiteSpace($targetPath) -and (Test-RainmeterShortcutTarget -TargetPath $targetPath)) {
-            $matches += $_.FullName
-        }
-    }
-
-    return $matches
-}
-
-function Get-RainmeterExecutablePath {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$StartupFolder
-    )
-
-    if (-not [string]::IsNullOrWhiteSpace($RainmeterExecutablePathOverride)) {
-        $overridePath = [System.IO.Path]::GetFullPath($RainmeterExecutablePathOverride)
-        if ((Test-RainmeterShortcutTarget -TargetPath $overridePath) -and (Test-Path -LiteralPath $overridePath)) {
-            return $overridePath
-        }
-        return $null
-    }
-
-    foreach ($process in @(Get-Process -Name 'Rainmeter' -ErrorAction SilentlyContinue)) {
-        $runningPath = $null
-        try {
-            $runningPath = [string]$process.Path
-        } catch {
-            # Some process owners do not expose the executable path.
-        }
-        if ($runningPath -and (Test-Path -LiteralPath $runningPath)) {
-            return [System.IO.Path]::GetFullPath($runningPath)
-        }
-    }
-
-    $candidatePaths = @()
-    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
-        $candidatePaths += Join-Path $env:ProgramFiles 'Rainmeter\Rainmeter.exe'
-    }
-    if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
-        $candidatePaths += Join-Path ${env:ProgramFiles(x86)} 'Rainmeter\Rainmeter.exe'
-    }
-
-    foreach ($candidate in $candidatePaths) {
-        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-            return [System.IO.Path]::GetFullPath($candidate)
-        }
-    }
-
-    foreach ($registryPath in @(
-        'Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\App Paths\Rainmeter.exe',
-        'Registry::HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\App Paths\Rainmeter.exe'
-    )) {
-        try {
-            $candidate = [string](Get-ItemPropertyValue -LiteralPath $registryPath -Name '(default)' -ErrorAction Stop)
-            if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-                return [System.IO.Path]::GetFullPath($candidate)
-            }
-        } catch {
-            # App Paths registration is optional.
-        }
-    }
-
-    $canonicalShortcut = Join-Path $StartupFolder 'Rainmeter.lnk'
-    if (Test-Path -LiteralPath $canonicalShortcut) {
-        $targetPath = Resolve-ShortcutTargetPath -ShortcutPath $canonicalShortcut
-        if ((Test-RainmeterShortcutTarget -TargetPath $targetPath) -and (Test-Path -LiteralPath $targetPath)) {
-            return [System.IO.Path]::GetFullPath($targetPath)
-        }
-    }
-
-    return $null
-}
-
-function Get-StartupEnabledLiteral {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$StartupFolder
-    )
-
-    if (@(Get-RainmeterStartupShortcuts -StartupFolder $StartupFolder).Count -gt 0) {
-        return '1'
-    }
-    return '0'
-}
-
-function Remove-RainmeterStartupShortcuts {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$StartupFolder
-    )
-
-    Get-RainmeterStartupShortcuts -StartupFolder $StartupFolder | ForEach-Object {
-        Remove-Item -LiteralPath $_ -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Ensure-CanonicalRainmeterShortcut {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$StartupFolder
-    )
-
-    $rainmeterExePath = Get-RainmeterExecutablePath -StartupFolder $StartupFolder
-    if ([string]::IsNullOrWhiteSpace($rainmeterExePath) -or -not (Test-Path -LiteralPath $rainmeterExePath)) {
-        return $false
-    }
-
-    if (-not (Test-Path -LiteralPath $StartupFolder)) {
-        New-Item -ItemType Directory -Path $StartupFolder -Force | Out-Null
-    }
-
-    $shortcutPath = Join-Path $StartupFolder 'Rainmeter.lnk'
-    if (Test-Path -LiteralPath $shortcutPath) {
-        Remove-Item -LiteralPath $shortcutPath -Force -ErrorAction SilentlyContinue
-    }
-
-    $shell = $null
-    $shortcut = $null
-    try {
-        $shortcutTargetPath = ConvertTo-ShortcutComPath -Path $rainmeterExePath -ExistingFile
-        $shell = New-ShortcutShell
-        $shortcut = $shell.CreateShortcut((ConvertTo-ShortcutComPath -Path $shortcutPath))
-        $shortcut.TargetPath = $shortcutTargetPath
-        $shortcut.WorkingDirectory = Split-Path -Parent $shortcutTargetPath
-        $shortcut.IconLocation = $shortcutTargetPath + ',0'
-        $shortcut.Save()
-    }
-    finally {
-        Close-ComObject -Value $shortcut
-        Close-ComObject -Value $shell
-    }
-    return $true
-}
-
 $startupFolder = $null
+$taskName = $null
 $status = 'ERROR'
-$value = ''
 $code = 'UNEXPECTED'
 $message = ''
+$state = $null
+$recovery = 'none'
+$recoveryCode = ''
+
 try {
-    $startupFolder = Get-StartupFolderPath
+    $startupFolder = Get-BlockHudStartupFolderPath -Override $StartupFolderOverride
     if ([string]::IsNullOrWhiteSpace($startupFolder)) {
-        throw [System.InvalidOperationException]::new('The Windows startup folder path is empty.')
+        throw (New-BlockHudStartupException -Code 'STARTUP_FOLDER_UNAVAILABLE' -Message 'The Windows startup folder path is empty.')
     }
+    $taskName = Resolve-BlockHudScheduledTaskName `
+        -Override $ScheduledTaskNameOverride `
+        -StartupFolderOverride $StartupFolderOverride `
+        -RainmeterExecutablePathOverride $RainmeterExecutablePathOverride
+
+    $effectiveMethod = $Method
+    if (-not $PSBoundParameters.ContainsKey('Method')) {
+        $effectiveMethod = if ($Mode -eq 'enable') { 'shortcut' } else { 'all' }
+    }
+
     switch ($Mode) {
         'probe' {
-            # The final probe below owns the result.
+            $state = Get-BlockHudStartupRegistrationState -StartupFolder $startupFolder -TaskName $taskName
         }
         'enable' {
-            $created = Ensure-CanonicalRainmeterShortcut -StartupFolder $startupFolder
-            if (-not $created) {
-                throw [System.InvalidOperationException]::new('A valid Rainmeter executable could not be resolved.')
+            if ($effectiveMethod -eq 'shortcut') {
+                $state = Set-BlockHudStartupShortcutMode `
+                    -StartupFolder $startupFolder `
+                    -TaskName $taskName `
+                    -RainmeterExecutablePathOverride $RainmeterExecutablePathOverride
+            }
+            elseif ($effectiveMethod -eq 'task') {
+                $state = Set-BlockHudStartupTaskMode `
+                    -StartupFolder $startupFolder `
+                    -TaskName $taskName `
+                    -RainmeterExecutablePathOverride $RainmeterExecutablePathOverride
+            }
+            else {
+                throw (New-BlockHudStartupException -Code 'INVALID_METHOD' -Message "Method '$effectiveMethod' cannot be enabled.")
             }
         }
         'disable' {
-            Remove-RainmeterStartupShortcuts -StartupFolder $startupFolder
+            if ($effectiveMethod -ne 'all') {
+                throw (New-BlockHudStartupException -Code 'INVALID_METHOD' -Message "Disable requires method 'all'.")
+            }
+            $state = Disable-BlockHudStartupRegistration `
+                -StartupFolder $startupFolder `
+                -TaskName $taskName `
+                -RainmeterExecutablePathOverride $RainmeterExecutablePathOverride
         }
-    }
-
-    $value = Get-StartupEnabledLiteral -StartupFolder $startupFolder
-
-    if (($Mode -eq 'enable' -and $value -ne '1') -or ($Mode -eq 'disable' -and $value -ne '0')) {
-        throw [System.InvalidOperationException]::new("The startup state did not match the requested mode '$Mode'.")
     }
 
     $status = 'OK'
     $code = ''
-} catch {
-    $code = $_.Exception.GetType().Name
+}
+catch {
     $message = [string]$_.Exception.Message
-    if (-not [string]::IsNullOrWhiteSpace($startupFolder)) {
+    if ($_.Exception.Data.Contains('DmelCode')) {
+        $code = [string]$_.Exception.Data['DmelCode']
+    }
+    else {
+        $code = $_.Exception.GetType().Name
+    }
+    if ($_.Exception.Data.Contains('DmelRecovery')) {
+        $recovery = [string]$_.Exception.Data['DmelRecovery']
+    }
+    if ($_.Exception.Data.Contains('DmelRecoveryCode')) {
+        $recoveryCode = [string]$_.Exception.Data['DmelRecoveryCode']
+    }
+    if ($_.Exception.Data.Contains('DmelState')) {
+        $state = $_.Exception.Data['DmelState']
+    }
+    if (-not [string]::IsNullOrWhiteSpace($startupFolder) -and -not [string]::IsNullOrWhiteSpace($taskName)) {
         try {
-            $value = Get-StartupEnabledLiteral -StartupFolder $startupFolder
-        } catch {
-            # Leave the value empty when the resulting state cannot be probed.
+            $state = Get-BlockHudStartupRegistrationState -StartupFolder $startupFolder -TaskName $taskName
+        }
+        catch {
+            # Leave state values empty when the resulting registrations cannot be probed.
         }
     }
 }
 
-Write-StartupResult -Status $status -Value $value -Code $code -Message $message
+Write-StartupResult `
+    -Status $status `
+    -Value $(if ($null -ne $state) { [string]$state.Value } else { '' }) `
+    -Code $code `
+    -Message $message `
+    -FastValue $(if ($null -ne $state) { [string]$state.FastValue } else { '' }) `
+    -ShortcutValue $(if ($null -ne $state) { [string]$state.ShortcutValue } else { '' }) `
+    -ResolvedMethod $(if ($null -ne $state) { [string]$state.Method } else { '' }) `
+    -TaskState $(if ($null -ne $state) { [string]$state.TaskState } else { '' }) `
+    -Recovery $recovery `
+    -RecoveryCode $recoveryCode `
+    -ResultRequestToken $RequestToken
+
 if ($status -ne 'OK') {
     exit 1
 }

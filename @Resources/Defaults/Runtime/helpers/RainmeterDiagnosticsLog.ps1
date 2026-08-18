@@ -105,6 +105,38 @@ function Convert-BytesToText {
     }
 }
 
+function Read-SharedFileBytes {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        $stream = $null
+        $buffer = $null
+        try {
+            $stream = [System.IO.File]::Open(
+                $Path,
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::Read,
+                ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+            $buffer = [System.IO.MemoryStream]::new()
+            $stream.CopyTo($buffer)
+            return $buffer.ToArray()
+        }
+        catch [System.IO.IOException] {
+            $lastError = $_
+            if ($attempt -lt 5) {
+                Start-Sleep -Milliseconds (20 * $attempt)
+            }
+        }
+        finally {
+            if ($null -ne $buffer) { $buffer.Dispose() }
+            if ($null -ne $stream) { $stream.Dispose() }
+        }
+    }
+
+    throw $lastError
+}
+
 function Read-TextFileBestEffort {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -112,7 +144,7 @@ function Read-TextFileBestEffort {
         return ''
     }
 
-    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $bytes = Read-SharedFileBytes -Path $Path
     $kind = Get-TextEncodingKind -Bytes $bytes
     return (Convert-BytesToText -Bytes $bytes -Kind $kind).TrimStart([char]0xFEFF)
 }

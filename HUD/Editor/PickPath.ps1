@@ -128,7 +128,7 @@ function Resolve-ShortcutCommandLine([string]$SelectedPath) {
     }
 }
 
-function Write-PathResult([string]$SelectedPath) {
+function Write-PathResult([string]$SelectedPath, [string]$ActionType = '') {
     if ([string]::IsNullOrWhiteSpace($SelectedPath)) {
         return
     }
@@ -137,7 +137,8 @@ function Write-PathResult([string]$SelectedPath) {
     $stdout.AutoFlush = $true
 
     try {
-        $stdout.Write($SelectedPath)
+        $stdout.Write('DMEL_ACTION=' + $SelectedPath + "`n")
+        $stdout.Write('DMEL_ACTIONTYPE=' + $ActionType + "`n")
     }
     finally {
         $stdout.Dispose()
@@ -241,8 +242,9 @@ try {
         if ($dialog.ShowDialog($pickerForm) -eq [System.Windows.Forms.DialogResult]::OK) {
             $resolvedPath = & $resolveShortcutCommandLineInvoker -SelectedPath ([string]$dialog.FileName)
             $pickerForm.Tag = [PSCustomObject]@{
-                Kind  = 'Path'
-                Value = $resolvedPath
+                Kind       = 'Path'
+                Value      = $resolvedPath
+                ActionType = ''
             }
             $pickerForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
             $pickerForm.Close()
@@ -261,8 +263,9 @@ try {
 
         if ($dialog.ShowDialog($pickerForm) -eq [System.Windows.Forms.DialogResult]::OK) {
             $pickerForm.Tag = [PSCustomObject]@{
-                Kind  = 'Path'
-                Value = [string]$dialog.SelectedPath
+                Kind       = 'Path'
+                Value      = [string]$dialog.SelectedPath
+                ActionType = 'folder'
             }
             $pickerForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
             $pickerForm.Close()
@@ -292,7 +295,7 @@ try {
         $pickerForm.Dispose()
 
         if ([string]$selection.Kind -eq 'Path') {
-            Write-PathResult ([string]$selection.Value)
+            Write-PathResult ([string]$selection.Value) ([string]$selection.ActionType)
             return
         }
 

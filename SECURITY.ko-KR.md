@@ -10,7 +10,7 @@
 
 릴리스 노트에는 배포되는 각 ZIP 및 RMSKIN asset의 정확한 `SHA256 <hash> <asset>` 항목을 게시합니다. 공개 updater feed는 해당 릴리스 노트 항목과 GitHub release asset의 `sha256:` digest가 모두 존재하고 서로 일치할 때만 Korea 또는 Global updater ZIP의 hash를 게시합니다.
 
-Checksum 검증 updater를 포함한 첫 릴리스부터 네트워크 기반 update와 현재 버전 reset은 검증 실패 시 안전하게 중단됩니다.
+v1.4.1부터 네트워크 기반 update와 현재 버전 reset은 검증 실패 시 안전하게 중단됩니다.
 
 - Repository, variant, 정확한 asset 이름과 SHA-256은 동일한 검증 metadata에서 가져와야 합니다.
 - 다운로드한 ZIP은 staging 직후와 압축 해제 직전에 다시 검사합니다.

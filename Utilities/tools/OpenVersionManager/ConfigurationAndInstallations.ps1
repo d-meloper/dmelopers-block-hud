@@ -195,7 +195,7 @@ function ConvertFrom-VersionManagerBadgePayload {
     $schemaVersion = Get-ObjectPropertyValue -Object $payload -Name 'SchemaVersion' -DefaultValue $null
     if ($null -eq $payload -or
         (-not ($schemaVersion -is [int]) -and -not ($schemaVersion -is [long])) -or
-        [long]$schemaVersion -lt 2) {
+        [long]$schemaVersion -lt 3) {
         throw (New-UpdateOperationException -ErrorCode 'badge-feed-schema' -Message 'The badge feed schema is not supported.')
     }
 
@@ -218,6 +218,7 @@ function ConvertFrom-VersionManagerBadgePayload {
             $releaseField = 'LatestReleaseKorea'
             $releaseNameField = 'LatestReleaseNameKorea'
             $assetField = 'LatestAssetNameKorea'
+            $sha256Field = 'LatestAssetSha256Korea'
             $publishedField = 'LatestPublishedAtUtcKorea'
             $expectedAssetName = 'DMelopers-Block-HUD_Korea.zip'
         }
@@ -226,6 +227,7 @@ function ConvertFrom-VersionManagerBadgePayload {
             $releaseField = 'LatestReleaseGlobal'
             $releaseNameField = 'LatestReleaseNameGlobal'
             $assetField = 'LatestAssetNameGlobal'
+            $sha256Field = 'LatestAssetSha256Global'
             $publishedField = 'LatestPublishedAtUtcGlobal'
             $expectedAssetName = 'DMelopers-Block-HUD_Global.zip'
         }
@@ -258,6 +260,11 @@ function ConvertFrom-VersionManagerBadgePayload {
             throw (New-UpdateOperationException -ErrorCode 'badge-feed-asset' -Message 'The badge feed asset did not match the active release variant.')
         }
     }
+    $assetSha256 = Get-VersionManagerBadgeRequiredString -Payload $payload -Name $sha256Field
+    if ($assetSha256 -notmatch '^[0-9A-Fa-f]{64}$') {
+        throw (New-UpdateOperationException -ErrorCode 'badge-feed-checksum' -Message 'The badge feed asset SHA-256 was malformed.')
+    }
+    $assetSha256 = $assetSha256.ToUpperInvariant()
     $publishedAtUtc = ''
     $publishedValue = Get-ObjectPropertyValue -Object $payload -Name $publishedField -DefaultValue $null
     if ($publishedValue -is [string] -and (Test-VersionManagerBadgeTimestamp -Value ([string]$publishedValue))) {
@@ -277,6 +284,7 @@ function ConvertFrom-VersionManagerBadgePayload {
         ReleaseName = $releaseName
         ReleaseUrl = $releaseUrl
         AssetName = $assetName
+        AssetSha256 = $assetSha256
         AssetUrl = $assetUrl
         PublishedAtUtc = $publishedAtUtc
     }
@@ -333,6 +341,123 @@ function Invoke-VersionManagerBadgeRequest {
         if ($null -ne $response) {
             $response.Dispose()
         }
+        $client.Dispose()
+        $handler.Dispose()
+    }
+}
+
+function ConvertFrom-VersionManagerReleaseAssetIntegrityPayload {
+    param(
+        [Parameter(Mandatory = $true)][string]$RawPayload,
+        [Parameter(Mandatory = $true)][string]$RepositorySlug,
+        [Parameter(Mandatory = $true)][string]$TagName,
+        [Parameter(Mandatory = $true)][string]$AssetName
+    )
+
+    try {
+        $release = $RawPayload | ConvertFrom-Json
+    }
+    catch {
+        throw (New-UpdateOperationException -ErrorCode 'release-integrity-format' -Message 'The GitHub release metadata was not valid JSON.')
+    }
+    if ($null -eq $release -or [bool]$release.draft -or [bool]$release.prerelease -or
+        -not [string]::Equals(([string]$release.tag_name).Trim(), $TagName, [System.StringComparison]::Ordinal)) {
+        throw (New-UpdateOperationException -ErrorCode 'release-integrity-identity' -Message 'The GitHub release metadata did not match the requested stable release.')
+    }
+
+    $assets = @($release.assets | Where-Object { [string]$_.name -ceq $AssetName })
+    if ($assets.Count -ne 1) {
+        throw (New-UpdateOperationException -ErrorCode 'release-integrity-asset' -Message 'The GitHub release must contain exactly one matching ZIP asset.')
+    }
+    $digest = [string]$assets[0].digest
+    if ($digest -notmatch '^sha256:(?<hash>[0-9A-Fa-f]{64})$') {
+        throw (New-UpdateOperationException -ErrorCode 'release-integrity-digest' -Message 'The GitHub release asset did not expose a valid SHA-256 digest.')
+    }
+    $assetSha256 = $Matches['hash'].ToUpperInvariant()
+
+    $checksumPattern = '(?im)^SHA256[\t ]+(?<hash>[0-9A-Fa-f]{64})[\t ]+' + [Regex]::Escape($AssetName) + '[\t ]*\r?$'
+    $checksumMatches = [Regex]::Matches([string]$release.body, $checksumPattern)
+    if ($checksumMatches.Count -ne 1) {
+        throw (New-UpdateOperationException -ErrorCode 'release-integrity-checksum' -Message 'The release notes did not contain exactly one checksum for the requested ZIP asset.')
+    }
+    $publishedSha256 = $checksumMatches[0].Groups['hash'].Value.ToUpperInvariant()
+    if (-not [string]::Equals($publishedSha256, $assetSha256, [System.StringComparison]::Ordinal)) {
+        throw (New-UpdateOperationException -ErrorCode 'release-integrity-mismatch' -Message 'The release-note checksum did not match the GitHub asset digest.')
+    }
+
+    $expectedUrl = 'https://github.com/{0}/releases/download/{1}/{2}' -f `
+        $RepositorySlug, [uri]::EscapeDataString($TagName), [uri]::EscapeDataString($AssetName)
+    if (-not [string]::Equals(([string]$assets[0].browser_download_url).Trim(), $expectedUrl, [System.StringComparison]::Ordinal)) {
+        throw (New-UpdateOperationException -ErrorCode 'release-integrity-url' -Message 'The GitHub release asset URL did not match the approved repository, tag, and asset.')
+    }
+    return [PSCustomObject]@{
+        RepositorySlug = $RepositorySlug
+        Tag = $TagName
+        AssetName = $AssetName
+        AssetUrl = $expectedUrl
+        AssetSha256 = $assetSha256
+    }
+}
+
+function Invoke-VersionManagerReleaseAssetIntegrityRequest {
+    param(
+        [Parameter(Mandatory = $true)]$Config,
+        [Parameter(Mandatory = $true)][string]$TagName,
+        [Parameter(Mandatory = $true)][string]$AssetName,
+        [ValidateRange(1, 60)][int]$TimeoutSeconds = 15
+    )
+
+    $profile = Get-VersionManagerBadgeProfile -Config $Config
+    if ($TagName -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+        throw (New-UpdateOperationException -ErrorCode 'release-integrity-version' -Message 'The requested release tag was not a stable semantic version.')
+    }
+    $expectedAssetName = Get-BlockHudFixedUpdateZipAssetName -ReleaseVariant ([string]$Config.ReleaseVariant) -LanguageCode ([string]$Config.LanguageCode)
+    if (-not [string]::Equals($AssetName, $expectedAssetName, [System.StringComparison]::Ordinal)) {
+        throw (New-UpdateOperationException -ErrorCode 'release-integrity-asset' -Message 'The requested release asset did not match the configured release variant.')
+    }
+
+    $apiUrl = 'https://api.github.com/repos/{0}/releases/tags/{1}' -f $profile.RepositorySlug, [uri]::EscapeDataString($TagName)
+    Add-Type -AssemblyName System.Net.Http
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    $handler.UseCookies = $false
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    $client.Timeout = [timespan]::FromSeconds($TimeoutSeconds)
+    $request = $null
+    $response = $null
+    try {
+        $request = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Get, $apiUrl)
+        [void]$request.Headers.TryAddWithoutValidation('Accept', 'application/vnd.github+json')
+        [void]$request.Headers.TryAddWithoutValidation('X-GitHub-Api-Version', '2022-11-28')
+        [void]$request.Headers.TryAddWithoutValidation('User-Agent', 'DMeloper-Block-HUD-Version-Manager')
+        $requestTask = $client.SendAsync($request)
+        while (-not $requestTask.IsCompleted) {
+            if ($script:VersionManagerWindowClosing) {
+                throw (New-UpdateOperationException -ErrorCode 'release-integrity-canceled' -Message 'The release integrity request was canceled because the Skin manager is closing.')
+            }
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 25
+        }
+        $response = $requestTask.GetAwaiter().GetResult()
+        if (-not $response.IsSuccessStatusCode) {
+            throw (New-UpdateOperationException -ErrorCode ('update-http-' + [int]$response.StatusCode) -Message ("The release integrity request failed with HTTP {0}." -f [int]$response.StatusCode))
+        }
+        $bodyTask = $response.Content.ReadAsStringAsync()
+        while (-not $bodyTask.IsCompleted) {
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 25
+        }
+        return (ConvertFrom-VersionManagerReleaseAssetIntegrityPayload `
+            -RawPayload $bodyTask.GetAwaiter().GetResult() `
+            -RepositorySlug ([string]$profile.RepositorySlug) `
+            -TagName $TagName `
+            -AssetName $AssetName)
+    }
+    catch [System.Threading.Tasks.TaskCanceledException] {
+        throw (New-UpdateOperationException -ErrorCode 'update-network-timeout' -Message 'The release integrity request exceeded its deadline.')
+    }
+    finally {
+        if ($null -ne $request) { $request.Dispose() }
+        if ($null -ne $response) { $response.Dispose() }
         $client.Dispose()
         $handler.Dispose()
     }

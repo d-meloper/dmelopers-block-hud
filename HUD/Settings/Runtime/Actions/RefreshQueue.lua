@@ -6,6 +6,31 @@ return function(app)
     local shallowCopy = app.shallowCopy
     local logNotice = app.logNotice
     local setVariable = app.setVariable
+    local HUD_MIRROR_TARGETS = {
+        Hotbar = true,
+        IndicatorHeart = true,
+        IndicatorArmor = true,
+        IndicatorFood = true,
+        IndicatorAir = true,
+        IndicatorExp = true,
+        Clock = true,
+        ClockSprite = true,
+    }
+    local function fanoutHudMirrorTarget(targetName)
+        if methods.normalizeToggleValue(SKIN:GetVariable('EnableHudMirrorMode', '0')) ~= '1' then
+            return false
+        end
+        if HUD_MIRROR_TARGETS[targetName] and state.rootConfig ~= '' then
+            SKIN:Bang(
+                '!CommandMeasure',
+                'MeasureHudMirrorController',
+                "Fanout('" .. targetName .. "','RefreshView')",
+                state.rootConfig .. '\\HUD\\Mirror\\Controller'
+            )
+            return true
+        end
+        return false
+    end
     local FULL_REFRESH_BATCHES = {
 
 
@@ -62,7 +87,7 @@ return function(app)
 
 
 
-    local function refreshTarget(targetName, forceRefresh)
+    local function refreshTarget(targetName, options)
 
 
 
@@ -132,7 +157,7 @@ return function(app)
 
 
 
-        if not isRefreshable and forceRefresh ~= true then
+        if not isRefreshable and not (options and options.forceRefresh == true) then
 
 
 
@@ -196,7 +221,11 @@ return function(app)
 
 
 
+        if targetName == 'Jukebox' and options and options.waitForJukeboxReady == true then
+            methods.BeginJukeboxSettingsApply('ready')
+        end
         SKIN:Bang('!Refresh', configPath, target.file)
+        fanoutHudMirrorTarget(targetName)
 
 
 
@@ -236,7 +265,7 @@ return function(app)
 
 
 
-            refreshTarget(targetName, options and options.forceRefresh == true)
+            refreshTarget(targetName, options)
 
 
 
@@ -293,6 +322,7 @@ return function(app)
             loadingText = trim(resolved.loadingText or ''),
             delayTicks = math.max(0, tonumber(resolved.delayTicks) or 0),
             forceRefresh = resolved.forceRefresh == true,
+            waitForJukeboxReady = resolved.waitForJukeboxReady == true,
 
         }
 
@@ -340,6 +370,10 @@ return function(app)
 
             pendingOptions.forceRefresh = true
 
+        end
+
+        if existingOptions.waitForJukeboxReady == true then
+            pendingOptions.waitForJukeboxReady = true
         end
 
         if pendingOptions.loadingText == '' then
@@ -437,10 +471,10 @@ return function(app)
 
 
         if added then
-            if pendingOptions.loadingText ~= '' then
+            if pendingOptions.loadingText ~= '' and not methods.IsJukeboxSettingsApplyPending() then
                 methods.setLoadingVisible(true, pendingOptions.loadingText)
             end
-            if pendingOptions.includeSettings == true or pendingOptions.loadingText ~= '' then
+            if (pendingOptions.includeSettings == true or pendingOptions.loadingText ~= '') and not methods.IsJukeboxSettingsApplyPending() then
                 methods.renderActivePage()
             end
 
@@ -593,8 +627,16 @@ return function(app)
 
     end
 
+    local REFRESH_APP_DELAY_MS = 16
+
+    function methods.ScheduleRefreshApp()
+        -- Let the active CommandMeasure Lua call unwind before RefreshApp rebuilds its script state.
+        SKIN:Bang('[!Delay ' .. tostring(REFRESH_APP_DELAY_MS) .. '][!RefreshApp]')
+        return true
+    end
+
     function methods.RefreshSkin()
-        SKIN:Bang('!RefreshApp')
+        methods.ScheduleRefreshApp()
     end
 
 
@@ -646,13 +688,13 @@ return function(app)
 
             methods.clearPendingRefreshState()
 
-            if pendingOptions.loadingText ~= '' then
+            if pendingOptions.loadingText ~= '' and not methods.IsJukeboxSettingsApplyPending() then
 
                 methods.setLoadingVisible(false)
 
             end
 
-            if pendingOptions.includeSettings == true or pendingOptions.loadingText ~= '' then
+            if (pendingOptions.includeSettings == true or pendingOptions.loadingText ~= '') and not methods.IsJukeboxSettingsApplyPending() then
 
                 methods.renderActivePage()
 
@@ -718,13 +760,13 @@ return function(app)
 
             methods.clearPendingRefreshState()
 
-            if pendingOptions.loadingText ~= '' then
+            if pendingOptions.loadingText ~= '' and not methods.IsJukeboxSettingsApplyPending() then
 
                 methods.setLoadingVisible(false)
 
             end
 
-            if pendingOptions.includeSettings == true or pendingOptions.loadingText ~= '' then
+            if (pendingOptions.includeSettings == true or pendingOptions.loadingText ~= '') and not methods.IsJukeboxSettingsApplyPending() then
 
                 methods.renderActivePage()
 

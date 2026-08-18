@@ -51,8 +51,8 @@ return function(app)
             iconText = 'X',
             bgColor = '192,72,72,255',
             textColor = '255,255,255,255',
-            tooltipKey = 'Settings_Notice_VersionStatus_Offline',
-            tooltipFallback = 'The internet connection is unavailable.',
+            tooltipKey = 'Settings_Notice_VersionStatus_OfflineRetry',
+            tooltipFallback = 'The latest version could not be checked. Click to try again.',
         },
     }
 
@@ -112,6 +112,7 @@ return function(app)
             repositorySlug = readCacheVariable('VersionManagerCacheRepositorySlug'),
             releaseVariant = readCacheVariable('VersionManagerCacheReleaseVariant'),
             assetName = readCacheVariable('VersionManagerCacheAssetName'),
+            assetSha256 = readCacheVariable('VersionManagerCacheAssetSha256'),
             status = readCacheVariable('VersionManagerCacheStatus'),
             errorCode = string.lower(readCacheVariable('VersionManagerCacheErrorCode')),
             failureHint = string.lower(readCacheVariable('VersionManagerCacheFailureHint')),
@@ -373,11 +374,26 @@ return function(app)
     end
 
     function methods.HandleVersionBadgeFeedError(kind)
-        return ensureVersionBadgeController():CompleteError(kind)
+        local completed = ensureVersionBadgeController():CompleteError(kind)
+        if completed and trim(kind):lower() == 'network' then
+            versionNoticeHelper():QueueConfirmationByKeys({
+                titleKey = 'Loc_Settings_Notice_VersionRecovery_Title',
+                messageKey = 'Loc_Settings_Notice_VersionRecovery_Message',
+                primaryKey = 'Loc_Settings_Notice_VersionRecovery_Restart',
+                secondaryKey = 'Loc_Common_Close',
+                primaryCallback = 'RestartRainmeterForVersionRecovery',
+            })
+        end
+        return completed
     end
 
     function methods.OpenPendingVersionNotice()
         return versionNoticeHelper():OpenPending()
+    end
+
+    function methods.RestartRainmeterForVersionRecovery()
+        SKIN:Bang('["#PROGRAMPATH#RestartRainmeter.exe"]')
+        return true
     end
 
     function methods.OpenUpdateReleaseNotes()
@@ -395,7 +411,8 @@ return function(app)
             SKIN:GetVariable('UpdateGithubRepo', ''),
             readCacheVariable('VersionManagerCacheRepositorySlug'),
             readCacheVariable('VersionManagerCacheReleaseVariant'),
-            readCacheVariable('VersionManagerCacheAssetName'))
+            readCacheVariable('VersionManagerCacheAssetName'),
+            readCacheVariable('VersionManagerCacheAssetSha256'))
     end
 
     function methods.OpenPendingLatestUpdate()

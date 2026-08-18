@@ -44,3 +44,5 @@ This skin is an unofficial desktop customization project inspired by Minecraft-s
 This project is not affiliated with, endorsed by, or sponsored by Mojang Studios or Microsoft. Minecraft and related trademarks, names, images, UI concepts, and copyrights belong to their respective owners.
 
 The included item images are intentionally modified and are not distributed as original Minecraft assets. Users are responsible for ensuring they have the right to use any replacement assets they apply manually.
+
+The default Inventory player texture was supplied by the project owner as a brightness- and saturation-modified asset. Only its derived cursor-facing atlas and static render are included in distributions. These player assets are not relicensed as original resources under this project's MIT License; Minecraft-related rights remain with Mojang Studios and Microsoft.

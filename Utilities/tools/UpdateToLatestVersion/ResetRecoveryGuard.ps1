@@ -100,6 +100,89 @@ function Remove-GuardTempRootBestEffort {
     }
 }
 
+function Get-GuardRainmeterExecutablePath {
+    $rainmeter = Get-Process -Name 'Rainmeter' -ErrorAction SilentlyContinue |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_.Path) } |
+        Select-Object -First 1
+    if ($null -eq $rainmeter -or -not (Test-Path -LiteralPath $rainmeter.Path -PathType Leaf)) {
+        return ''
+    }
+    return [string]$rainmeter.Path
+}
+
+function Get-GuardRainmeterIniPath {
+    foreach ($candidate in @(
+        (Join-Path $env:APPDATA 'Rainmeter\Rainmeter.ini'),
+        (Join-Path $env:LOCALAPPDATA 'Rainmeter\Rainmeter.ini')
+    )) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return [System.IO.Path]::GetFullPath($candidate)
+        }
+    }
+    return ''
+}
+
+function Read-GuardTextFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    [byte[]]$bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
+        return [System.Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
+    }
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        return [System.Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3)
+    }
+    return [System.Text.Encoding]::UTF8.GetString($bytes)
+}
+
+function Get-GuardCurrentRootActiveConfigs {
+    $rainmeterIniPath = Get-GuardRainmeterIniPath
+    if ([string]::IsNullOrWhiteSpace($rainmeterIniPath)) {
+        return [PSCustomObject]@{ Available = $false; Configs = @() }
+    }
+    $rootConfigName = [System.IO.Path]::GetFileName($script:ResolvedCurrentRoot)
+    $prefix = $rootConfigName + '\'
+    $currentSection = ''
+    $active = New-Object System.Collections.Generic.List[string]
+    foreach ($rawLine in ((Read-GuardTextFile -Path $rainmeterIniPath) -split "`r?`n")) {
+        $trimmed = ([string]$rawLine).Trim()
+        if ($trimmed -match '^\[(.+)\]$') {
+            $currentSection = [string]$matches[1]
+            continue
+        }
+        if ($trimmed -match '^Active\s*=\s*[1-9][0-9]*\s*$' -and
+            ([string]::Equals($currentSection, $rootConfigName, [System.StringComparison]::OrdinalIgnoreCase) -or
+             $currentSection.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase))) {
+            [void]$active.Add($currentSection)
+        }
+    }
+    return [PSCustomObject]@{ Available = $true; Configs = @($active | Sort-Object -Unique) }
+}
+
+function Wait-GuardCurrentRootQuiescent {
+    $rainmeterPath = Get-GuardRainmeterExecutablePath
+    if ([string]::IsNullOrWhiteSpace($rainmeterPath)) {
+        return $true
+    }
+    $activeResult = Get-GuardCurrentRootActiveConfigs
+    if (-not [bool]$activeResult.Available) {
+        return $false
+    }
+    $active = @($activeResult.Configs)
+    foreach ($configName in $active) {
+        & $rainmeterPath '!DeactivateConfig' ([string]$configName) | Out-Null
+    }
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $remaining = Get-GuardCurrentRootActiveConfigs
+        if ([bool]$remaining.Available -and @($remaining.Configs).Count -eq 0) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    return $false
+}
+
 function Restore-OriginalRoot {
     if (-not (Test-Path -LiteralPath $script:ResolvedRollbackRoot -PathType Container)) {
         return $false
@@ -182,6 +265,17 @@ try {
     while ($true) {
         $phase = Read-RecoveryPhase
         if ($phase -eq 'Committed') {
+            if (Test-OriginalParentAlive) {
+                Start-Sleep -Milliseconds 250
+                continue
+            }
+            Remove-GuardTempRootBestEffort -Path (Split-Path -Parent $script:ResolvedRollbackRoot)
+            if (Test-Path -LiteralPath (Split-Path -Parent $script:ResolvedRollbackRoot)) {
+                Start-Sleep -Milliseconds 500
+                continue
+            }
+            Remove-GuardTempRootBestEffort -Path $script:ResolvedStageParentRoot
+            Remove-GuardTempRootBestEffort -Path $script:ResolvedExtractRoot
             Remove-GuardTempRootBestEffort -Path $script:ResolvedJournalRoot
             exit 0
         }
@@ -192,17 +286,12 @@ try {
             Remove-GuardTempRootBestEffort -Path $script:ResolvedJournalRoot
             exit 0
         }
-        if ($phase -eq 'CleanupPending') {
-            Remove-GuardTempRootBestEffort -Path (Split-Path -Parent $script:ResolvedRollbackRoot)
-            if (-not (Test-Path -LiteralPath (Split-Path -Parent $script:ResolvedRollbackRoot))) {
-                Remove-GuardTempRootBestEffort -Path $script:ResolvedStageParentRoot
-                Remove-GuardTempRootBestEffort -Path $script:ResolvedExtractRoot
-                Remove-GuardTempRootBestEffort -Path $script:ResolvedJournalRoot
-                exit 0
-            }
-        }
         if ($phase -eq 'RecoveryPending') {
             try {
+                if (-not (Wait-GuardCurrentRootQuiescent)) {
+                    Start-Sleep -Milliseconds 500
+                    continue
+                }
                 $restoredOriginalRoot = Restore-OriginalRoot
                 if ($restoredOriginalRoot) {
                     Invoke-PostRestoreRefreshBestEffort
@@ -220,16 +309,17 @@ try {
         }
 
         if (-not (Test-OriginalParentAlive)) {
-            if ($phase -eq 'Activated' -or $phase -eq 'CleanupPending') {
-                Remove-GuardTempRootBestEffort -Path (Split-Path -Parent $script:ResolvedRollbackRoot)
-            }
-            else {
+            if ($phase -ne 'Committed' -and (Test-Path -LiteralPath $script:ResolvedRollbackRoot -PathType Container)) {
+                if (-not (Wait-GuardCurrentRootQuiescent)) {
+                    Start-Sleep -Milliseconds 500
+                    continue
+                }
                 $restoredOriginalRoot = Restore-OriginalRoot
                 if ($restoredOriginalRoot) {
                     Invoke-PostRestoreRefreshBestEffort
                 }
-                Remove-GuardTempRootBestEffort -Path (Split-Path -Parent $script:ResolvedRollbackRoot)
             }
+            Remove-GuardTempRootBestEffort -Path (Split-Path -Parent $script:ResolvedRollbackRoot)
             Remove-GuardTempRootBestEffort -Path $script:ResolvedStageParentRoot
             Remove-GuardTempRootBestEffort -Path $script:ResolvedExtractRoot
             Remove-GuardTempRootBestEffort -Path $script:ResolvedJournalRoot

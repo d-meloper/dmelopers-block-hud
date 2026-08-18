@@ -55,11 +55,17 @@ return function(app)
                 local rowLabelText = methods.fieldLabelText(field)
                 setVariable('SettingsRow' .. rowIndex .. '_LabelText', rowLabelText)
 
-                setVariable('SettingsRow' .. rowIndex .. '_Tooltip', methods.tooltipTextForField(field))
+                local rowTooltip = methods.tooltipTextForField(field)
+                setVariable('SettingsRow' .. rowIndex .. '_Tooltip', rowTooltip)
+                setVariable('SettingsRow' .. rowIndex .. '_ActionTooltip', rowTooltip)
 
-                if field.controlType == 'text' then
+                if field.controlType == 'text' or field.controlType == 'multiDropdown' then
 
-                    methods.configureTextRow(rowIndex, field)
+                    methods.configureTextRow(rowIndex, field, isFieldDisabled)
+
+                elseif field.controlType == 'hudMirrorStatus' and methods.configureHudMirrorStatusRow then
+
+                    methods.configureHudMirrorStatusRow(rowIndex, field)
 
                 elseif field.controlType == 'readonly' then
 
@@ -75,11 +81,11 @@ return function(app)
 
                 elseif field.controlType == 'stepper' then
 
-                    methods.configureStepperRow(rowIndex, field)
+                    methods.configureStepperRow(rowIndex, field, isFieldDisabled)
 
                 elseif field.controlType == 'action' then
 
-                    methods.configureActionRow(rowIndex, field)
+                    methods.configureActionRow(rowIndex, field, isFieldDisabled)
 
                 end
 
@@ -95,6 +101,14 @@ return function(app)
     function methods.renderActivePage()
 
         local tab = methods.activeTab()
+        local isHudMirrorTab = state.contentMode ~= true and tab and tab.id == 'hudMirror'
+        if isHudMirrorTab and state.hudMirrorTabEntered ~= true and methods.PrepareHudMirrorTab then
+            state.hudMirrorTabEntered = true
+            methods.PrepareHudMirrorTab()
+            tab = methods.activeTab()
+        elseif not isHudMirrorTab then
+            state.hudMirrorTabEntered = false
+        end
         methods.applyActiveModeLayout()
 
         methods.updateTopActionColors()
@@ -105,7 +119,14 @@ return function(app)
 
         methods.renderRows(tab)
 
-        if state.activeDropdownFieldKey and not state.currentVisibleRows[state.activeDropdownFieldKey] then
+        if methods.syncMinecraftSkinPlayerFolderSizeView then
+            methods.syncMinecraftSkinPlayerFolderSizeView()
+        end
+
+        local activeDropdownField = methods.getField(state.activeDropdownFieldKey)
+        if state.activeDropdownFieldKey
+            and (not state.currentVisibleRows[state.activeDropdownFieldKey]
+                or (activeDropdownField and methods.isFieldDisabled(activeDropdownField))) then
 
             methods.closeDropdownInternal()
 
@@ -119,7 +140,7 @@ return function(app)
 
         end
 
-        methods.updateHistoryButtons()
+        methods.updateHistoryButtons({ skipTopActionTextFit = true })
 
         methods.refreshVisuals()
 

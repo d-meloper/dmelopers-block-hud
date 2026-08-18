@@ -267,6 +267,7 @@ function Test-ConfigFileExists {
 
 function Get-CurrentRootDeactivateSpecs {
     @(
+        [PSCustomObject]@{ RelativePath = 'HUD\Mirror\Controller'; FileName = 'Controller.ini' }
         [PSCustomObject]@{ RelativePath = 'Bootstrap'; FileName = 'ZPosBootstrap.ini' }
         [PSCustomObject]@{ RelativePath = 'Hotbar'; FileName = 'Hotbar.ini' }
         [PSCustomObject]@{ RelativePath = 'Clock'; FileName = 'Clock.ini' }

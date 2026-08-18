@@ -142,6 +142,17 @@ local function normalizeConfirmBeforeRun(value)
     return EnsureEditorValueHelpers().normalizeConfirmBeforeRun(value)
 end
 
+function normalizeActionType(value)
+    return trim(value):lower() == 'folder' and 'folder' or ''
+end
+
+function normalizeFolderCountSync(value, actionType)
+    if normalizeActionType(actionType) ~= 'folder' then
+        return '0'
+    end
+    return trim(value) == '1' and '1' or '0'
+end
+
 
 
 local function hasSkinGetVariable()
@@ -287,6 +298,10 @@ local RESERVED_SLOT = {
     Qty = 0,
 
     ConfirmBeforeRun = '0',
+
+    ActionType = '',
+
+    FolderCountSync = '0',
 
 
 
@@ -1141,6 +1156,8 @@ local function setImageKey(resolved)
     if type(SyncEditorPixelationState) == 'function' then
         SyncEditorPixelationState(imageKey)
     end
+
+    SKIN:Bang('!CommandMeasure', 'MeasureItemImageAnimator', 'RefreshBindings()')
 
 
 

@@ -164,6 +164,9 @@ local function buildFailureUserMessage(fields)
     local decodeMethod = trim(fields.decodeMethod)
     local errorDetail = trim(fields.errorDetail)
 
+    if code == 'GIF_PIXELATION_UNSUPPORTED' then
+        return message ~= '' and message or 'GIF images do not support pixelation.'
+    end
     if code == 'SOURCE_MISSING' then
         return 'Missing source image file' .. pathSuffix(sourcePath)
     end
@@ -510,6 +513,8 @@ function Pixelator:handleComplete(output)
     local sourceFormat = trim(values.DMEL_SOURCE_FORMAT)
     local decodeMethod = trim(values.DMEL_DECODE_METHOD)
     local itemImageAssets = trim(values.DMEL_ITEMIMAGEASSETS)
+    local itemImageAtlasProfiles = trim(values.DMEL_ITEMIMAGEATLASPROFILES)
+    local itemImageAtlasProfilesPresent = values.DMEL_ITEMIMAGEATLASPROFILES ~= nil
 
     self.pendingToken = ''
     self.pendingSignature = ''
@@ -536,6 +541,8 @@ function Pixelator:handleComplete(output)
             sourceFormat = sourceFormat,
             decodeMethod = decodeMethod,
             itemImageAssets = itemImageAssets,
+            itemImageAtlasProfiles = itemImageAtlasProfiles,
+            itemImageAtlasProfilesPresent = itemImageAtlasProfilesPresent,
             queued = self:startQueued(),
         }
     end
@@ -567,6 +574,8 @@ function Pixelator:handleComplete(output)
         sourceFormat = sourceFormat,
         decodeMethod = decodeMethod,
         itemImageAssets = itemImageAssets,
+        itemImageAtlasProfiles = itemImageAtlasProfiles,
+        itemImageAtlasProfilesPresent = itemImageAtlasProfilesPresent,
         queued = self:startQueued(),
     }
 end

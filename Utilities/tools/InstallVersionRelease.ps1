@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory = $true)][string]$CurrentTargetRoot,
     [string]$PackagePath,
     [string]$PackageUrl,
+    [string]$ExpectedPackageSha256 = '',
     [string]$ExpectedVersion,
     [string]$ExpectedReleaseVariant,
     [string]$SelectedTargetRoot,
@@ -665,6 +666,23 @@ function Get-ReleasePackageIdentity {
     }
 }
 
+function Resolve-ExpectedPackageSha256 {
+    $required = -not [string]::IsNullOrWhiteSpace($PackageUrl) -or
+        -not [string]::IsNullOrWhiteSpace($LatestUpdateLaunchToken)
+    if ([string]::IsNullOrWhiteSpace($ExpectedPackageSha256)) {
+        if ($required) {
+            throw 'ExpectedPackageSha256 is required for a downloaded or latest-update release package.'
+        }
+        return ''
+    }
+
+    $normalized = $ExpectedPackageSha256.Trim().ToUpperInvariant()
+    if ($normalized -notmatch '^[0-9A-F]{64}$') {
+        throw 'ExpectedPackageSha256 must be a 64-character hexadecimal SHA-256 value.'
+    }
+    return $normalized
+}
+
 function Copy-PackageToDestination {
     param(
         [Parameter(Mandatory = $true)][string]$PackageRoot,
@@ -1226,13 +1244,24 @@ function Invoke-PackageInstall {
         [Parameter(Mandatory = $true)][string]$SkinsRoot
     )
 
+    $expectedPackageIdentity = Resolve-ExpectedPackageSha256
     $resolvedPackagePath = Resolve-ReleasePackagePath -CurrentRoot $ResolvedCurrentRoot
     $packageIdentity = Get-ReleasePackageIdentity -Path $resolvedPackagePath
     if ($packageIdentity -notmatch '^[0-9a-f]{64}$') {
         throw 'Could not compute a valid SHA-256 identity for the release package.'
     }
+    $normalizedPackageIdentity = $packageIdentity.ToUpperInvariant()
+    if (-not [string]::IsNullOrWhiteSpace($expectedPackageIdentity) -and
+        -not [string]::Equals($normalizedPackageIdentity, $expectedPackageIdentity, [System.StringComparison]::Ordinal)) {
+        Write-Log ("Release package SHA-256 mismatch. expected={0} actual={1}" -f $expectedPackageIdentity, $normalizedPackageIdentity) 'ERROR'
+        if (-not [string]::IsNullOrWhiteSpace($PackageUrl) -and (Test-Path -LiteralPath $resolvedPackagePath -PathType Leaf)) {
+            Remove-Item -LiteralPath $resolvedPackagePath -Force -ErrorAction SilentlyContinue
+        }
+        throw 'The release package did not match its published SHA-256 checksum.'
+    }
     $extractRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("DMeloperReleaseExtract_{0}_{1}" -f $script:LogStamp, ([guid]::NewGuid().ToString('N')))
     $script:ExtractRoot = $extractRoot
+    Assert-BlockHudZipPackageSafeToExtract -PackagePath $resolvedPackagePath -ExtractRoot $extractRoot
     Ensure-Directory -Path $extractRoot
     Expand-Archive -LiteralPath $resolvedPackagePath -DestinationPath $extractRoot -Force
     $packageRoot = Resolve-PackageRoot -ExtractRoot $extractRoot
@@ -1259,7 +1288,10 @@ function Invoke-PackageInstall {
 
     Write-Log ("CurrentTargetRoot: {0}" -f $ResolvedCurrentRoot)
     Write-Log ("PackagePath: {0}" -f $resolvedPackagePath)
-    Write-Log ("PackageIdentity: {0}" -f $packageIdentity)
+    Write-Log ("PackageIdentity: {0}" -f $normalizedPackageIdentity)
+    if (-not [string]::IsNullOrWhiteSpace($expectedPackageIdentity)) {
+        Write-Log ("ExpectedPackageSha256: {0}" -f $expectedPackageIdentity)
+    }
     Write-Log ("PackageRoot: {0}" -f $packageRoot)
     Write-Log ("PackageVersion: {0}" -f [string]$packageMetadata.Version)
     Write-Log ("PackageReleaseVariant: {0}" -f $packageReleaseVariant)

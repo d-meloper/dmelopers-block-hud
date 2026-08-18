@@ -11,13 +11,15 @@ tabs = {
 
         { id = 'inventory', name = '인벤토리', fields = { 'inventoryItemSize', 'inventoryTooltipSize', 'inventoryBottomRow', 'minecraftSkinUsernameDraft', 'minecraftSkinModel', 'attachMinecraftSkinFile', 'hideSteve', 'hideUsageGuide', 'hideSkinFolderButton', 'hideEditButton', 'hideSettingsButton', 'inventoryEnabled', 'inventoryDraggable', 'inventoryDragSnap', 'inventoryRefreshPositionLock', 'resetInventorySettings', 'resetInventorySkinPositions' } },
 
-        { id = 'clock', name = '시계', fields = { 'clockType', 'clockSpriteSize', 'clock24Hour', 'clockHideMeridiem', 'clockTimeSize', 'clockDateSize', 'clockTextColor', 'clockTextGap', 'clockEnabled', 'clockDraggable', 'clockDragSnap', 'resetClockSettings', 'resetClockSkinPositions' } },
+        { id = 'clock', name = '시계', fields = { 'clockType', 'clockSpriteSize', 'clock24Hour', 'clockHideMeridiem', 'clockTimeSize', 'clockDateSize', 'clockTextGap', 'clockTextColor', 'clockTextWeight', 'clockTextBorderSize', 'clockTextBorderColor', 'clockTextShadowYOffset', 'clockTextShadowColor', 'clockTextShadowBlur', 'clockTextShadowOpacity', 'clockEnabled', 'clockDraggable', 'clockDragSnap', 'resetClockSettings', 'resetClockSkinPositions' } },
 
         { id = 'ui', name = 'UI', fields = { 'baseFont', 'settingsTheme', 'resetAllSkinPositions' } },
 
+        { id = 'hudMirror', name = '다중 모니터', fields = { 'refreshHudMirrorMonitors', 'hudMirrorReplicaDraggable', 'hudMirrorReplicaSnapEdges', 'hudMirrorUnavailableStatus' } },
+
     },
 contentTabs = {
-        { id = 'jukebox', name = 'Jukebox', labelVariable = 'Loc_Settings_Content_Jukebox', fields = { 'jukeboxEnabled', 'jukeboxHelp', 'jukeboxPlaybackSourceMode', 'jukebox2DMode', 'jukeboxDisableNoteAnimation', 'jukeboxDraggable', 'jukeboxDragSnap', 'resetJukeboxSettings', 'resetJukeboxSkinPositions' } },
+        { id = 'jukebox', name = 'Jukebox', labelVariable = 'Loc_Settings_Content_Jukebox', fields = { 'jukeboxEnabled', 'jukeboxHelp', 'jukeboxPlaybackSourceMode', 'jukebox2DMode', 'jukeboxDisableNoteAnimation', 'jukeboxAutoCloseExternalPlayPause', 'jukeboxDraggable', 'jukeboxDragSnap', 'resetJukeboxSettings', 'resetJukeboxSkinPositions' } },
         { id = 'herobrine', name = 'Herobrine', labelVariable = 'Loc_Settings_Content_Herobrine', fields = { 'herobrineEnabled', 'herobrineTotalAppearances', 'herobrineCaptures', 'herobrineVisibleSeconds', 'refreshHerobrineStats' } },
     },
 }

@@ -157,11 +157,19 @@ return function(app)
 
         if not changed then
 
+            if methods.flushHudMirrorPreferenceRefresh then
+                methods.flushHudMirrorPreferenceRefresh()
+            end
+
             return false
 
         end
 
         methods.refreshTargets(targets)
+
+        if methods.flushHudMirrorPreferenceRefresh then
+            methods.flushHudMirrorPreferenceRefresh()
+        end
 
         if not options.suppressHistory then
 
@@ -241,6 +249,12 @@ return function(app)
 
         options = options or {}
 
+        if field and field.externalState == true and options.allowExternalState ~= true then
+
+            return false
+
+        end
+
         local currentValue = methods.readFieldValue(field)
         if field and field.key == 'language' then
             value = methods.normalizeLanguageCode(value, currentValue)
@@ -249,14 +263,6 @@ return function(app)
         local previousResolved = methods.normalizeFieldValue(field, currentValue, currentValue)
 
         local resolved = methods.normalizeFieldValue(field, value, currentValue)
-
-        if field and field.key == 'startupAutoRun' then
-
-            resolved = methods.resolveStartupAutoRunState(resolved)
-
-            methods.persistStartupAutoRunCache(resolved)
-
-        end
 
         local selection = nil
 
@@ -299,6 +305,10 @@ return function(app)
             methods.syncModalBaseFont(resolved)
         end
         methods.syncSettingsTargetVariable(field, resolved)
+        methods.syncHudMirrorFieldVariable(field, resolved)
+        if methods.markHudMirrorPreferencesChanged then
+            methods.markHudMirrorPreferencesChanged(field, resolved)
+        end
         if field.key == 'minecraftSkinUsername' then
 
             local draftUsername = resolved
@@ -311,10 +321,6 @@ return function(app)
 
             methods.syncMinecraftSkinDraft(draftUsername)
 
-        end
-
-        if field.key == 'language' then
-            methods.syncActiveLocalization(resolved)
         end
 
         methods.syncInventoryRefreshPositionLockState(field, resolved)
@@ -485,6 +491,10 @@ return function(app)
 
             methods.refreshTargets(targetSet, refreshOptions)
 
+            if methods.flushHudMirrorPreferenceRefresh then
+                methods.flushHudMirrorPreferenceRefresh()
+            end
+
         end
 
     end
@@ -494,19 +504,31 @@ return function(app)
     function methods.restoreSnapshot(snapshot, options)
         options = options or {}
         local targets = {}
+        local restoredAtlasRequest = nil
+        local minecraftSkinModelBeforeRestore = methods.normalizeMinecraftSkinModelInput
+            and methods.normalizeMinecraftSkinModelInput(SKIN:GetVariable('MinecraftSkinModel', 'wide'))
+            or (string.lower(trim(SKIN:GetVariable('MinecraftSkinModel', 'wide'))) == 'slim' and 'slim' or 'wide')
         local skipFieldKeySet = {}
         for _, fieldKey in ipairs(options.skipFieldKeys or {}) do
             skipFieldKeySet[fieldKey] = true
         end
         local fieldKeys = options.fieldKeys or schema.trackedFieldKeys
         local restoreMinecraftSkinState = false
+        local restoredLanguage = nil
         for _, fieldKey in ipairs(fieldKeys) do
             local field = methods.getField(fieldKey)
             local desired = snapshot[fieldKey]
             if fieldKey == 'minecraftSkinUsername' then
                 restoreMinecraftSkinState = true
             end
-            if not skipFieldKeySet[fieldKey] and field and field.controlType ~= 'action' and desired ~= nil then
+            if not skipFieldKeySet[fieldKey] and field and field.externalState ~= true and field.controlType ~= 'action' and desired ~= nil then
+                if fieldKey == 'language' then
+                    local currentLanguage = methods.normalizeLanguageCode(methods.readFieldValue(field), methods.normalizeLanguageCode(nil, nil))
+                    local desiredLanguage = methods.normalizeLanguageCode(desired, currentLanguage)
+                    if currentLanguage ~= desiredLanguage then
+                        restoredLanguage = desiredLanguage
+                    end
+                end
                 methods.applyFieldValue(field, desired, { targetSet = targets })
             end
         end
@@ -518,26 +540,88 @@ return function(app)
                 allowStoredTexturePath = snapshotImagePathVerified,
             })
             local restoredImagePathVerified = restoredImagePath ~= '' and snapshotImagePathVerified
+            local restoredAtlasManaged = trim(snapshot.minecraftSkinAtlasManaged or '') == '1' or trim(snapshot.minecraftSkinAtlasManaged or '') == 'true'
+            local restoredAtlasPathVerified = restoredAtlasManaged
+                and (trim(snapshot.minecraftSkinAtlasPathVerified or '') == '1' or trim(snapshot.minecraftSkinAtlasPathVerified or '') == 'true')
+            local restoredAtlasPath = restoredAtlasPathVerified and trim(snapshot.minecraftSkinAtlasPath or '') or ''
+            restoredAtlasPathVerified = restoredAtlasPath ~= ''
+            local restoredModel = minecraftSkinModelBeforeRestore
+            if snapshot.minecraftSkinModel ~= nil then
+                restoredModel = methods.normalizeMinecraftSkinModelInput
+                    and methods.normalizeMinecraftSkinModelInput(snapshot.minecraftSkinModel)
+                    or (string.lower(trim(tostring(snapshot.minecraftSkinModel or ''))) == 'slim' and 'slim' or 'wide')
+            end
             local currentUsernameField = methods.getField('minecraftSkinUsername')
             local currentUsername = currentUsernameField and trim(methods.readFieldValue(currentUsernameField)) or ''
             local currentImagePath = trim(SKIN:GetVariable('MinecraftSkinImagePath', ''))
             local currentTexturePath = trim(SKIN:GetVariable('MinecraftSkinTexturePath', ''))
             local currentImagePathVerified = methods.isMinecraftSkinImagePathVerified(currentImagePath)
+            local currentAtlasPath = trim(SKIN:GetVariable('MinecraftSkinAtlasPath', ''))
+            local currentAtlasPathVerified = trim(SKIN:GetVariable('MinecraftSkinAtlasPathVerified', '0')) == '1'
+            local currentAtlasManaged = trim(SKIN:GetVariable('MinecraftSkinAtlasManaged', '0')) == '1'
             local sameUsername = restoredUsername == currentUsername
             local sameImagePath = (restoredImagePath == '' and currentImagePath == '')
                 or methods.sameNormalizedPath(currentImagePath, restoredImagePath)
             local sameTexturePath = (restoredTexturePath == '' and currentTexturePath == '')
                 or methods.sameNormalizedPath(currentTexturePath, restoredTexturePath)
-            if not (sameUsername and sameImagePath and sameTexturePath and currentImagePathVerified == restoredImagePathVerified) then
+            local sameModel = minecraftSkinModelBeforeRestore == restoredModel
+            local sameAtlasPath = (restoredAtlasPath == '' and currentAtlasPath == '')
+                or methods.sameNormalizedPath(currentAtlasPath, restoredAtlasPath)
+            if not (sameUsername and sameImagePath and sameTexturePath and currentImagePathVerified == restoredImagePathVerified
+                and sameModel and sameAtlasPath and currentAtlasPathVerified == restoredAtlasPathVerified
+                and currentAtlasManaged == restoredAtlasManaged) then
                 methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinImagePath', restoredImagePath)
                 methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinImagePathVerified', restoredImagePathVerified and '1' or '0')
                 methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinTexturePath', restoredTexturePath)
+                methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinAtlasPath', restoredAtlasPath)
+                methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinAtlasPathVerified', restoredAtlasPathVerified and '1' or '0')
+                methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinAtlasManaged', restoredAtlasManaged and '1' or '0')
                 if methods.syncInventoryPlayerSkinLiveState then
-                    methods.syncInventoryPlayerSkinLiveState(restoredUsername, restoredImagePath, targets, { verified = restoredImagePathVerified })
+                    methods.syncInventoryPlayerSkinLiveState(restoredUsername, restoredImagePath, targets, {
+                        verified = restoredImagePathVerified,
+                        texturePath = restoredTexturePath,
+                        model = restoredModel,
+                        atlasPath = restoredAtlasPath,
+                        atlasVerified = restoredAtlasPathVerified,
+                        atlasManaged = restoredAtlasManaged,
+                    })
                 end
             end
+            if restoredAtlasManaged and not restoredAtlasPathVerified and restoredTexturePath ~= '' and restoredImagePath ~= '' then
+                restoredAtlasRequest = {
+                    username = restoredUsername,
+                    imagePath = restoredImagePath,
+                    texturePath = restoredTexturePath,
+                    model = restoredModel,
+                    atlasRequired = '1',
+                }
+            end
         end
-        methods.refreshTargets(targets)
+        local languageRefreshDeferred = false
+        if restoredLanguage then
+            languageRefreshDeferred = methods.syncItemLabelsForLanguage(restoredLanguage, {
+                targetSet = targets,
+                refreshOptions = {
+                    includeSettings = true,
+                    loadingText = methods.languageSwitchLoadingText(restoredLanguage),
+                    delayTicks = 0,
+                },
+            }) == true
+        end
+        if not languageRefreshDeferred then
+            methods.refreshTargets(targets)
+        end
+
+        if methods.flushHudMirrorPreferenceRefresh then
+            methods.flushHudMirrorPreferenceRefresh()
+        end
+
+        if restoredAtlasRequest and methods.prepareMinecraftSkinAtlasState and methods.beginMinecraftSkinAtlasStage then
+            local atlasState = methods.prepareMinecraftSkinAtlasState(restoredAtlasRequest)
+            if atlasState.required then
+                methods.beginMinecraftSkinAtlasStage(atlasState)
+            end
+        end
 
         if not options.suppressRender then
 

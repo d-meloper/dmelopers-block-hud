@@ -3,23 +3,27 @@ JukeboxDiscSlotTextFit = nil
 
 function EnsureJukeboxDiscSlotTextFit()
     if JukeboxDiscSlotTextFit == nil then
-        JukeboxDiscSlotTextFit = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\LocalizationTextFit.lua')
+        local textFitModule = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\LocalizationTextFit.lua')
+        JukeboxDiscSlotTextFit = textFitModule.Create(SKIN, {
+            widthProbeMeterName = 'MeterJukeboxDiscSlotTextFitProbe',
+            wrapProbeMeterName = 'MeterJukeboxDiscSlotTextFitWrapProbe',
+        })
     end
     return JukeboxDiscSlotTextFit
 end
 
-function ApplyDiscSlotTextFit(meterName, text, baseFontSize, widthPx, minScale)
-    local helper = EnsureJukeboxDiscSlotTextFit()
-    if not helper or not helper.ApplyMeterTextFit then
-        return
+function ApplyDiscSlotTextFit(meterName, text, baseFontSize, widthPx, heightPx)
+    local fitter = EnsureJukeboxDiscSlotTextFit()
+    if not fitter then
+        return nil
     end
-    helper.ApplyMeterTextFit(SKIN, meterName, text, {
+    return fitter:Apply({
+        meterName = meterName,
+        text = text,
         baseFontSize = tonumber(baseFontSize) or 12,
         widthPx = tonumber(widthPx) or 0,
-        minScale = tonumber(minScale) or 0.60,
-        probeMeterName = 'MeterJukeboxDiscSlotTextFitProbe',
-        setText = false,
-        update = false,
+        heightPx = tonumber(heightPx) or 0,
+        policy = 'wrap4',
     })
 end
 
@@ -179,7 +183,7 @@ local function syncPageMeters()
         '#Loc_Common_OpenFolder#',
         m.fontSize,
         math.max(0, m.openFolderHitW - 8),
-        0.55
+        m.hitH
     )
     updateMeter('MeterJukeboxDiscSlotOpenFolderHit')
     updateMeter('MeterJukeboxDiscSlotOpenFolder')

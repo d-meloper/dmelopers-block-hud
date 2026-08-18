@@ -573,6 +573,7 @@ function Invoke-VersionReleaseInstall {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
         [string]$PackageUrl,
+        [string]$ExpectedPackageSha256 = '',
         [string]$ExpectedVersion,
         [string]$ExpectedReleaseVariant,
         [string]$SelectedTargetRoot,
@@ -594,7 +595,15 @@ function Invoke-VersionReleaseInstall {
         $passThruParameters['SelectedTargetRoot'] = $SelectedTargetRoot
     }
     else {
+        $normalizedExpectedSha256 = $ExpectedPackageSha256.Trim().ToUpperInvariant()
+        if ($normalizedExpectedSha256 -notmatch '^[0-9A-F]{64}$') {
+            throw 'A valid ExpectedPackageSha256 is required for a downloaded version install.'
+        }
+        if (-not (Test-OpenVersionManagerScriptSupportsParameter -ScriptPath $installScript -ParameterName 'ExpectedPackageSha256')) {
+            throw 'The version install backend does not support required release checksum verification.'
+        }
         $passThruParameters['PackageUrl'] = $PackageUrl
+        $passThruParameters['ExpectedPackageSha256'] = $normalizedExpectedSha256
         $passThruParameters['ExpectedVersion'] = $ExpectedVersion
         if ($AllowCompatibilityWarning) {
             $passThruParameters['AllowCompatibilityWarning'] = $true
@@ -676,7 +685,7 @@ function Invoke-VersionReleaseInstall {
         $arguments += @('-SelectedTargetRoot', $SelectedTargetRoot)
     }
     else {
-        $arguments += @('-PackageUrl', $PackageUrl, '-ExpectedVersion', $ExpectedVersion)
+        $arguments += @('-PackageUrl', $PackageUrl, '-ExpectedPackageSha256', $normalizedExpectedSha256, '-ExpectedVersion', $ExpectedVersion)
         if ($AllowCompatibilityWarning) {
             $arguments += '-AllowCompatibilityWarning'
             if (-not [string]::IsNullOrWhiteSpace($ExpectedRepairPlanId)) {
@@ -807,10 +816,73 @@ function ConvertTo-CurrentSkinResetResult {
     }
 }
 
+function ConvertTo-CurrentSkinResetUiResult {
+    param(
+        [AllowNull()][object[]]$InvocationOutput
+    )
+
+    $candidates = New-Object System.Collections.Generic.List[object]
+    foreach ($item in @($InvocationOutput)) {
+        if ($null -ne $item -and $null -ne $item.PSObject.Properties['Status']) {
+            $candidates.Add($item)
+        }
+    }
+
+    if ($candidates.Count -ne 1) {
+        return [PSCustomObject]@{
+            ExitCode = 1
+            Status = 'ERROR'
+            Message = ('Current-skin reset returned {0} manager result objects; exactly one is required.' -f $candidates.Count)
+            SourcePath = ''
+            LogPath = ''
+            Output = ''
+        }
+    }
+
+    $candidate = $candidates[0]
+    $status = ([string](Get-ObjectPropertyValue -Object $candidate -Name 'Status' -DefaultValue '')).Trim().ToUpperInvariant()
+    $message = [string](Get-ObjectPropertyValue -Object $candidate -Name 'Message' -DefaultValue '')
+    $sourcePath = [string](Get-ObjectPropertyValue -Object $candidate -Name 'SourcePath' -DefaultValue '')
+    $logPath = [string](Get-ObjectPropertyValue -Object $candidate -Name 'LogPath' -DefaultValue '')
+    $output = [string](Get-ObjectPropertyValue -Object $candidate -Name 'Output' -DefaultValue '')
+    $exitCode = 0
+    try {
+        $exitCode = [int](Get-ObjectPropertyValue -Object $candidate -Name 'ExitCode' -DefaultValue 0)
+    }
+    catch {
+        $exitCode = 1
+        $message = 'Current-skin reset returned an invalid manager exit code.'
+        $status = 'ERROR'
+    }
+
+    if ($status -notin @('OK', 'NOOP', 'WARN', 'ERROR')) {
+        $message = "Current-skin reset returned unsupported manager status '$status'."
+        $status = 'ERROR'
+    }
+    if (($status -eq 'OK' -or $status -eq 'NOOP') -and [string]::IsNullOrWhiteSpace($sourcePath)) {
+        $message = 'Current-skin reset reported success without a source path.'
+        $status = 'ERROR'
+    }
+    if (($status -eq 'OK' -or $status -eq 'NOOP' -or $status -eq 'WARN') -and [string]::IsNullOrWhiteSpace($logPath)) {
+        $message = 'Current-skin reset reported a result without a log path.'
+        $status = 'ERROR'
+    }
+
+    return [PSCustomObject]@{
+        ExitCode = $(if ($status -eq 'ERROR') { 1 } else { $exitCode })
+        Status = $status
+        Message = $message
+        SourcePath = $sourcePath
+        LogPath = $logPath
+        Output = $output
+    }
+}
+
 function Invoke-CurrentSkinReset {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
         [Parameter(Mandatory = $true)][string]$PackageUrl,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$ExpectedPackageSha256,
         [Parameter(Mandatory = $true)][string]$ExpectedVersion,
         [Parameter(Mandatory = $true)][ValidateSet('Korea', 'Global')][string]$ExpectedReleaseVariant,
         [AllowNull()][scriptblock]$OnStageChanged
@@ -820,6 +892,7 @@ function Invoke-CurrentSkinReset {
     if ($null -eq $stableVersion) {
         throw 'Current-skin reset requires a stable semantic ExpectedVersion.'
     }
+    $normalizedExpectedSha256 = $ExpectedPackageSha256.Trim().ToUpperInvariant()
     $currentVersionText = Get-SkinMetadataVersion -Root $Root
     $currentVersion = ConvertTo-VersionManagerStableComparableVersion -VersionText $currentVersionText
     if ($null -eq $currentVersion -or $currentVersion -ne $stableVersion) {
@@ -847,7 +920,7 @@ function Invoke-CurrentSkinReset {
     if (-not (Test-Path -LiteralPath $resetScript -PathType Leaf)) {
         throw 'Current-skin reset helper is missing.'
     }
-    foreach ($requiredParameter in @('CurrentTargetRoot', 'PackagePath', 'ExpectedVersion', 'ExpectedReleaseVariant', 'ResetCurrentVersion')) {
+    foreach ($requiredParameter in @('CurrentTargetRoot', 'PackagePath', 'ExpectedVersion', 'ExpectedReleaseVariant', 'ResetCurrentVersion', 'InheritedOperationLock')) {
         if (-not (Test-VersionManagerScriptParameter -ScriptPath $resetScript -ParameterName $requiredParameter)) {
             throw "Current-skin reset helper does not support -$requiredParameter."
         }
@@ -863,7 +936,7 @@ function Invoke-CurrentSkinReset {
     $request = $null
     try {
         if ($null -ne $OnStageChanged) {
-            & $OnStageChanged 'download'
+            [void](& $OnStageChanged 'download')
         }
         $request = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Get, $PackageUrl)
         $request.Headers.CacheControl = New-Object System.Net.Http.Headers.CacheControlHeaderValue
@@ -894,6 +967,10 @@ function Invoke-CurrentSkinReset {
         if ((Get-Item -LiteralPath $packagePath -Force).Length -lt 4) {
             throw 'Current-skin reset download was empty.'
         }
+        $actualSha256 = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToUpperInvariant()
+        if (-not [string]::Equals($actualSha256, $normalizedExpectedSha256, [System.StringComparison]::Ordinal)) {
+            throw 'Current-skin reset download did not match the published SHA-256 checksum.'
+        }
         $signature = New-Object byte[] 4
         $signatureStream = New-Object System.IO.FileStream($packagePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
         try {
@@ -911,7 +988,7 @@ function Invoke-CurrentSkinReset {
             throw 'Current-skin reset download did not have a ZIP signature.'
         }
         if ($null -ne $OnStageChanged) {
-            & $OnStageChanged 'validating'
+            [void](& $OnStageChanged 'validating')
             [System.Windows.Forms.Application]::DoEvents()
         }
 
@@ -921,10 +998,11 @@ function Invoke-CurrentSkinReset {
             ExpectedVersion = $expectedTag
             ExpectedReleaseVariant = $ExpectedReleaseVariant
             ResetCurrentVersion = $true
+            InheritedOperationLock = $true
             NonInteractive = $true
         }
         if ($null -ne $OnStageChanged) {
-            & $OnStageChanged 'applying'
+            [void](& $OnStageChanged 'applying')
             [System.Windows.Forms.Application]::DoEvents()
         }
         $passThruResult = Invoke-VersionManagerPassThruScript `
@@ -943,7 +1021,7 @@ function Invoke-CurrentSkinReset {
             '-PackagePath', $packagePath,
             '-ExpectedVersion', $expectedTag,
             '-ExpectedReleaseVariant', $ExpectedReleaseVariant,
-            '-ResetCurrentVersion', '-NonInteractive', '-EmitResultPairs'
+            '-ResetCurrentVersion', '-InheritedOperationLock', '-NonInteractive', '-EmitResultPairs'
         )
         $process = New-Object System.Diagnostics.Process
         try {

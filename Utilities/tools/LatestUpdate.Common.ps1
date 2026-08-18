@@ -135,6 +135,28 @@ function Get-LatestUpdateObjectProperty {
     return $property.Value
 }
 
+function Assert-LatestUpdateInstallResultContract {
+    param([Parameter(Mandatory = $true)]$Result)
+
+    $status = ([string](Get-LatestUpdateObjectProperty -Object $Result -Name 'DMEL_STATUS' -DefaultValue '')).Trim().ToUpperInvariant()
+    if ($status -notin @('OK', 'WARN', 'NOOP')) {
+        return $status
+    }
+
+    $missing = New-Object System.Collections.Generic.List[string]
+    foreach ($key in @('DMEL_SOURCEPATH', 'DMEL_LOGPATH')) {
+        $value = [string](Get-LatestUpdateObjectProperty -Object $Result -Name $key -DefaultValue '')
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            [void]$missing.Add($key)
+        }
+    }
+    if ($missing.Count -gt 0) {
+        throw ('InstallVersionRelease.ps1 returned {0} without required result fields: {1}' -f $status, ($missing.ToArray() -join ', '))
+    }
+
+    return $status
+}
+
 function Read-LatestUpdateJson {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -205,24 +227,37 @@ function Write-LatestUpdateJson {
     }
 }
 
+function Assert-LatestUpdateSha256 {
+    param([Parameter(Mandatory = $true)][string]$ExpectedPackageSha256)
+
+    $normalized = $ExpectedPackageSha256.Trim().ToUpperInvariant()
+    if ($normalized -notmatch '^[0-9A-F]{64}$') {
+        throw 'ExpectedPackageSha256 must be a 64-character hexadecimal SHA-256 value.'
+    }
+    return $normalized
+}
+
 function New-LatestUpdateIntent {
     param(
         [Parameter(Mandatory = $true)][string]$LaunchToken,
         [Parameter(Mandatory = $true)][string]$ExpectedVersion,
         [Parameter(Mandatory = $true)][string]$ReleaseVariant,
         [Parameter(Mandatory = $true)][string]$AssetName,
+        [Parameter(Mandatory = $true)][string]$ExpectedPackageSha256,
         [Parameter(Mandatory = $true)][long]$StartedAtUnixSeconds
     )
     [void](Assert-LatestUpdateToken -LaunchToken $LaunchToken)
     $version = Assert-LatestUpdateVersion -ExpectedVersion $ExpectedVersion
     $identity = Assert-LatestUpdateVariantAndAsset -ReleaseVariant $ReleaseVariant -AssetName $AssetName
+    $sha256 = Assert-LatestUpdateSha256 -ExpectedPackageSha256 $ExpectedPackageSha256
     if ($StartedAtUnixSeconds -le 0) { throw 'StartedAtUnixSeconds must be a positive integer.' }
     return [ordered]@{
-        SchemaVersion = 1
+        SchemaVersion = 2
         LaunchToken = $LaunchToken
         ExpectedVersion = $version
         ReleaseVariant = [string]$identity.ReleaseVariant
         AssetName = [string]$identity.AssetName
+        ExpectedPackageSha256 = $sha256
         StartedAtUnixSeconds = [long]$StartedAtUnixSeconds
         CreatedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
     }
@@ -233,8 +268,8 @@ function Assert-LatestUpdateIntent {
         [Parameter(Mandatory = $true)]$Intent,
         [Parameter(Mandatory = $true)][string]$ExpectedLaunchToken
     )
-    if ([int](Get-LatestUpdateObjectProperty -Object $Intent -Name 'SchemaVersion' -DefaultValue 0) -ne 1) {
-        throw 'Latest update intent SchemaVersion must be 1.'
+    if ([int](Get-LatestUpdateObjectProperty -Object $Intent -Name 'SchemaVersion' -DefaultValue 0) -ne 2) {
+        throw 'Latest update intent SchemaVersion must be 2.'
     }
     $token = [string](Get-LatestUpdateObjectProperty -Object $Intent -Name 'LaunchToken' -DefaultValue '')
     [void](Assert-LatestUpdateToken -LaunchToken $token)
@@ -245,14 +280,16 @@ function Assert-LatestUpdateIntent {
     $identity = Assert-LatestUpdateVariantAndAsset `
         -ReleaseVariant ([string](Get-LatestUpdateObjectProperty -Object $Intent -Name 'ReleaseVariant' -DefaultValue '')) `
         -AssetName ([string](Get-LatestUpdateObjectProperty -Object $Intent -Name 'AssetName' -DefaultValue ''))
+    $sha256 = Assert-LatestUpdateSha256 -ExpectedPackageSha256 ([string](Get-LatestUpdateObjectProperty -Object $Intent -Name 'ExpectedPackageSha256' -DefaultValue ''))
     $started = [long](Get-LatestUpdateObjectProperty -Object $Intent -Name 'StartedAtUnixSeconds' -DefaultValue 0)
     if ($started -le 0) { throw 'Latest update intent has an invalid StartedAtUnixSeconds value.' }
     return [PSCustomObject]@{
-        SchemaVersion = 1
+        SchemaVersion = 2
         LaunchToken = $token
         ExpectedVersion = $version
         ReleaseVariant = [string]$identity.ReleaseVariant
         AssetName = [string]$identity.AssetName
+        ExpectedPackageSha256 = $sha256
         StartedAtUnixSeconds = $started
     }
 }
@@ -281,7 +318,7 @@ function Save-LatestUpdateState {
     }
     catch { }
     $payload = [ordered]@{
-        SchemaVersion = 1
+        SchemaVersion = 2
         LaunchToken = [string]$Intent.LaunchToken
         Status = $Status
         StartedAtUnixSeconds = [long]$Intent.StartedAtUnixSeconds
@@ -291,6 +328,7 @@ function Save-LatestUpdateState {
         ExpectedVersion = [string]$Intent.ExpectedVersion
         ReleaseVariant = [string]$Intent.ReleaseVariant
         AssetName = [string]$Intent.AssetName
+        ExpectedPackageSha256 = [string]$Intent.ExpectedPackageSha256
         ErrorCode = [string]$ErrorCode
         Message = [string]$Message
         LogPath = [string]$LogPath
@@ -351,8 +389,10 @@ function Copy-LatestUpdatePackageToStaging {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
         [Parameter(Mandatory = $true)][string]$LaunchToken,
-        [Parameter(Mandatory = $true)][string]$SourcePath
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][string]$ExpectedPackageSha256
     )
+    $expectedSha256 = Assert-LatestUpdateSha256 -ExpectedPackageSha256 $ExpectedPackageSha256
     $resolvedSource = Assert-LatestUpdateZipFile -Path $SourcePath
     $stagingRoot = Get-LatestUpdateStagingRoot -Root $Root
     if (-not (Test-Path -LiteralPath $stagingRoot -PathType Container)) {
@@ -363,6 +403,10 @@ function Copy-LatestUpdatePackageToStaging {
     try {
         [System.IO.File]::Copy($resolvedSource, $temporary, $true)
         [void](Assert-LatestUpdateZipFile -Path $temporary)
+        $actualSha256 = (Get-FileHash -LiteralPath $temporary -Algorithm SHA256).Hash.ToUpperInvariant()
+        if (-not [string]::Equals($actualSha256, $expectedSha256, [System.StringComparison]::Ordinal)) {
+            throw "Downloaded update SHA-256 did not match the published checksum. expected=$expectedSha256 actual=$actualSha256"
+        }
         if (Test-Path -LiteralPath $destination -PathType Leaf) { Remove-Item -LiteralPath $destination -Force }
         [System.IO.File]::Move($temporary, $destination)
     }

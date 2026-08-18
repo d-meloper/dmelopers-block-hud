@@ -8,8 +8,23 @@ local function updateDiscSlotMeters(configName)
     return true
 end
 
-local function applyDiscSlotLayout(configName)
-    return commandMeasureForActiveConfig('MeasureResponsiveLayout', 'ApplyLayout()', configName)
+local function applyDiscSlotLayout(configName, ownerRect)
+    ownerRect = ownerRect or {}
+    local x = tonumber(ownerRect.x)
+    local y = tonumber(ownerRect.y)
+    local width = tonumber(ownerRect.width)
+    local height = tonumber(ownerRect.height)
+    if x == nil or y == nil or width == nil or width <= 0 or height == nil or height <= 0 then
+        return false
+    end
+    local command = string.format(
+        'ApplyJukeboxDiscSlotLayout(%d,%d,%d,%d)',
+        round(x),
+        round(y),
+        math.max(1, round(width)),
+        math.max(1, round(height))
+    )
+    return commandMeasureForActiveConfig('MeasureResponsiveLayout', command, configName)
 end
 
 
@@ -76,16 +91,36 @@ local function writeJukeboxDisplayMode(mode)
     if mode ~= 'minimized' then
         mode = 'main'
     end
+    local previous = trim(SKIN:GetVariable('JukeboxDisplayMode', 'main')):lower()
     setVariable('JukeboxDisplayMode', mode)
-    writePlaybackStateValue('JukeboxDisplayMode', mode)
+    if previous ~= mode then
+        writePlaybackStateValue('JukeboxDisplayMode', mode)
+    end
     return mode
 end
 
 function writeJukeboxMainFormY(y)
     local value = tostring(round(tonumber(y) or 0))
+    local previous = trim(SKIN:GetVariable('JukeboxMainFormY', ''))
     setVariable('JukeboxMainFormY', value)
-    writePlaybackStateValue('JukeboxMainFormY', value)
+    if previous ~= value then
+        writePlaybackStateValue('JukeboxMainFormY', value)
+    end
     return tonumber(value) or 0
+end
+
+function JukeboxFormResetPending()
+    return trim(SKIN:GetVariable('ResponsiveLayout_Jukebox_FormResetPending', '0')) == '1'
+end
+
+function clearJukeboxFormResetPending()
+    if not JukeboxFormResetPending() then
+        return false
+    end
+    local statePath = tostring(SKIN:GetVariable('@') or '') .. 'Customs\\Data\\ResponsiveLayoutState.inc'
+    setVariable('ResponsiveLayout_Jukebox_FormResetPending', '0')
+    SKIN:Bang('!WriteKeyValue', 'Variables', 'ResponsiveLayout_Jukebox_FormResetPending', '0', statePath)
+    return true
 end
 
 function storedJukeboxMainY(fallbackY, preferSnapshot)
@@ -439,8 +474,11 @@ end
 local function currentJukeboxLiveRect()
     local x = round(tonumber(SKIN:GetVariable('CURRENTCONFIGX', '0')) or 0)
     local y = round(tonumber(SKIN:GetVariable('CURRENTCONFIGY', '0')) or 0)
-    local width = tonumber(SKIN:GetVariable('JukeboxW', ''))
-    local height = tonumber(SKIN:GetVariable('JukeboxH', ''))
+    local minimized = JukeboxIsMinimizedForm and JukeboxIsMinimizedForm()
+    local widthVariable = minimized and 'JukeboxMinimizedW' or 'JukeboxW'
+    local heightVariable = minimized and 'JukeboxMinimizedH' or 'JukeboxH'
+    local width = tonumber(SKIN:GetVariable(widthVariable, ''))
+    local height = tonumber(SKIN:GetVariable(heightVariable, ''))
     if not width or width <= 0 then
         width = tonumber(SKIN:GetVariable('CURRENTCONFIGWIDTH', '0'))
     end
@@ -476,7 +514,11 @@ function JukeboxCurrentWorkArea()
     }
 end
 
-local function jukeboxWorkAreaRect(x, y, width, height)
+function JukeboxMonitorFallbackActive()
+    return trim(SKIN:GetVariable('ResponsiveLayoutCurrentFallbackActive', '0')) == '1'
+end
+
+function JukeboxWorkAreaRect(x, y, width, height)
     x = round(tonumber(x) or 0)
     y = round(tonumber(y) or 0)
     width = math.max(1, round(tonumber(width) or 1))
@@ -493,7 +535,7 @@ local function jukeboxWorkAreaRect(x, y, width, height)
     }
 end
 
-local function jukeboxMonitorWorkAreas()
+function JukeboxMonitorWorkAreas()
     local result = {}
     local seen = {}
     for index = 1, 16 do
@@ -502,7 +544,7 @@ local function jukeboxMonitorWorkAreas()
         local width = tonumber(SKIN:GetVariable('WORKAREAWIDTH@' .. tostring(index), ''))
         local height = tonumber(SKIN:GetVariable('WORKAREAHEIGHT@' .. tostring(index), ''))
         if x and y and width and height and width > 0 and height > 0 then
-            local rect = jukeboxWorkAreaRect(x, y, width, height)
+            local rect = JukeboxWorkAreaRect(x, y, width, height)
             local key = table.concat({ rect.x, rect.y, rect.width, rect.height }, ':')
             if not seen[key] then
                 seen[key] = true
@@ -513,11 +555,11 @@ local function jukeboxMonitorWorkAreas()
     return result
 end
 
-local function jukeboxRectContainsPoint(rect, x, y)
+function JukeboxRectContainsPoint(rect, x, y)
     return rect and x >= rect.x and x < rect.right and y >= rect.y and y < rect.bottom
 end
 
-local function jukeboxDistanceSquaredToRectCenter(rect, x, y)
+function JukeboxDistanceSquaredToRectCenter(rect, x, y)
     local dx = (rect.centerX or 0) - x
     local dy = (rect.centerY or 0) - y
     return (dx * dx) + (dy * dy)
@@ -526,23 +568,23 @@ end
 function JukeboxWorkAreaForPoint(x, y, fallback)
     x = round(tonumber(x) or 0)
     y = round(tonumber(y) or 0)
-    local areas = jukeboxMonitorWorkAreas()
+    local areas = JukeboxMonitorWorkAreas()
     local best = nil
     local bestDistance = nil
     for _, area in ipairs(areas) do
-        if jukeboxRectContainsPoint(area, x, y) then
+        if JukeboxRectContainsPoint(area, x, y) then
             return area
         end
-        local distance = jukeboxDistanceSquaredToRectCenter(area, x, y)
+        local distance = JukeboxDistanceSquaredToRectCenter(area, x, y)
         if best == nil or distance < bestDistance then
             best = area
             bestDistance = distance
         end
     end
-    return best or fallback or JukeboxCurrentWorkArea()
+    return best or fallback
 end
 
-local function jukeboxWorkAreaForRect(rect, fallback)
+function JukeboxWorkAreaForRect(rect, fallback)
     rect = rect or currentJukeboxLiveRect()
     local width = math.max(1, round(tonumber(rect.width) or 100))
     local height = math.max(1, round(tonumber(rect.height) or 126))
@@ -569,7 +611,7 @@ function JukeboxClampRectToWorkArea(rect)
     rect = rect or currentJukeboxLiveRect()
     local width = math.max(1, round(tonumber(rect.width) or 100))
     local height = math.max(1, round(tonumber(rect.height) or 126))
-    local work = jukeboxWorkAreaForRect(rect, JukeboxCurrentWorkArea())
+    local work = JukeboxWorkAreaForRect(rect, JukeboxCurrentWorkArea())
     return {
         x = round(JukeboxClampToRange(rect.x, work.x, work.right - width)),
         y = round(JukeboxClampToRange(rect.y, work.y, work.bottom - height)),
@@ -578,9 +620,9 @@ function JukeboxClampRectToWorkArea(rect)
     }
 end
 
-local function syncJukeboxLiveStateToDiscSlot(configName)
+local function syncJukeboxLiveStateToDiscSlot(configName, rect)
     configName = configName or discSlotConfigName()
-    local rect = currentJukeboxLiveRect()
+    rect = rect or currentJukeboxLiveRect()
     if not isRainmeterConfigActive(configName) then
         return false
     end
@@ -688,13 +730,13 @@ showDiscSlotNow = function(configName, skipRefresh)
         discSlotRefreshRecoveryRequested = false
         return false
     end
-    surface:ShowIfActive()
+    local ownerRect = currentJukeboxLiveRect()
     surface:CommandIfActive('MeasureJukeboxDiscSlot', 'ResumeDiscSlotResident()')
-    syncJukeboxLiveStateToDiscSlot(configName)
-    applyDiscSlotLayout(configName)
+    syncJukeboxLiveStateToDiscSlot(configName, ownerRect)
+    applyDiscSlotLayout(configName, ownerRect)
+    surface:ShowIfActive()
     syncDiscSlotPlaybackModeControls(configName)
     updateDiscSlotMeters(configName)
-    SKIN:Bang('!Redraw', configName)
     setJukeboxDraggable(false)
     discSlotVisible = true
     discSlotPendingShow = false
