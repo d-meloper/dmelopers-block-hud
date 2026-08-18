@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$SkinRoot,
-    [string]$LanguageCode = ''
+    [string]$LanguageCode = '',
+    [switch]$UpdateHelperLocalizationCache
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,6 +36,9 @@ function Read-DefaultItemLabelsLanguageCode {
     Resolve-DefaultItemLocalizationLanguageCode -SkinRoot $Root -LanguageCode $match.Groups[1].Value
 }
 
+$helperLocalizationCacheStatus = ''
+$helperLocalizationCacheMessage = ''
+
 try {
     if ([string]::IsNullOrWhiteSpace($SkinRoot)) {
         $SkinRoot = Get-DefaultItemLocalizationSkinRoot -ScriptRoot $PSScriptRoot
@@ -47,15 +51,41 @@ try {
         Resolve-DefaultItemLocalizationLanguageCode -SkinRoot $resolvedSkinRoot -LanguageCode $LanguageCode
     }
 
+    if ($UpdateHelperLocalizationCache) {
+        try {
+            $null = & (Join-Path $PSScriptRoot 'UpdateHelperLocalizationCache.ps1') `
+                -SkinRoot $resolvedSkinRoot `
+                -LanguageCode $resolvedLanguageCode `
+                -InformationAction SilentlyContinue
+            $helperLocalizationCacheStatus = 'OK'
+        }
+        catch {
+            $helperLocalizationCacheStatus = 'WARN'
+            $helperLocalizationCacheMessage = [string]$_.Exception.Message
+        }
+    }
+
     $result = Invoke-DefaultItemLabelLocalization -SkinRoot $resolvedSkinRoot -LanguageCode $resolvedLanguageCode
 
     Write-Output 'DMEL_STATUS=OK'
     Write-Output ('DMEL_LANGUAGECODE={0}' -f $result.LanguageCode)
     Write-Output ('DMEL_CHANGEDCOUNT={0}' -f $result.ChangedLabelCount)
     Write-Output ('DMEL_CHANGEDFILES={0}' -f (($result.ChangedFiles | ForEach-Object { [string]$_ }) -join '|'))
+    if ($UpdateHelperLocalizationCache) {
+        Write-Output ('DMEL_CACHESTATUS={0}' -f $helperLocalizationCacheStatus)
+        if (-not [string]::IsNullOrWhiteSpace($helperLocalizationCacheMessage)) {
+            Write-Output ('DMEL_CACHEMESSAGE={0}' -f $helperLocalizationCacheMessage)
+        }
+    }
 }
 catch {
     Write-Output 'DMEL_STATUS=ERROR'
     Write-Output ('DMEL_MESSAGE={0}' -f ([string]$_.Exception.Message))
+    if ($UpdateHelperLocalizationCache) {
+        Write-Output ('DMEL_CACHESTATUS={0}' -f $helperLocalizationCacheStatus)
+        if (-not [string]::IsNullOrWhiteSpace($helperLocalizationCacheMessage)) {
+            Write-Output ('DMEL_CACHEMESSAGE={0}' -f $helperLocalizationCacheMessage)
+        }
+    }
     exit 1
 }

@@ -17,6 +17,10 @@ try {
 catch {
 }
 
+$entrypointDirectory = $PSScriptRoot
+$commonHelperPath = Join-Path $entrypointDirectory 'Runtime\Helpers\StartupAutoRun.Common.ps1'
+. $commonHelperPath
+
 function Write-ResultPair {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -86,88 +90,6 @@ function Get-DriveTargets {
     )
 }
 
-function Get-StartupFolderPath {
-    [Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)
-}
-
-function New-WscriptShell {
-    New-Object -ComObject WScript.Shell
-}
-
-function Resolve-ShortcutTargetPath {
-    param(
-        [Parameter(Mandatory = $true)]
-        $Shell,
-        [Parameter(Mandatory = $true)]
-        [string]$ShortcutPath
-    )
-
-    try {
-        $shortcut = $Shell.CreateShortcut($ShortcutPath)
-        $targetPath = [string]$shortcut.TargetPath
-        if ([string]::IsNullOrWhiteSpace($targetPath)) {
-            return $null
-        }
-        return $targetPath
-    } catch {
-        return $null
-    }
-}
-
-function Test-RainmeterShortcutTarget {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$TargetPath
-    )
-
-    if ([string]::IsNullOrWhiteSpace($TargetPath)) {
-        return $false
-    }
-
-    $leafName = [System.IO.Path]::GetFileName($TargetPath)
-    return [string]::Equals($leafName, 'Rainmeter.exe', [System.StringComparison]::OrdinalIgnoreCase)
-}
-
-function Get-RainmeterStartupShortcuts {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$StartupFolder,
-        [Parameter(Mandatory = $true)]
-        $Shell
-    )
-
-    $matches = @()
-    if ([string]::IsNullOrWhiteSpace($StartupFolder)) {
-        return $matches
-    }
-    if (-not (Test-Path -LiteralPath $StartupFolder)) {
-        return $matches
-    }
-
-    Get-ChildItem -LiteralPath $StartupFolder -Filter '*.lnk' -File -ErrorAction SilentlyContinue | ForEach-Object {
-        $targetPath = Resolve-ShortcutTargetPath -Shell $Shell -ShortcutPath $_.FullName
-        if (-not [string]::IsNullOrWhiteSpace($targetPath) -and (Test-RainmeterShortcutTarget -TargetPath $targetPath)) {
-            $matches += $_.FullName
-        }
-    }
-
-    return $matches
-}
-
-function Get-StartupEnabledLiteral {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$StartupFolder,
-        [Parameter(Mandatory = $true)]
-        $Shell
-    )
-
-    if (@(Get-RainmeterStartupShortcuts -StartupFolder $StartupFolder -Shell $Shell).Count -gt 0) {
-        return '1'
-    }
-    return '0'
-}
-
 if ($IncludeFonts) {
     try {
         Write-ResultPair -Key 'DMEL_FONTFAMILIES' -Value (@(Get-UniqueFontFamilies -Path $FontsPath) -join '|')
@@ -191,20 +113,18 @@ if ($IncludeDrives) {
 }
 
 if ($IncludeStartupAutoRun) {
-    $shell = $null
     try {
-        $startupFolder = Get-StartupFolderPath
-        $shell = New-WscriptShell
-        Write-ResultPair -Key 'DMEL_STARTUPAUTORUN' -Value (Get-StartupEnabledLiteral -StartupFolder $startupFolder -Shell $shell)
+        $startupFolder = Get-BlockHudStartupFolderPath
+        $taskName = Resolve-BlockHudScheduledTaskName
+        $startupState = Get-BlockHudStartupRegistrationState -StartupFolder $startupFolder -TaskName $taskName
+        Write-ResultPair -Key 'DMEL_STARTUPAUTORUN' -Value $startupState.Value
+        Write-ResultPair -Key 'DMEL_STARTUPFASTAUTORUN' -Value $startupState.FastValue
         Write-ResultPair -Key 'DMEL_STARTUPAUTORUN_STATUS' -Value 'OK'
     }
     catch {
+        Write-ResultPair -Key 'DMEL_STARTUPAUTORUN' -Value ''
+        Write-ResultPair -Key 'DMEL_STARTUPFASTAUTORUN' -Value ''
         Write-SectionFailure -Section 'STARTUPAUTORUN' -Exception $_.Exception
-    }
-    finally {
-        if ($null -ne $shell) {
-            [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
-        }
     }
 }
 

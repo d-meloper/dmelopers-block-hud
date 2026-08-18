@@ -35,6 +35,16 @@ local function normalizeVariant(raw)
     return nil
 end
 
+local function normalizeSha256(raw)
+    local normalized = trim(raw)
+    if #normalized ~= 64 or not normalized:match('^[0-9A-Fa-f]+$') then
+        return nil
+    end
+    return normalized:upper()
+end
+
+M.NormalizeSha256 = normalizeSha256
+
 local function validVersionPart(value)
     return value == '0' or value:match('^[1-9]%d*$') ~= nil
 end
@@ -104,6 +114,7 @@ function M.CacheProvenanceMatches(cache, variant, expectedRepositorySlug)
         and trim(cache.repositorySlug):lower() == repositorySlug
         and normalizeVariant(cache.releaseVariant) == normalizedVariant
         and trim(cache.assetName) == assetName
+        and normalizeSha256(cache.assetSha256) ~= nil
 end
 
 function M.BuildDownloadUrl(latestVersion, variant, repositoryOwner, repositoryName)
@@ -307,7 +318,8 @@ function M.Create(options)
         repositoryName,
         cacheRepositorySlug,
         cacheReleaseVariant,
-        cacheAssetName)
+        cacheAssetName,
+        cacheAssetSha256)
         local comparison = M.CompareStableVersions(currentVersion, latestVersion)
         local normalizedVariant = normalizeVariant(variant)
         local assetName = M.AssetName(normalizedVariant)
@@ -315,11 +327,16 @@ function M.Create(options)
         local downloadUrl = M.BuildDownloadUrl(
             latestVersion, normalizedVariant, repositoryOwner, repositoryName)
         local parsedLatest = M.ParseStableVersion(latestVersion)
+        local assetSha256 = normalizeSha256(cacheAssetSha256)
+        if trim(cacheAssetSha256) == '' then
+            assetSha256 = normalizeSha256(skin:GetVariable('VersionManagerCacheAssetSha256', ''))
+        end
         local provenanceMatches = repository
             and M.CacheProvenanceMatches({
                 repositorySlug = cacheRepositorySlug,
                 releaseVariant = cacheReleaseVariant,
                 assetName = cacheAssetName,
+                assetSha256 = assetSha256,
             }, normalizedVariant, repository.slug)
         if comparison ~= -1 or not assetName or not downloadUrl or not parsedLatest
             or not provenanceMatches then
@@ -338,6 +355,7 @@ function M.Create(options)
                 latestVersion = parsedLatest.tag,
                 variant = normalizedVariant,
                 assetName = assetName,
+                assetSha256 = assetSha256,
                 downloadUrl = downloadUrl,
                 repositoryOwner = repository.owner,
                 repositoryName = repository.repo,
@@ -384,6 +402,7 @@ function M.Create(options)
             luaString(pending.latestVersion),
             luaString(pending.variant),
             luaString(pending.assetName),
+            luaString(pending.assetSha256),
             luaString(pending.downloadUrl),
             tostring(pending.startedAt),
             luaString(pending.repositoryOwner),

@@ -161,7 +161,9 @@ return function(app)
 
         end
 
-        methods.applyComputerInfoStartupAutoRunLiteral(values.DMEL_STARTUPAUTORUN or '')
+        methods.applyComputerInfoStartupAutoRunLiteral(
+            values.DMEL_STARTUPAUTORUN or '',
+            values.DMEL_STARTUPFASTAUTORUN or '')
 
         return values
 
@@ -271,13 +273,17 @@ return function(app)
 
         if not field then
 
-            return
+            return false
 
+        end
+
+        if state.pendingLoadSilent == true and state.pendingLoadHelperRunning == true then
+            return false
         end
 
         if not forcedKind and not methods.hasDropdown(field) then
 
-            return
+            return false
 
         end
 
@@ -297,7 +303,13 @@ return function(app)
 
         state.pendingLoadReopenDropdown = reopenAfterLoad ~= false
 
+        state.pendingLoadSilent = options.silent == true
+
         state.pendingLoadValue = options.pendingValue
+        state.pendingLoadStartupMethod = options.startupMethod
+        state.pendingStartupAutoRunRequestToken = trim(options.requestToken or '')
+        state.pendingStartupAutoRunRecoveryAttempted = false
+        state.pendingStartupAutoRunFailure = nil
         state.pendingLoadTexturePath = options.pendingTexturePath
         state.pendingLoadUsername = options.pendingUsername
 
@@ -311,12 +323,26 @@ return function(app)
 
         setVariable('SettingsPendingLoadRowIndex', tostring(state.pendingLoadRowIndex))
 
-        methods.setLoadingVisible(true, options.loadingText)
-
-        methods.renderActivePage()
+        if state.pendingLoadSilent ~= true then
+            methods.setLoadingVisible(true, options.loadingText)
+            methods.renderActivePage()
+        end
 
         methods.SetUpdateJob('deferredLoad', true)
 
+        return true
+
+    end
+
+    function methods.ScheduleStartupAutoRunStateProbe(options)
+        options = options or {}
+        if trim(state.pendingLoadKind or '') ~= '' or state.pendingLoadHelperRunning == true then
+            return false
+        end
+        return methods.ScheduleDropdownDataLoad('startupAutoRun', 0, 'startupAutoRunProbe', false, {
+            delayTicks = options.delayTicks or 0,
+            silent = true,
+        })
     end
 
     function methods.CancelPendingLoad()
@@ -409,43 +435,70 @@ return function(app)
 
         methods.applyInstalledDriveTargetsFromValues(driveField, values)
 
-        methods.applyComputerInfoStartupAutoRunLiteral(values.DMEL_STARTUPAUTORUN or '')
+        methods.applyComputerInfoStartupAutoRunLiteral(
+            values.DMEL_STARTUPAUTORUN or '',
+            values.DMEL_STARTUPFASTAUTORUN or '')
 
         return values
 
     end
 
     function methods.applyStartupAutoRunProbeOutput(output)
-
-        local field = methods.getField('startupAutoRun')
-
-        if not field then
-
-            return '0'
-
+        local current = methods.currentStartupAutoRunState()
+        local result = parseStartupAutoRunResult(output, current)
+        if not result.hasLiteral or not result.hasFastLiteral then
+            logNotice('Startup auto-run probe returned an incomplete state bundle.')
+            return current
         end
 
-        local currentLiteral = methods.normalizeToggleValue(methods.readFieldValue(field))
-
-        local result = parseStartupAutoRunResult(output, currentLiteral)
-        local actualLiteral = methods.normalizeToggleValue(result.literal)
-
-        methods.persistStartupAutoRunCache(actualLiteral)
-
-        methods.setFieldSessionValue(field, actualLiteral)
-
-        methods.persistStartupAutoRunSetting(actualLiteral, { currentLiteral = currentLiteral })
-
-        return actualLiteral
+        return methods.applyStartupAutoRunState(result.literal, result.fastLiteral) or current
 
     end
 
-    function methods.applyStartupAutoRunApplyOutput(output, field)
+    local function showStartupAutoRunAlert(messageKey, fallback, severity)
+        if methods.ShowModalAlertByKeys then
+            methods.ShowModalAlertByKeys(severity or 'warn', messageKey, fallback)
+        end
+    end
 
-        local previousLiteral = field and methods.readFieldValue(field) or '0'
-        local result = parseStartupAutoRunResult(output, previousLiteral)
-        local succeeded = result.status == 'OK' and result.hasLiteral
-        local actualLiteral = methods.normalizeToggleValue(result.literal)
+    function methods.beginStartupAutoRunRecoveryProbe(failure, reason)
+        if state.pendingStartupAutoRunRecoveryAttempted == true then
+            return false
+        end
+
+        state.pendingStartupAutoRunRecoveryAttempted = true
+        state.pendingStartupAutoRunFailure = {
+            code = trim(type(failure) == 'table' and failure.code or ''),
+            recovery = trim(type(failure) == 'table' and failure.recovery or ''),
+            recoveryCode = trim(type(failure) == 'table' and failure.recoveryCode or ''),
+            reason = trim(reason or ''),
+            requestedMethod = trim(state.pendingLoadStartupMethod or ''),
+            requestedValue = trim(state.pendingLoadValue or ''),
+        }
+        state.pendingLoadKind = 'startupAutoRunRecoveryProbe'
+        state.pendingLoadValue = nil
+        state.pendingLoadStartupMethod = 'all'
+        state.pendingLoadDelayTicksRemaining = 1
+        state.pendingStartupAutoRunRequestToken = methods.nextStartupAutoRunRequestToken()
+        setVariable('SettingsPendingLoadKind', state.pendingLoadKind)
+        methods.clearPendingLoadHelperState()
+        methods.setLoadingVisible(
+            true,
+            methods.localize(
+                'Settings_Loading_StartupVerify',
+                'Checking the actual Windows startup state...\nPlease wait.'
+            )
+        )
+        methods.SetUpdateJob('deferredLoad', true)
+        methods.renderActivePage()
+        return true
+    end
+
+    function methods.applyStartupAutoRunApplyOutput(output, field)
+        local previous = methods.currentStartupAutoRunState()
+        local result = parseStartupAutoRunResult(output, previous)
+        local hasActualState = result.hasLiteral and result.hasFastLiteral
+        local succeeded = result.status == 'OK' and hasActualState
 
         if not succeeded then
             logNotice(
@@ -454,38 +507,142 @@ return function(app)
                     .. ' code='
                     .. result.code
                     .. ' hasLiteral='
-                    .. tostring(result.hasLiteral)
+                    .. tostring(hasActualState)
+                    .. ' recovery='
+                    .. tostring(result.recovery)
+                    .. ' recoveryCode='
+                    .. tostring(result.recoveryCode)
             )
-            if methods.ShowModalAlertByKeys then
-                methods.ShowModalAlertByKeys(
-                    'error',
-                    'ModalAlert_StartupAutoRunFailed',
-                    'The startup-program setting result could not be confirmed. The setting may not have been applied.'
-                )
+        end
+
+        if hasActualState then
+            methods.applyStartupAutoRunState(result.literal, result.fastLiteral, { force = true })
+        end
+
+        if succeeded then
+            return {
+                result = result,
+                hasActualState = true,
+                requiresProbe = false,
+            }
+        end
+
+        if not hasActualState then
+            return {
+                result = result,
+                hasActualState = false,
+                requiresProbe = true,
+            }
+        end
+
+        if trim(state.pendingLoadStartupMethod or '') == 'task' and result.recovery == 'shortcut'
+            and result.literal == '1' and result.fastLiteral == '0' then
+            showStartupAutoRunAlert(
+                'ModalAlert_StartupFastAutoRunRecovered',
+                'Fast startup could not be enabled because Windows policy, security software, or Task Scheduler blocked the change. Standard startup will continue to be used.',
+                'warn'
+            )
+        elseif trim(state.pendingLoadStartupMethod or '') == 'task'
+            and (result.recovery == 'partial' or result.recovery == 'failed') then
+            showStartupAutoRunAlert(
+                'ModalAlert_StartupFastAutoRunPartial',
+                'Fast startup could not be enabled and the Windows startup state was only partially recovered. Check Startup Apps and Task Scheduler before trying again.',
+                'error'
+            )
+        else
+            showStartupAutoRunAlert(
+                'ModalAlert_StartupAutoRunFailed',
+                'The startup-program setting result could not be confirmed. The setting may not have been applied.',
+                'error'
+            )
+        end
+
+        return {
+            result = result,
+            hasActualState = true,
+            requiresProbe = false,
+        }
+    end
+
+    function methods.applyStartupAutoRunRecoveryProbeOutput(output)
+        local previous = methods.currentStartupAutoRunState()
+        local result = parseStartupAutoRunResult(output, previous)
+        local hasActualState = result.hasLiteral and result.hasFastLiteral
+        local failure = type(state.pendingStartupAutoRunFailure) == 'table'
+            and state.pendingStartupAutoRunFailure
+            or {}
+        local requestedMethod = trim(failure.requestedMethod or '')
+        local requestedValue = trim(failure.requestedValue or '')
+        local reachedRequestedState = false
+        if hasActualState and result.hasShortcutLiteral then
+            if requestedMethod == 'task' then
+                reachedRequestedState = result.literal == '1'
+                    and result.fastLiteral == '1'
+                    and result.shortcutLiteral == '0'
+            elseif requestedMethod == 'shortcut' then
+                reachedRequestedState = result.literal == '1'
+                    and result.fastLiteral == '0'
+                    and result.shortcutLiteral == '1'
+            elseif requestedMethod == 'all' and requestedValue == '0' then
+                reachedRequestedState = result.literal == '0'
+                    and result.fastLiteral == '0'
+                    and result.shortcutLiteral == '0'
             end
         end
 
-        methods.persistStartupAutoRunCache(actualLiteral)
-
-        if field then
-
-            methods.setFieldSessionValue(field, actualLiteral)
-
+        if hasActualState then
+            methods.applyStartupAutoRunState(result.literal, result.fastLiteral, { force = true })
         end
 
-        methods.persistStartupAutoRunSetting(actualLiteral, { force = true, currentLiteral = previousLiteral })
+        logNotice(
+            'Startup auto-run recovery probe completed: status='
+                .. tostring(result.status)
+                .. ' hasLiteral='
+                .. tostring(hasActualState)
+                .. ' originalCode='
+                .. tostring(failure.code or '')
+                .. ' reason='
+                .. tostring(failure.reason or '')
+        )
 
-        if succeeded and state.pendingLoadBeforeSnapshot and field then
-
-            methods.pushHistory(state.pendingLoadHistoryLabel or field.historyLabel, state.pendingLoadBeforeSnapshot, {
-
-                afterSnapshot = methods.captureSnapshot(),
-
-            })
-
+        if reachedRequestedState then
+            return {
+                result = result,
+                hasActualState = true,
+                reachedRequestedState = true,
+            }
+        elseif requestedMethod ~= 'task' then
+            showStartupAutoRunAlert(
+                'ModalAlert_StartupAutoRunFailed',
+                'The startup-program setting result could not be confirmed. The setting may not have been applied.',
+                'error'
+            )
+        elseif hasActualState
+            and result.literal == '1'
+            and result.fastLiteral == '0'
+            and result.shortcutLiteral == '1' then
+            showStartupAutoRunAlert(
+                'ModalAlert_StartupFastAutoRunRecovered',
+                'Fast startup could not be enabled because Windows policy, security software, or Task Scheduler blocked the change. Standard startup will continue to be used.',
+                'warn'
+            )
+        elseif hasActualState then
+            showStartupAutoRunAlert(
+                'ModalAlert_StartupFastAutoRunPartial',
+                'Fast startup could not be enabled and the Windows startup state was only partially recovered. Check Startup Apps and Task Scheduler before trying again.',
+                'error'
+            )
+        else
+            showStartupAutoRunAlert(
+                'ModalAlert_StartupFastAutoRunUnconfirmed',
+                'The actual Windows startup state could not be confirmed. No additional changes were attempted; check Startup Apps and Task Scheduler before trying again.',
+                'error'
+            )
         end
 
-        return actualLiteral
-
+        return {
+            result = result,
+            hasActualState = hasActualState,
+        }
     end
 end

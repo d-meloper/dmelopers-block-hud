@@ -465,7 +465,209 @@ local function getSelectedRecord()
 
 end
 
+EditorLifecycle.FolderCountState = EditorLifecycle.FolderCountState or { Generation = 0, Expected = nil, Phase = 'idle' }
 
+function EditorLifecycle.SelectedRecordMatchesFolderCountExpected(record)
+    local expected = EditorLifecycle.FolderCountState.Expected
+    return record and expected
+        and record.Source == expected.Source
+        and tonumber(record.x) == expected.X
+        and tonumber(record.y) == expected.Y
+        and trim(record.ExecPath) == expected.Path
+        and normalizeActionType(record.ActionType) == 'folder'
+        and normalizeFolderCountSync(record.FolderCountSync, record.ActionType) == '1'
+end
+
+function EditorLifecycle.SplitFolderParent(path)
+    local normalized = trim(path):gsub('/', '\\')
+    normalized = normalized:gsub('\\+$', '')
+    if normalized:match('^%a:$') then
+        return nil, nil, 'root'
+    end
+    if normalized:sub(1, 2) == '\\\\' then
+        local componentCount = 0
+        for _ in normalized:sub(3):gmatch('[^\\]+') do
+            componentCount = componentCount + 1
+        end
+        if componentCount == 2 then
+            return nil, nil, 'root'
+        end
+        if componentCount < 2 then
+            return nil, nil
+        end
+    end
+    local parent, name = normalized:match('^(.*\\)([^\\]+)$')
+    if not parent or not name or name == '' then
+        return nil, nil
+    end
+    return parent, name, 'parent'
+end
+
+function EditorLifecycle.NormalizeFolderPathForCompare(path)
+    return trim(path):gsub('/', '\\'):gsub('\\+$', ''):lower()
+end
+
+function EditorLifecycle.BeginFolderCountRefresh()
+    local state = EditorLifecycle.FolderCountState
+    local expected = state.Expected
+    if not expected or expected.Generation ~= state.Generation then
+        return false
+    end
+    state.Phase = 'reset'
+    local callback = string.format('[!CommandMeasure MeasureInputCommit "HandleFolderCountResult(%d, \'reset\')"]', state.Generation)
+    SKIN:Bang('!SetOption', 'MeasureEditorFolderFileCount', 'OnUpdateAction', callback)
+    SKIN:Bang('!SetOption', 'MeasureEditorFolderFileCount', 'Folder', '')
+    SKIN:Bang('!EnableMeasure', 'MeasureEditorFolderFileCount')
+    SKIN:Bang('!UpdateMeasure', 'MeasureEditorFolderFileCount')
+    return true
+end
+
+function RefreshFolderCountSync()
+    local state = EditorLifecycle.FolderCountState
+    local record = getSelectedRecord()
+    state.Generation = state.Generation + 1
+    state.Expected = nil
+    state.Phase = 'preflight'
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderPreflight')
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderPreflightName')
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderRootPreflight')
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderRootPreflightPath')
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderFileCount')
+    SKIN:Bang('!SetVariable', 'EditorFolderCountGeneration', tostring(state.Generation))
+    EditorLifecycle.SetFolderCountUnavailable(false)
+
+    if not record or not record.Populated
+        or normalizeActionType(record.ActionType) ~= 'folder'
+        or normalizeFolderCountSync(record.FolderCountSync, record.ActionType) ~= '1' then
+        return false
+    end
+
+    local service = ensureService()
+    if service.IsReservedHotbarSlot(record.Source, record.x, record.y) then
+        return false
+    end
+
+    local path = trim(record.ExecPath)
+    local parent, name, preflightMode = EditorLifecycle.SplitFolderParent(path)
+    if path == '' or not preflightMode then
+        setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', '0')
+        EditorLifecycle.SetFolderCountUnavailable(true)
+        SKIN:Bang('!Redraw')
+        return false
+    end
+
+    state.Expected = {
+        Generation = state.Generation,
+        Source = record.Source,
+        X = tonumber(record.x),
+        Y = tonumber(record.y),
+        Path = path,
+        Parent = parent,
+        Name = name,
+        PreflightMode = preflightMode,
+    }
+    SKIN:Bang('!SetVariable', 'EditorFolderCountTargetPath', path)
+    if preflightMode == 'root' then
+        local callback = string.format('[!UpdateMeasure MeasureEditorFolderRootPreflightPath][!CommandMeasure MeasureInputCommit "HandleFolderRootPreflight(%d)"]', state.Generation)
+        SKIN:Bang('!SetOption', 'MeasureEditorFolderRootPreflight', 'FinishAction', callback)
+        SKIN:Bang('!EnableMeasure', 'MeasureEditorFolderRootPreflight')
+        SKIN:Bang('!EnableMeasure', 'MeasureEditorFolderRootPreflightPath')
+        SKIN:Bang('!UpdateMeasure', 'MeasureEditorFolderRootPreflight')
+    else
+        SKIN:Bang('!SetVariable', 'EditorFolderCountParentPath', parent)
+        SKIN:Bang('!SetVariable', 'EditorFolderCountFolderName', name)
+        local callback = string.format('[!UpdateMeasure MeasureEditorFolderPreflightName][!CommandMeasure MeasureInputCommit "HandleFolderCountPreflight(%d)"]', state.Generation)
+        SKIN:Bang('!SetOption', 'MeasureEditorFolderPreflight', 'FinishAction', callback)
+        SKIN:Bang('!EnableMeasure', 'MeasureEditorFolderPreflight')
+        SKIN:Bang('!EnableMeasure', 'MeasureEditorFolderPreflightName')
+        SKIN:Bang('!UpdateMeasure', 'MeasureEditorFolderPreflight')
+    end
+    return true
+end
+
+function HandleFolderCountPreflight(generation)
+    local state = EditorLifecycle.FolderCountState
+    local expected = state.Expected
+    if not expected or tonumber(generation) ~= expected.Generation or expected.Generation ~= state.Generation then
+        return false
+    end
+    local record = getSelectedRecord()
+    if not EditorLifecycle.SelectedRecordMatchesFolderCountExpected(record) then
+        return false
+    end
+    local nameMeasure = SKIN:GetMeasure('MeasureEditorFolderPreflightName')
+    local actualName = nameMeasure and trim(nameMeasure:GetStringValue()) or ''
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderPreflight')
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderPreflightName')
+    if actualName:lower() ~= expected.Name:lower() then
+        setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', '0')
+        EditorLifecycle.SetFolderCountUnavailable(true)
+        SKIN:Bang('!Redraw')
+        return false
+    end
+    EditorLifecycle.SetFolderCountUnavailable(false)
+    return EditorLifecycle.BeginFolderCountRefresh()
+end
+
+function HandleFolderRootPreflight(generation)
+    local state = EditorLifecycle.FolderCountState
+    local expected = state.Expected
+    if not expected or expected.PreflightMode ~= 'root'
+        or tonumber(generation) ~= expected.Generation or expected.Generation ~= state.Generation then
+        return false
+    end
+    local record = getSelectedRecord()
+    if not EditorLifecycle.SelectedRecordMatchesFolderCountExpected(record) then
+        return false
+    end
+    local pathMeasure = SKIN:GetMeasure('MeasureEditorFolderRootPreflightPath')
+    local actualPath = pathMeasure and pathMeasure:GetStringValue() or ''
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderRootPreflight')
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderRootPreflightPath')
+    if EditorLifecycle.NormalizeFolderPathForCompare(actualPath) ~= EditorLifecycle.NormalizeFolderPathForCompare(expected.Path) then
+        setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', '0')
+        EditorLifecycle.SetFolderCountUnavailable(true)
+        SKIN:Bang('!Redraw')
+        return false
+    end
+    EditorLifecycle.SetFolderCountUnavailable(false)
+    return EditorLifecycle.BeginFolderCountRefresh()
+end
+
+function HandleFolderCountResult(generation, phase)
+    local state = EditorLifecycle.FolderCountState
+    local expected = state.Expected
+    if not expected or tonumber(generation) ~= expected.Generation or expected.Generation ~= state.Generation then
+        return false
+    end
+    local record = getSelectedRecord()
+    if not EditorLifecycle.SelectedRecordMatchesFolderCountExpected(record) then
+        return false
+    end
+    local callbackPhase = trim(phase)
+    if callbackPhase ~= state.Phase then
+        return false
+    end
+    if callbackPhase == 'reset' then
+        state.Phase = 'count'
+        local callback = string.format('[!CommandMeasure MeasureInputCommit "HandleFolderCountResult(%d, \'count\')"]', state.Generation)
+        SKIN:Bang('!SetOption', 'MeasureEditorFolderFileCount', 'OnUpdateAction', callback)
+        SKIN:Bang('!SetOption', 'MeasureEditorFolderFileCount', 'Folder', expected.Path)
+        SKIN:Bang('!UpdateMeasure', 'MeasureEditorFolderFileCount')
+        return true
+    end
+    if callbackPhase ~= 'count' then
+        return false
+    end
+    local measure = SKIN:GetMeasure('MeasureEditorFolderFileCount')
+    local count = measure and tonumber(measure:GetValue()) or 0
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderFileCount')
+    count = math.max(0, math.floor(count or 0))
+    setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', tostring(count))
+    EditorLifecycle.SetFolderCountUnavailable(false)
+    SKIN:Bang('!Redraw')
+    return true
+end
 
 local function clearPreparedInputTarget()
 
@@ -901,7 +1103,7 @@ local function buildSnapshotSignature(snapshot)
 
 
 
-                '%s:%d:%d:%q:%q:%q:%q:%d:%s',
+                '%s:%d:%d:%q:%q:%q:%q:%q:%q:%d:%s',
 
 
 
@@ -928,6 +1130,10 @@ local function buildSnapshotSignature(snapshot)
                 record.ExecPath or '',
 
                 normalizeConfirmBeforeRun(record.ConfirmBeforeRun),
+
+                normalizeActionType(record.ActionType),
+
+                normalizeFolderCountSync(record.FolderCountSync, record.ActionType),
 
 
 
@@ -1023,7 +1229,7 @@ end
 
 
 
-local function isCurrentSnapshotAtSessionBaseline()
+local function isCurrentSnapshotAtSessionBaseline(snapshot)
 
 
 
@@ -1039,7 +1245,7 @@ local function isCurrentSnapshotAtSessionBaseline()
 
 
 
-    return buildSnapshotSignature(captureDraftSnapshot()) == buildSnapshotSignature(sessionBaselineSnapshot)
+    return buildSnapshotSignature(snapshot or captureDraftSnapshot()) == buildSnapshotSignature(sessionBaselineSnapshot)
 
 
 
@@ -1047,7 +1253,7 @@ end
 
 
 
-local function updateHistoryButtonState()
+local function updateHistoryButtonState(snapshot)
 
 
 
@@ -1067,7 +1273,7 @@ local function updateHistoryButtonState()
 
 
 
-    local canReset = not isCurrentSnapshotAtSessionBaseline()
+    local canReset = not isCurrentSnapshotAtSessionBaseline(snapshot)
 
 
 
@@ -1135,15 +1341,15 @@ end
 
 
 
-local function syncSessionDirtyState()
+local function syncSessionDirtyState(snapshot)
 
 
 
-    setDirty(not isCurrentSnapshotAtSessionBaseline())
+    setDirty(not isCurrentSnapshotAtSessionBaseline(snapshot))
 
 
 
-    updateHistoryButtonState()
+    updateHistoryButtonState(snapshot)
 
 
 
@@ -1187,7 +1393,7 @@ local function initializeSessionHistory(force)
 
 
 
-    syncSessionDirtyState()
+    syncSessionDirtyState(sessionBaselineSnapshot)
 
 
 
@@ -1235,7 +1441,7 @@ local function rememberDraftChange(label, beforeSnapshot)
 
 
 
-        syncSessionDirtyState()
+        syncSessionDirtyState(afterSnapshot)
 
 
 
@@ -1271,7 +1477,7 @@ local function rememberDraftChange(label, beforeSnapshot)
 
 
 
-    syncSessionDirtyState()
+    syncSessionDirtyState(afterSnapshot)
 
 
 
@@ -1279,4 +1485,24 @@ local function rememberDraftChange(label, beforeSnapshot)
 
 
 
+end
+
+function ToggleFolderCountSyncUi()
+    local record = getSelectedRecord()
+    if not record or not record.Populated or normalizeActionType(record.ActionType) ~= 'folder' then
+        return false
+    end
+    local service = ensureService()
+    if service.IsReservedHotbarSlot(record.Source, record.x, record.y) then
+        return false
+    end
+    playUiClick()
+    local beforeSnapshot = captureDraftSnapshot()
+    record.FolderCountSync = normalizeFolderCountSync(record.FolderCountSync, record.ActionType) == '1' and '0' or '1'
+    writeDraftRecord(record)
+    setSelection(record)
+    if rememberDraftChange(L('Editor_History_FolderCountSync', 'Folder file count link changed'), beforeSnapshot) then
+        refreshDraftItemConsumersLite()
+    end
+    return true
 end

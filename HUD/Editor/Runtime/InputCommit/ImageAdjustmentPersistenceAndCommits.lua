@@ -784,7 +784,7 @@ end
 
 
 
-local function commitPathForLocator(value, locator, displayLabel)
+local function commitPathForLocator(value, locator, displayLabel, actionType)
 
 
 
@@ -798,13 +798,19 @@ local function commitPathForLocator(value, locator, displayLabel)
 
         setPathInput(resolved, displayLabel)
 
+        SKIN:Bang('!SetVariable', 'EditorActionTypeValue', normalizeActionType(actionType))
+
+        if normalizeActionType(actionType) ~= 'folder' then
+            SKIN:Bang('!SetVariable', 'EditorFolderCountSyncValue', '0')
+        end
+
 
 
     end
 
 
 
-    updateFieldAtLocator(locator, 'Action', resolved)
+    updateFieldAtLocator(locator, 'Action', resolved, actionType)
 
 
 
@@ -880,6 +886,8 @@ function UpdatePickedProgramAtLocator(pathValue, imageValue, locator)
     end
 
     local pathChanged = record.ExecPath ~= resolvedPath
+        or normalizeActionType(record.ActionType) ~= ''
+        or normalizeFolderCountSync(record.FolderCountSync, record.ActionType) ~= '0'
     local imageChanged = imageKey ~= "" and record.ImageKey ~= imageKey
     if not pathChanged and not imageChanged then
         return
@@ -888,6 +896,8 @@ function UpdatePickedProgramAtLocator(pathValue, imageValue, locator)
     local beforeSnapshot = captureDraftSnapshot()
     if pathChanged then
         record.ExecPath = resolvedPath
+        record.ActionType = ''
+        record.FolderCountSync = '0'
     end
     if imageChanged then
         record.ImageKey = imageKey
@@ -922,6 +932,10 @@ local function commitPickedProgramForLocator(pathValue, imageValue, locator, dis
 
         setPathInput(resolvedPath, displayLabel)
 
+        SKIN:Bang('!SetVariable', 'EditorActionTypeValue', '')
+
+        SKIN:Bang('!SetVariable', 'EditorFolderCountSyncValue', '0')
+
 
 
         if imageKey ~= "" then
@@ -947,6 +961,14 @@ local function commitPickedProgramForLocator(pathValue, imageValue, locator, dis
 end
 
 local function commitQtyForLocator(value, locator)
+
+    local record = getRecordByLocator(locator)
+    if record and normalizeFolderCountSync(record.FolderCountSync, record.ActionType) == '1' then
+        if shouldMirrorInputToVisibleSelection(locator) and type(RefreshFolderCountSync) == 'function' then
+            RefreshFolderCountSync()
+        end
+        return
+    end
 
 
 

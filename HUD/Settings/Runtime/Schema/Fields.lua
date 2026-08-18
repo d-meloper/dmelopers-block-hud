@@ -27,6 +27,12 @@ fields = {
             historyLabel = '아이템 개수 글자 크기 조정', refreshTargets = { 'Hotbar', 'Inventory' },
         },
 
+        hudMirrorModeEnabled = {
+            key = 'hudMirrorModeEnabled', tabId = 'internal', pageId = 0, controlType = 'toggle', label = '',
+            settingsFile = 'General', variableName = 'EnableHudMirrorMode', valueType = 'bool',
+            historyLabel = 'HUD mirror mode change', refreshTargets = { 'HudMirrorController' },
+        },
+
         lowSpecFreezeInventoryPlayerAnimation = {
 
             key = 'lowSpecFreezeInventoryPlayerAnimation', tabId = 'lowSpec', pageId = 1, controlType = 'toggle', label = '스티브 애니메이션 고정',
@@ -62,9 +68,19 @@ fields = {
             key = 'startupAutoRun', tabId = 'general', pageId = 1, controlType = 'toggle', label = '윈도우 시작 시 자동 실행',
 
             settingsFile = 'General', variableName = 'EnableRainmeterStartup', valueType = 'bool',
+            externalState = true,
+            inlineToggleFieldKey = 'startupFastAutoRun', inlineToggleButtonWidth = 120,
 
             historyLabel = '시작 시 자동 실행 전환', refreshTargets = {},
 
+        },
+
+        startupFastAutoRun = {
+            key = 'startupFastAutoRun', tabId = 'general', pageId = 1, controlType = 'toggle',
+            label = 'Fast startup (experimental)', defaultActionText = 'Fast startup (experimental)',
+            settingsFile = 'General', variableName = 'EnableRainmeterFastStartup', valueType = 'bool',
+            historyLabel = 'Fast startup mode change', refreshTargets = {},
+            externalState = true, disabledWhenFieldOff = 'startupAutoRun',
         },
 
         refreshComputerInfo = {
@@ -103,6 +119,8 @@ fields = {
             key = 'jukebox2DMode', tabId = 'jukebox', pageId = 1, controlType = 'segmented', label = 'Display type',
             settingsFile = 'General', variableName = 'EnableJukebox2DMode', valueType = 'bool',
             historyLabel = 'Jukebox display type change', refreshTargets = { 'Jukebox' },
+            refreshLoadingTextKey = 'Settings_Loading_JukeboxApply', refreshLoadingTextFallback = 'Applying Jukebox changes...',
+            refreshCompletionTarget = 'JukeboxReady',
             disabledWhenFieldOff = 'jukeboxEnabled',
             segmentedOptions = {
                 { labelKey = 'Settings_Segmented_JukeboxDisplayType2D', fallback = '2D', value = '1' },
@@ -121,6 +139,17 @@ fields = {
             key = 'jukeboxDisableNoteAnimation', tabId = 'jukebox', pageId = 2, controlType = 'toggle', label = 'Disable Jukebox animation',
             settingsFile = 'General', variableName = 'DisableJukeboxNoteAnimation', valueType = 'bool',
             historyLabel = 'Jukebox animation toggle', refreshTargets = { 'Jukebox' },
+            refreshLoadingTextKey = 'Settings_Loading_JukeboxApply', refreshLoadingTextFallback = 'Applying Jukebox changes...',
+            refreshCompletionTarget = 'JukeboxReady',
+            disabledWhenFieldOff = 'jukeboxEnabled',
+        },
+
+        jukeboxAutoCloseExternalPlayPause = {
+            key = 'jukeboxAutoCloseExternalPlayPause', tabId = 'jukebox', pageId = 2, controlType = 'toggle', label = 'Auto-close Play/Pause',
+            settingsFile = 'General', variableName = 'AutoCloseJukeboxDiscSlotOnExternalPlayPause', valueType = 'bool',
+            historyLabel = 'Jukebox external Play/Pause auto-close toggle', refreshTargets = { 'Jukebox' },
+            refreshLoadingTextKey = 'Settings_Loading_JukeboxApply', refreshLoadingTextFallback = 'Applying Jukebox changes...',
+            refreshCompletionTarget = 'JukeboxReady',
             disabledWhenFieldOff = 'jukeboxEnabled',
         },
 
@@ -128,6 +157,8 @@ fields = {
             key = 'jukeboxPlaybackSourceMode', tabId = 'jukebox', pageId = 1, controlType = 'segmented', label = 'Playback source',
             settingsFile = 'General', variableName = 'JukeboxPlaybackSourceMode', valueType = 'string',
             historyLabel = 'Jukebox playback source mode change', refreshTargets = { 'Jukebox' },
+            refreshLoadingTextKey = 'Settings_Loading_JukeboxApply', refreshLoadingTextFallback = 'Applying Jukebox changes...',
+            refreshCompletionTarget = 'JukeboxReady',
             disabledWhenFieldOff = 'jukeboxEnabled',
             segmentedControlScale = 1.5,
             segmentedOptions = {
@@ -151,7 +182,7 @@ fields = {
         },
 
         resetJukeboxSettings = {
-            key = 'resetJukeboxSettings', tabId = 'jukebox', pageId = 2, controlType = 'action', label = 'Reset to defaults',
+            key = 'resetJukeboxSettings', tabId = 'jukebox', pageId = 3, controlType = 'action', label = 'Reset to defaults',
             settingsFile = 'State', variableName = 'SettingsThemeMode', valueType = 'string', historyLabel = 'Jukebox tab reset', refreshTargets = {},
             requiresConfirmation = true, defaultActionText = 'Reset tab', actionStyle = 'danger',
         },
@@ -199,6 +230,7 @@ fields = {
             key = 'hotbarSlotSize', tabId = 'hotbar', pageId = 1, controlType = 'stepper', label = '핫바 크기',
 
             settingsFile = 'Hotbar', variableName = 'HotbarSlotSize', valueType = 'integer', min = 32, max = 120, step = 1,
+            hudMirrorResponsiveBase = true,
 
             historyLabel = '핫바 슬롯 크기 조정', refreshTargets = { 'Hotbar' },
 
@@ -209,6 +241,7 @@ fields = {
             key = 'hotbarItemOffset', tabId = 'hotbar', pageId = 1, controlType = 'stepper', label = '아이템 크기',
 
             settingsFile = 'Hotbar', variableName = 'HotbarItemSizeOffset', valueType = 'integer', min = -32, max = 32, step = 1,
+            hudMirrorResponsiveBase = true,
 
             historyLabel = '핫바 아이템 오프셋 조정', refreshTargets = { 'Hotbar' },
 
@@ -219,6 +252,7 @@ fields = {
             key = 'hotbarTextYOffset', tabId = 'hotbar', pageId = 1, controlType = 'stepper', label = '아이템 텍스트 간격',
 
             settingsFile = 'Hotbar', variableName = 'HotbarTextYOffset', valueType = 'integer', min = -120, max = 240, step = 1,
+            hudMirrorResponsiveBase = true,
 
             historyLabel = '핫바 텍스트 Y 오프셋 조정', refreshTargets = { 'Hotbar' },
 
@@ -229,6 +263,7 @@ fields = {
             key = 'hotbarTextFontSize', tabId = 'hotbar', pageId = 1, controlType = 'stepper', label = '아이템 텍스트 크기',
 
             settingsFile = 'Hotbar', variableName = 'HotbarTextFontSize', valueType = 'integer', min = 8, max = 64, step = 1,
+            hudMirrorResponsiveBase = true,
 
             historyLabel = '핫바 텍스트 크기 조정', refreshTargets = { 'Hotbar' },
 
@@ -236,7 +271,7 @@ fields = {
 
         hotbarTextColor = {
 
-            key = 'hotbarTextColor', tabId = 'hotbar', pageId = 2, controlType = 'text', dropdownId = 'clockColor', wideTextField = true, label = '텍스트 색상',
+            key = 'hotbarTextColor', tabId = 'hotbar', pageId = 2, controlType = 'text', dropdownId = 'clockColor', colorStorage = 'rgba', wideTextField = true, label = '텍스트 색상',
 
             settingsFile = 'Hotbar', variableName = 'HotbarTextColor', valueType = 'string',
 
@@ -477,6 +512,7 @@ fields = {
             key = 'attachMinecraftSkinFile', tabId = 'inventory', pageId = 2, controlType = 'action', label = '스킨 파일',
             settingsFile = 'State', variableName = 'SettingsThemeMode', valueType = 'string', historyLabel = '마인크래프트 스킨 파일 첨부', refreshTargets = {},
             defaultActionText = '찾아보기',
+            actionStatusKind = 'minecraftSkinPlayerFolderSize',
         },
 
 clockType = {
@@ -487,6 +523,7 @@ clockType = {
         clockSpriteSize = {
             key = 'clockSpriteSize', tabId = 'clock', pageId = 1, controlType = 'stepper', label = '시계 크기',
             settingsFile = 'Clock', variableName = 'ClockSpriteSize', valueType = 'integer', min = 32, max = 256, step = 5,
+            hudMirrorResponsiveBase = true,
             historyLabel = '시계 스프라이트 크기 조정', refreshTargets = { 'ClockSprite' },
         },
 
@@ -513,6 +550,7 @@ clockType = {
             key = 'clockTimeSize', tabId = 'clock', pageId = 2, controlType = 'stepper', label = '시간 글자 크기',
 
             settingsFile = 'Clock', variableName = 'ClockTimeTextSize', valueType = 'integer', min = 16, max = 160, step = 1,
+            hudMirrorResponsiveBase = true,
 
             historyLabel = '시계 시간 크기 조정', refreshTargets = { 'Clock' },
 
@@ -523,6 +561,7 @@ clockType = {
             key = 'clockDateSize', tabId = 'clock', pageId = 2, controlType = 'stepper', label = '날짜 글자 크기',
 
             settingsFile = 'Clock', variableName = 'ClockDateTextSize', valueType = 'integer', min = 8, max = 96, step = 1,
+            hudMirrorResponsiveBase = true,
 
             historyLabel = '시계 날짜 크기 조정', refreshTargets = { 'Clock' },
 
@@ -530,7 +569,7 @@ clockType = {
 
         clockTextColor = {
 
-            key = 'clockTextColor', tabId = 'clock', pageId = 2, controlType = 'text', dropdownId = 'clockColor', wideTextField = true, label = '텍스트 색상',
+            key = 'clockTextColor', tabId = 'clock', pageId = 2, controlType = 'text', dropdownId = 'clockColor', colorStorage = 'rgba', wideTextField = true, label = '텍스트 색상',
 
             settingsFile = 'Clock', variableName = 'ClockTextColor', valueType = 'string',
 
@@ -538,11 +577,61 @@ clockType = {
 
         },
 
+        clockTextWeight = {
+            key = 'clockTextWeight', tabId = 'clock', pageId = 3, controlType = 'toggle', label = '텍스트 굵게 하기',
+            settingsFile = 'Clock', variableName = 'ClockTextWeight', valueType = 'integer', min = 0, max = 5, step = 1,
+            toggleOffValue = '0', toggleOnValue = '5', toggleNonZeroIsOn = true,
+            historyLabel = '시계 텍스트 굵기 전환', refreshTargets = { 'Clock' },
+        },
+
+        clockTextBorderSize = {
+            key = 'clockTextBorderSize', tabId = 'clock', pageId = 3, controlType = 'toggle', label = '텍스트 테두리 켜기',
+            settingsFile = 'Clock', variableName = 'ClockTextBorderSize', valueType = 'bool',
+            historyLabel = '시계 텍스트 테두리 전환', refreshTargets = { 'Clock' },
+        },
+
+        clockTextBorderColor = {
+            key = 'clockTextBorderColor', tabId = 'clock', pageId = 3, controlType = 'text', dropdownId = 'clockColor', colorStorage = 'rgb', colorDefaultValue = '#000000', wideTextField = true, label = '텍스트 테두리 색상',
+            settingsFile = 'Clock', variableName = 'ClockTextBorderColor', valueType = 'string',
+            historyLabel = '시계 텍스트 테두리 색상 변경', refreshTargets = { 'Clock' },
+            disabledWhenFieldZero = 'clockTextBorderSize',
+        },
+
+        clockTextShadowYOffset = {
+            key = 'clockTextShadowYOffset', tabId = 'clock', pageId = 4, controlType = 'stepper', label = '텍스트 그림자 위치',
+            settingsFile = 'Clock', variableName = 'ClockTextShadowYOffset', valueType = 'integer', min = 0, max = 20, step = 1,
+            hudMirrorResponsiveBase = true,
+            historyLabel = '시계 텍스트 그림자 위치 조정', refreshTargets = { 'Clock' },
+        },
+
+        clockTextShadowColor = {
+            key = 'clockTextShadowColor', tabId = 'clock', pageId = 4, controlType = 'text', dropdownId = 'clockColor', colorStorage = 'rgb', colorDefaultValue = '#000000', wideTextField = true, label = '텍스트 그림자 색상',
+            settingsFile = 'Clock', variableName = 'ClockTextShadowColor', valueType = 'string',
+            historyLabel = '시계 텍스트 그림자 색상 변경', refreshTargets = { 'Clock' },
+            disabledWhenFieldZero = 'clockTextShadowYOffset',
+        },
+
+        clockTextShadowBlur = {
+            key = 'clockTextShadowBlur', tabId = 'clock', pageId = 4, controlType = 'stepper', label = '그림자 흐림 정도',
+            settingsFile = 'Clock', variableName = 'ClockTextShadowBlur', valueType = 'integer', min = 0, max = 10, step = 1,
+            hudMirrorResponsiveBase = true,
+            historyLabel = '시계 텍스트 그림자 흐림 정도 조정', refreshTargets = { 'Clock' },
+            disabledWhenFieldZero = 'clockTextShadowYOffset',
+        },
+
+        clockTextShadowOpacity = {
+            key = 'clockTextShadowOpacity', tabId = 'clock', pageId = 4, controlType = 'stepper', label = '텍스트 그림자 투명도',
+            settingsFile = 'Clock', variableName = 'ClockTextShadowOpacity', valueType = 'integer', min = 0, max = 100, step = 1,
+            historyLabel = '시계 텍스트 그림자 투명도 조정', refreshTargets = { 'Clock' },
+            disabledWhenFieldZero = 'clockTextShadowYOffset',
+        },
+
         clockTextGap = {
 
             key = 'clockTextGap', tabId = 'clock', pageId = 2, controlType = 'stepper', label = '텍스트 간격',
 
             settingsFile = 'Clock', variableName = 'ClockTextGap', valueType = 'integer', min = -64, max = 64, step = 1,
+            hudMirrorResponsiveBase = true,
 
             historyLabel = '시계 텍스트 간격 조정', refreshTargets = { 'Clock' },
 
@@ -550,7 +639,7 @@ clockType = {
 
         clockEnabled = {
 
-            key = 'clockEnabled', tabId = 'clock', pageId = 3, controlType = 'toggle', label = '요소 끄기',
+            key = 'clockEnabled', tabId = 'clock', pageId = 5, controlType = 'toggle', label = '요소 끄기',
 
             settingsFile = 'Clock', variableName = 'EnableClockSkin', valueType = 'bool', invert = true,
 
@@ -560,7 +649,7 @@ clockType = {
 
         clockDraggable = {
 
-            key = 'clockDraggable', tabId = 'clock', pageId = 3, controlType = 'toggle', label = '드래그 허용',
+            key = 'clockDraggable', tabId = 'clock', pageId = 5, controlType = 'toggle', label = '드래그 허용',
 
             settingsFile = 'Clock', variableName = 'AllowClockDrag', valueType = 'bool',
 
@@ -569,14 +658,14 @@ clockType = {
         },
 
         clockDragSnap = {
-            key = 'clockDragSnap', tabId = 'clock', pageId = 3, controlType = 'toggle', label = '드래그 위치 스냅',
+            key = 'clockDragSnap', tabId = 'clock', pageId = 5, controlType = 'toggle', label = '드래그 위치 스냅',
             settingsFile = 'Clock', variableName = 'AllowClockSnapEdges', valueType = 'bool',
             historyLabel = '시계 드래그 위치 스냅 전환', refreshTargets = {}, windowOptionName = 'SnapEdges', windowOptionTargetIds = { 'Clock', 'ClockSprite' },
         },
 
         resetClockSettings = {
 
-            key = 'resetClockSettings', tabId = 'clock', pageId = 4, controlType = 'action', label = '기본값으로 초기화',
+            key = 'resetClockSettings', tabId = 'clock', pageId = 5, controlType = 'action', label = '기본값으로 초기화',
 
             settingsFile = 'State', variableName = 'SettingsThemeMode', valueType = 'string', historyLabel = '시계 탭 초기화', refreshTargets = {},
 
@@ -586,7 +675,7 @@ clockType = {
 
         resetClockSkinPositions = {
 
-            key = 'resetClockSkinPositions', tabId = 'clock', pageId = 4, controlType = 'action', label = '스킨 위치만 초기화',
+            key = 'resetClockSkinPositions', tabId = 'clock', pageId = 6, controlType = 'action', label = '스킨 위치만 초기화',
 
             settingsFile = 'State', variableName = 'SettingsThemeMode', valueType = 'string', historyLabel = '시계 위치 초기화', refreshTargets = {},
 

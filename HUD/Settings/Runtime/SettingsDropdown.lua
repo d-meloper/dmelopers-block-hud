@@ -19,7 +19,7 @@ return function(app)
     }
 
     local clockColorKeyByValue = {
-        ['#FFFFFF'] = 'Settings_ClockColor_WhiteDefault',
+        ['#FFFFFF'] = 'Settings_ClockColor_White',
         ['#B0B0B0'] = 'Settings_ClockColor_Gray',
         ['#707070'] = 'Settings_ClockColor_DarkGray',
         ['#000000'] = 'Settings_ClockColor_Black',
@@ -31,7 +31,7 @@ return function(app)
     }
 
     local clockColorFallbackByValue = {
-        ['#FFFFFF'] = 'White (default)',
+        ['#FFFFFF'] = 'White',
         ['#B0B0B0'] = 'Gray',
         ['#707070'] = 'Dark gray',
         ['#000000'] = 'Black',
@@ -40,6 +40,16 @@ return function(app)
         ['#4A90E2'] = 'Blue',
         ['#1F3A93'] = 'Navy',
         ['#8E44AD'] = 'Purple',
+    }
+
+    local clockColorDefaultKeyByValue = {
+        ['#FFFFFF'] = 'Settings_ClockColor_WhiteDefault',
+        ['#000000'] = 'Settings_ClockColor_BlackDefault',
+    }
+
+    local clockColorDefaultFallbackByValue = {
+        ['#FFFFFF'] = 'White (default)',
+        ['#000000'] = 'Black (default)',
     }
 
     local jukeboxPlaybackSourceFallbackByValue = {
@@ -113,10 +123,17 @@ return function(app)
         return key and trim(methods.localize(key, fallback)) or fallback
     end
 
-    local function clockColorDisplayLabel(value)
-        local canonical = trim(value)
-        local key = clockColorKeyByValue[canonical]
-        local fallback = clockColorFallbackByValue[canonical] or canonical
+    local function clockColorDefaultValue(field)
+        local configured = string.upper(trim(field and field.colorDefaultValue or '#FFFFFF'))
+        return configured ~= '' and configured or '#FFFFFF'
+    end
+
+    local function clockColorDisplayLabel(value, field)
+        local canonical = string.upper(trim(value))
+        local isDefault = canonical == clockColorDefaultValue(field)
+        local key = isDefault and clockColorDefaultKeyByValue[canonical] or clockColorKeyByValue[canonical]
+        local fallback = isDefault and clockColorDefaultFallbackByValue[canonical] or clockColorFallbackByValue[canonical]
+        fallback = fallback or canonical
         return key and trim(methods.localize(key, fallback)) or fallback
     end
 
@@ -374,6 +391,9 @@ return function(app)
         if not field then
             return resolved
         end
+        if field.dropdownId == 'hudMirrorSelection' and methods.hudMirrorSelectionDisplay then
+            return methods.hudMirrorSelectionDisplay(field)
+        end
         if field.key == 'language' then
             return app.languageRegistry.GetDisplayName(SKIN, methods.normalizeLanguageCode(resolved, resolved))
         end
@@ -383,7 +403,7 @@ return function(app)
         if field.key == 'clockType' then
             return clockTypeDisplayLabel(resolved)
         end
-        if field.key == 'clockTextColor' or field.key == 'hotbarTextColor' then
+        if field.dropdownId == 'clockColor' then
             return methods.displayClockColorValue(resolved)
         end
         if field.key == 'jukeboxPlaybackSourceMode' then
@@ -445,6 +465,10 @@ return function(app)
             return methods.buildIndicatorDropdownOptions(field)
         end
 
+        if field.dropdownId == 'hudMirrorSelection' and methods.hudMirrorDropdownOptions then
+            return methods.hudMirrorDropdownOptions(field)
+        end
+
         if field.dropdownId == 'language' then
             return languageDropdownOptions()
         end
@@ -459,9 +483,21 @@ return function(app)
 
         if field.dropdownId == 'clockColor' then
             local options = {}
-            for _, option in ipairs(schema.clockColorOptions or {}) do
+            local sourceOptions = {}
+            local defaultValue = clockColorDefaultValue(field)
+            local defaultIndex = nil
+            for index, option in ipairs(schema.clockColorOptions or {}) do
+                sourceOptions[index] = option
+                if string.upper(trim(option.appliedValue)) == defaultValue then
+                    defaultIndex = index
+                end
+            end
+            if defaultIndex and defaultIndex > 1 then
+                sourceOptions[1], sourceOptions[defaultIndex] = sourceOptions[defaultIndex], sourceOptions[1]
+            end
+            for _, option in ipairs(sourceOptions) do
                 options[#options + 1] = {
-                    displayLabel = clockColorDisplayLabel(option.appliedValue),
+                    displayLabel = clockColorDisplayLabel(option.appliedValue, field),
                     appliedValue = option.appliedValue,
                 }
             end
@@ -526,7 +562,7 @@ return function(app)
         local fallbackPage = 1
         local normalizedCurrentClockColor = nil
 
-        if field and (field.key == 'clockTextColor' or field.key == 'hotbarTextColor') then
+        if field and field.dropdownId == 'clockColor' then
             normalizedCurrentClockColor = methods.normalizeClockColorValue(trimmedValue, trimmedValue)
         end
 
@@ -556,7 +592,7 @@ return function(app)
             return 'ready'
         end
 
-        if field.dropdownId == 'language' or field.dropdownId == 'clockType' or field.dropdownId == 'clockColor' or field.dropdownId == 'jukeboxPlaybackSourceMode' or field.dropdownId == 'minecraftSkinHistory' then
+        if field.dropdownId == 'language' or field.dropdownId == 'clockType' or field.dropdownId == 'clockColor' or field.dropdownId == 'jukeboxPlaybackSourceMode' or field.dropdownId == 'minecraftSkinHistory' or field.dropdownId == 'hudMirrorSelection' then
             return 'ready'
         end
 
@@ -592,14 +628,20 @@ return function(app)
         setVariable('SettingsDropdownPageText', '1/1')
         setVariable('SettingsDropdownPagePrevBgColor', SKIN:GetVariable('SettingsButtonDisabledBgColor', ''))
         setVariable('SettingsDropdownPagePrevTextColor', SKIN:GetVariable('SettingsButtonDisabledTextColor', ''))
+        setVariable('SettingsDropdownPagePrevCommand', '')
+        setVariable('SettingsDropdownPagePrevCursor', '0')
         setVariable('SettingsDropdownPageCurrentBgColor', SKIN:GetVariable('SettingsButtonBgColor', ''))
         setVariable('SettingsDropdownPageCurrentTextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
         setVariable('SettingsDropdownPageNextBgColor', SKIN:GetVariable('SettingsButtonDisabledBgColor', ''))
         setVariable('SettingsDropdownPageNextTextColor', SKIN:GetVariable('SettingsButtonDisabledTextColor', ''))
+        setVariable('SettingsDropdownPageNextCommand', '')
+        setVariable('SettingsDropdownPageNextCursor', '0')
         for slotIndex = 1, state.dropdownRowsPerPage do
             setVariable('SettingsDropdownOption' .. slotIndex .. 'Hidden', '1')
             setVariable('SettingsDropdownOption' .. slotIndex .. 'LabelText', '')
             setVariable('SettingsDropdownOption' .. slotIndex .. 'AppliedValue', '')
+            setVariable('SettingsDropdownOption' .. slotIndex .. '_BgColor', SKIN:GetVariable('SettingsButtonBgColor', ''))
+            setVariable('SettingsDropdownOption' .. slotIndex .. '_TextColor', SKIN:GetVariable('SettingsButtonTextColor', ''))
             setVariable('SettingsDropdownOption' .. slotIndex .. '_LabelW', '0')
             setVariable('SettingsDropdownOption' .. slotIndex .. '_DeleteHidden', '1')
         end

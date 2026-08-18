@@ -65,6 +65,8 @@ local RESERVED_SLOT10 = {
     ExecPath = "_OPEN_INVENTORY_",
     Qty = 0,
     ConfirmBeforeRun = "0",
+    ActionType = "",
+    FolderCountSync = "0",
     Populated = true,
 }
 
@@ -102,8 +104,16 @@ end
 local function normalizeConfirmBeforeRun(value)
     return trim(value) == "1" and "1" or "0"
 end
+
+local function normalizeActionType(value)
+    return trim(value):lower() == "folder" and "folder" or ""
+end
+
+local function normalizeFolderCountSync(actionType, value)
+    return normalizeActionType(actionType) == "folder" and trim(value) == "1" and "1" or "0"
+end
 local VARIABLE_MISSING = "__DMCS_VARIABLE_MISSING__"
-local ITEM_KEYS = { "Image", "Label", "Action", "Qty", "ConfirmBeforeRun" }
+local ITEM_KEYS = { "Image", "Label", "Action", "Qty", "ConfirmBeforeRun", "ActionType", "FolderCountSync" }
 local DRAFT_META_KEYS = {
     "SchemaVersion",
     "Dirty",
@@ -658,6 +668,8 @@ local function cloneRecord(record)
         ExecPath = record.ExecPath or "",
         Qty = toNumber(record.Qty, 0),
         ConfirmBeforeRun = normalizeConfirmBeforeRun(record.ConfirmBeforeRun),
+        ActionType = normalizeActionType(record.ActionType),
+        FolderCountSync = normalizeFolderCountSync(record.ActionType, record.FolderCountSync),
         Populated = record.Populated == true,
     }
 end
@@ -673,6 +685,8 @@ local function makeEmptyRecord(source, x, y)
         ExecPath = "",
         Qty = 0,
         ConfirmBeforeRun = "0",
+        ActionType = "",
+        FolderCountSync = "0",
         Populated = false,
     }
 end
@@ -1191,6 +1205,10 @@ local function normalizeImageAsset(imageAsset)
         return nil
     end
 
+    if asset:lower():match("^itemgifatlas_v%d+_") then
+        return nil
+    end
+
     local extension = getImageExtension(asset)
     if extension == "" then
         asset = asset .. ".png"
@@ -1233,6 +1251,118 @@ function EditorItemService.GetImagePath(R, imageAsset)
     end
 
     return EditorItemService.GetPaths(R).ItemImageDirectory .. imageAsset
+end
+
+local function splitAtlasProfileFields(value)
+    local fields = {}
+    local text = tostring(value or '')
+    local startIndex = 1
+    while true do
+        local index = text:find('>', startIndex, true)
+        if not index then
+            fields[#fields + 1] = text:sub(startIndex)
+            break
+        end
+        fields[#fields + 1] = text:sub(startIndex, index - 1)
+        startIndex = index + 1
+    end
+    return fields
+end
+
+local function positiveAtlasInteger(value, maximum)
+    local text = tostring(value or '')
+    if not text:match('^[1-9][0-9]*$') then
+        return nil
+    end
+    local number = tonumber(text)
+    if not number or (maximum and number > maximum) then
+        return nil
+    end
+    return number
+end
+
+local function managedAtlasName(value)
+    local ownerHash, sourceHash = tostring(value or ''):match('^ItemGifAtlas_v1_([0-9a-fA-F]+)_([0-9a-fA-F]+)%.png$')
+    return ownerHash ~= nil and #ownerHash == 16 and sourceHash ~= nil and #sourceHash == 16
+end
+
+local atlasPresentationProfileValue = nil
+local atlasPresentationProfiles = {}
+
+local function getAtlasPresentationProfiles(profileValue)
+    local value = tostring(profileValue or '')
+    if value == atlasPresentationProfileValue then
+        return atlasPresentationProfiles
+    end
+
+    local parsed = {}
+    local ownerAtlases = {}
+    local atlasOwners = {}
+    local invalidOwners = {}
+    for record in value:gmatch('[^|]+') do
+        local fields = splitAtlasProfileFields(record)
+        local sourceName = tostring(fields[2] or '')
+        local ownerKey = sourceName:lower()
+        local atlasKey = tostring(fields[3] or ''):lower()
+        local sourceFrames = positiveAtlasInteger(fields[6], 240)
+        local cells = positiveAtlasInteger(fields[7], 512)
+        local columns = positiveAtlasInteger(fields[8], 512)
+        local cellWidth = positiveAtlasInteger(fields[9], 64)
+        local cellHeight = positiveAtlasInteger(fields[10], 64)
+        local rows = cells and columns and math.ceil(cells / columns) or 0
+        local valid = #fields == 11 and fields[1] == 'v1'
+            and normalizeImageAsset(sourceName) == sourceName and sourceName:lower():match('%.gif$')
+            and managedAtlasName(fields[3])
+            and tostring(fields[4] or ''):match('^[0-9a-fA-F]+$') and #(fields[4] or '') == 64
+            and tostring(fields[5] or ''):match('^[0-9a-fA-F]+$') and #(fields[5] or '') == 64
+            and sourceFrames and sourceFrames >= 1 and cells and cells >= sourceFrames
+            and columns and columns <= cells and cellWidth and cellHeight
+            and columns * cellWidth <= 2048 and rows * cellHeight <= 2048
+            and fields[11] == '50'
+        if valid then
+            if invalidOwners[ownerKey] or ownerAtlases[ownerKey] or atlasOwners[atlasKey] then
+                invalidOwners[ownerKey] = true
+                parsed[ownerKey] = nil
+                if ownerAtlases[ownerKey] then
+                    atlasOwners[ownerAtlases[ownerKey]] = nil
+                    ownerAtlases[ownerKey] = nil
+                end
+                local previousOwner = atlasOwners[atlasKey]
+                if previousOwner then
+                    invalidOwners[previousOwner] = true
+                    parsed[previousOwner] = nil
+                    ownerAtlases[previousOwner] = nil
+                    atlasOwners[atlasKey] = nil
+                end
+            else
+                ownerAtlases[ownerKey] = atlasKey
+                atlasOwners[atlasKey] = ownerKey
+                parsed[ownerKey] = { AtlasName = fields[3], CellWidth = cellWidth, CellHeight = cellHeight }
+            end
+        end
+    end
+    atlasPresentationProfileValue = value
+    atlasPresentationProfiles = parsed
+    return parsed
+end
+
+function EditorItemService.GetImagePresentation(R, imageAsset, profileValue)
+    local normalized = normalizeImageAsset(imageAsset)
+    local staticPath = EditorItemService.GetImagePath(R, normalized)
+    local result = { ImagePath = staticPath, ImageCrop = '', ManagedAtlas = false }
+    if not normalized or not normalized:lower():match('%.gif$') then
+        return result
+    end
+
+    local match = getAtlasPresentationProfiles(profileValue)[normalized:lower()]
+    if not match then
+        return result
+    end
+
+    result.ImagePath = EditorItemService.GetPaths(R).ItemImageDirectory .. 'atlas\\' .. match.AtlasName
+    result.ImageCrop = table.concat({ 0, 0, match.CellWidth, match.CellHeight, 1 }, ',')
+    result.ManagedAtlas = true
+    return result
 end
 
 local function buildImageCatalogState()
@@ -1439,6 +1569,7 @@ function EditorItemService.MakeRecord(source, x, y, section, variablePrefix)
         return record
     end
 
+    local actionType = normalizeActionType(section and section.ActionType or "")
     return {
         Source = source,
         Section = sectionName,
@@ -1449,6 +1580,8 @@ function EditorItemService.MakeRecord(source, x, y, section, variablePrefix)
         ExecPath = normalizeAction(section and section.Action or ""),
         Qty = toNumber(section and section.Qty or 0, 0),
         ConfirmBeforeRun = normalizeConfirmBeforeRun(section and section.ConfirmBeforeRun or ""),
+        ActionType = actionType,
+        FolderCountSync = normalizeFolderCountSync(actionType, section and section.FolderCountSync or ""),
         Populated = not EditorItemService.IsEmptyItemSection(section),
     }
 end
@@ -1512,6 +1645,8 @@ function EditorItemService.BuildInfoList(records)
                 y = record.y,
                 qty = record.Qty,
                 ConfirmBeforeRun = record.ConfirmBeforeRun,
+                ActionType = record.ActionType,
+                FolderCountSync = record.FolderCountSync,
             }
         end
     end

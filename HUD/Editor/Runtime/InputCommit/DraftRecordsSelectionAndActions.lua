@@ -45,6 +45,10 @@ local function cloneRecord(record)
 
         ConfirmBeforeRun = normalizeConfirmBeforeRun(record.ConfirmBeforeRun),
 
+        ActionType = normalizeActionType(record.ActionType),
+
+        FolderCountSync = normalizeFolderCountSync(record.FolderCountSync, record.ActionType),
+
 
 
         Qty = record.Qty or 0,
@@ -107,6 +111,10 @@ local function emptyRecord(source, x, y)
 
         ConfirmBeforeRun = '0',
 
+        ActionType = '',
+
+        FolderCountSync = '0',
+
 
 
         Populated = false,
@@ -140,6 +148,10 @@ local function writeRecordToPath(path, prefix, record)
     writeItemField(path, prefix, record.Section, 'Qty', tostring(record.Qty or 0))
 
     writeItemField(path, prefix, record.Section, 'ConfirmBeforeRun', normalizeConfirmBeforeRun(record.ConfirmBeforeRun))
+
+    writeItemField(path, prefix, record.Section, 'ActionType', normalizeActionType(record.ActionType))
+
+    writeItemField(path, prefix, record.Section, 'FolderCountSync', normalizeFolderCountSync(record.FolderCountSync, record.ActionType))
 
 
 
@@ -184,6 +196,10 @@ local function writeDraftRecord(record)
 
             ConfirmBeforeRun = '0',
 
+            ActionType = '',
+
+            FolderCountSync = '0',
+
         }
 
     end
@@ -199,6 +215,10 @@ local function writeDraftRecord(record)
     mirrorConsumerVariable('EditorDraftItem_' .. record.Section .. '_Qty', tostring(record.Qty or 0))
 
     mirrorConsumerVariable('EditorDraftItem_' .. record.Section .. '_ConfirmBeforeRun', normalizeConfirmBeforeRun(record.ConfirmBeforeRun))
+
+    mirrorConsumerVariable('EditorDraftItem_' .. record.Section .. '_ActionType', normalizeActionType(record.ActionType))
+
+    mirrorConsumerVariable('EditorDraftItem_' .. record.Section .. '_FolderCountSync', normalizeFolderCountSync(record.FolderCountSync, record.ActionType))
 
 end
 
@@ -257,6 +277,10 @@ local function updateCurrentTarget(record)
         Qty = record.Qty,
 
         ConfirmBeforeRun = normalizeConfirmBeforeRun(record.ConfirmBeforeRun),
+
+        ActionType = normalizeActionType(record.ActionType),
+
+        FolderCountSync = normalizeFolderCountSync(record.FolderCountSync, record.ActionType),
 
 
 
@@ -529,7 +553,11 @@ EditorLocalizationTextFit = nil
 
 function EnsureEditorLocalizationTextFit()
     if EditorLocalizationTextFit == nil then
-        EditorLocalizationTextFit = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\LocalizationTextFit.lua')
+        local textFitModule = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\LocalizationTextFit.lua')
+        EditorLocalizationTextFit = textFitModule.Create(SKIN, {
+            widthProbeMeterName = 'MeterEditorTextFitProbe',
+            wrapProbeMeterName = 'MeterEditorTextFitWrapProbe',
+        })
     end
     return EditorLocalizationTextFit
 end
@@ -550,19 +578,18 @@ function EditorTextFitNumericVariable(name, fallback)
     return (ok and tonumber(parsed)) or fallback
 end
 
-function ApplyEditorTextFit(meterName, locKey, text, baseFontVariable, widthVariable)
-    local helper = EnsureEditorLocalizationTextFit()
-    if not helper or not helper.ApplyMeterTextFit then
-        return
+function ApplyEditorTextFit(meterName, text, baseFontVariable, widthVariable, heightVariable, policy)
+    local fitter = EnsureEditorLocalizationTextFit()
+    if not fitter then
+        return nil
     end
-    helper.ApplyMeterTextFit(SKIN, meterName, text, {
-        locKey = locKey,
+    return fitter:Apply({
+        meterName = meterName,
+        text = text,
         baseFontSize = EditorTextFitNumericVariable(baseFontVariable, 10) or 10,
         widthPx = EditorTextFitNumericVariable(widthVariable, 0) or 0,
-        minScale = 0.70,
-        probeMeterName = 'MeterEditorTextFitProbe',
-        setText = false,
-        update = false,
+        heightPx = EditorTextFitNumericVariable(heightVariable, 0) or 0,
+        policy = policy or 'wrap4',
     })
 end
 
@@ -573,35 +600,87 @@ local function applyEditorStaticTextFitTarget(target)
     local text = target.text or ('#Loc_' .. target.key .. '#')
     ApplyEditorTextFit(
         target.meter,
-        target.key or '',
         text,
         target.base,
-        target.width
+        target.width,
+        target.height,
+        target.policy
     )
 end
 
 function ApplyEditorStaticLocalizationTextFits()
     local targets = {
-        { meter = 'MeterViewerLoadButtonLabel', key = 'Editor_LoadButton', base = 'ViewerLoadButtonFontSize', width = 'ViewerLoadButtonW' },
-        { meter = 'MeterEditorLoadingLabelLine1', key = 'Editor_Loading_Line1', text = '#EditorLoadingTextLine1#', base = 'EditorUIFontSize', width = 'PanelWidth' },
-        { meter = 'MeterEditorLoadingLabelLine2', key = 'Editor_Loading_Line2', text = '#EditorLoadingTextLine2#', base = 'EditorUIFontSize', width = 'PanelWidth' },
-        { meter = 'MeterEditorNoSelectionMessage', key = 'Editor_NoSelection', base = 12, width = 'EditorNoSelectionMessageW' },
-        { meter = 'MeterTopBarResetButtonLabel', key = 'Settings_Notice_Clear', base = 'EditorUIFontSize', width = 'ActionReset_W' },
-        { meter = 'MeterSlotFormTitle', key = 'Editor_FormTitle', base = 'LabeledInputTitleFontSize', width = 'SlotFormTitle_W' },
-        { meter = 'MeterSlotPathTitle', key = 'Editor_PathTitle', base = 'LabeledInputTitleFontSize', width = 'SlotPathTitle_W' },
-        { meter = 'MeterRunConfirmToggleTitle', key = 'Editor_RunConfirmToggleTitle', base = 12, width = 'EditorRunConfirmToggleTitle_W' },
-        { meter = 'MeterLabeledInputGroupTitle', key = 'Editor_PositionGroupTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInputGroupTitle_W' },
-        { meter = 'MeterLabeledInputTitle', key = 'Editor_XTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInputTitle_W' },
-        { meter = 'MeterLabeledInput2Title', key = 'Editor_YTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInput2Title_W' },
-        { meter = 'MeterLabeledInput3Title', key = 'Editor_QtyTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInput3Title_W' },
-        { meter = 'MeterImageAdjustGroupTitle', key = 'Editor_ImageAdjustGroupTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjustGroupTitle_W' },
-        { meter = 'MeterImageAdjustTitle', key = 'Editor_XTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjustTitle_W' },
-        { meter = 'MeterImageAdjust2Title', key = 'Editor_YTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjust2Title_W' },
-        { meter = 'MeterImageAdjust3Title', key = 'Editor_ImageAdjustSizeTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjust3Title_W' },
+        { meter = 'MeterViewerLoadButtonLabel', key = 'Editor_LoadButton', base = 'ViewerLoadButtonFontSize', width = 'ViewerLoadButtonW', height = 'ViewerLoadButtonH' },
+        { meter = 'MeterEditorLoadingLabelLine1', key = 'Editor_Loading_Line1', text = '#EditorLoadingTextLine1#', base = 'EditorUIFontSize', width = 'PanelWidth', height = 18, policy = 'single-line' },
+        { meter = 'MeterEditorLoadingLabelLine2', key = 'Editor_Loading_Line2', text = '#EditorLoadingTextLine2#', base = 'EditorUIFontSize', width = 'PanelWidth', height = 18, policy = 'single-line' },
+        { meter = 'MeterEditorNoSelectionMessage', key = 'Editor_NoSelection', base = 12, width = 'EditorNoSelectionMessageW', height = 'EditorNoSelectionMessageH' },
+        { meter = 'MeterTopBarResetButtonLabel', key = 'Settings_Notice_Clear', base = 'EditorUIFontSize', width = 'ActionReset_W', height = 'ActionReset_H' },
+        { meter = 'MeterFormTitle', key = 'Editor_FormTitle', base = 'LabeledInputTitleFontSize', width = 'SlotFormTitle_W', height = 'SlotFormTitle_H' },
+        { meter = 'MeterPathTitle', key = 'Editor_PathTitle', base = 'LabeledInputTitleFontSize', width = 'SlotPathTitle_W', height = 'SlotPathTitle_H' },
+        { meter = 'MeterRunConfirmToggleTitle', key = 'Editor_RunConfirmToggleTitle', base = 12, width = 'EditorRunConfirmToggleTitle_W', height = 'EditorRunConfirmToggleTitle_H' },
+        { meter = 'MeterLabeledInputGroupTitle', key = 'Editor_PositionGroupTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInputGroupTitle_W', height = 'SlotLabeledInputGroupTitle_H' },
+        { meter = 'MeterLabeledInputTitle', key = 'Editor_XTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInputTitle_W', height = 'SlotLabeledInputTitle_H' },
+        { meter = 'MeterLabeledInput2Title', key = 'Editor_YTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInput2Title_W', height = 'SlotLabeledInput2Title_H' },
+        { meter = 'MeterLabeledInput3Title', key = 'Editor_QtyTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInput3Title_W', height = 'SlotLabeledInput3Title_H' },
+        { meter = 'MeterFolderCountSyncToggleTitle', key = 'Editor_FolderCountSyncTitle', base = 12, width = 'EditorFolderCountSyncToggleTitle_W', height = 'EditorFolderCountSyncToggleTitle_H' },
+        { meter = 'MeterImageAdjustGroupTitle', key = 'Editor_ImageAdjustGroupTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjustGroupTitle_W', height = 'SlotImageAdjustGroupTitle_H' },
+        { meter = 'MeterImageAdjustTitle', key = 'Editor_XTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjustTitle_W', height = 'SlotImageAdjustTitle_H' },
+        { meter = 'MeterImageAdjust2Title', key = 'Editor_YTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjust2Title_W', height = 'SlotImageAdjust2Title_H' },
+        { meter = 'MeterImageAdjust3Title', key = 'Editor_ImageAdjustSizeTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjust3Title_W', height = 'SlotImageAdjust3Title_H' },
     }
     for _, target in ipairs(targets) do
         applyEditorStaticTextFitTarget(target)
     end
+end
+
+function EditorLifecycle.SetFolderCountUnavailable(unavailable)
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncUnavailable', unavailable and '1' or '0')
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncTooltip', unavailable and '#Loc_Editor_FolderCountSyncUnavailable#' or '#Loc_Editor_FolderCountSyncTooltip#')
+    SKIN:Bang('!UpdateMeter', 'MeterFolderCountSyncToggleTitle')
+    SKIN:Bang('!UpdateMeter', 'MeterFolderCountSyncToggleBackground')
+    SKIN:Bang('!UpdateMeter', 'MeterFolderCountSyncToggleFill')
+end
+
+function EditorLifecycle.SetFolderCountSyncUi(record)
+    local service = ensureService()
+    local populated = record and record.Populated == true
+    local reserved = record and service.IsReservedHotbarSlot(record.Source, record.x, record.y)
+    local actionType = populated and normalizeActionType(record.ActionType) or ''
+    local eligible = populated and not reserved and actionType == 'folder'
+    local linked = eligible and normalizeFolderCountSync(record.FolderCountSync, actionType) == '1'
+    local manualQty = record and tostring(record.Qty or 0) or '0'
+
+    SKIN:Bang('!SetVariable', 'EditorActionTypeValue', actionType)
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncValue', linked and '1' or '0')
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncEligible', eligible and '1' or '0')
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncCommand', eligible and '[!CommandMeasure MeasureInputCommit "ToggleFolderCountSyncUi()"]' or '')
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncCursor', eligible and '1' or '0')
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncTitleColor', eligible and SKIN:GetVariable('EditorInputTextColor', '') or SKIN:GetVariable('EditorButtonDisabledTextColor', ''))
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncToggleBgColor', eligible and SKIN:GetVariable('EditorButtonBgColor', '') or SKIN:GetVariable('EditorButtonDisabledBgColor', ''))
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncFillColor', linked and SKIN:GetVariable('EditorFolderCountSyncFillOnColor', '') or SKIN:GetVariable('EditorFolderCountSyncFillOffColor', '0,0,0,0'))
+    SKIN:Bang('!SetVariable', 'EditorQtyInputEnabled', linked and '0' or '1')
+    SKIN:Bang('!SetVariable', 'EditorQtyInputCommand', linked and '' or '[!CommandMeasure MeasureInputCommit "PrepareInputTarget(\'qty\')"][!UpdateMeasure MeasureInputField4][!CommandMeasure MeasureInputField4 "ExecuteBatch 1-2"]')
+    SKIN:Bang('!SetVariable', 'EditorQtyInputCursor', linked and '0' or '1')
+    SKIN:Bang('!SetVariable', 'EditorQtyInputBgColor', linked and SKIN:GetVariable('EditorButtonDisabledBgColor', '') or SKIN:GetVariable('EditorInputBgColor', ''))
+    SKIN:Bang('!SetVariable', 'EditorQtyInputStrokeColor', linked and SKIN:GetVariable('EditorButtonDisabledTextColor', '') or SKIN:GetVariable('EditorInputStrokeColor', ''))
+    SKIN:Bang('!SetVariable', 'EditorQtyInputTextColor', linked and SKIN:GetVariable('EditorButtonDisabledTextColor', '') or SKIN:GetVariable('EditorInputTextColor', ''))
+    EditorLifecycle.SetFolderCountUnavailable(false)
+
+    if linked then
+        setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', '0')
+        if type(RefreshFolderCountSync) == 'function' and tonumber(trim(SKIN:GetVariable('EditorPageIndex', '1'))) == 2 then
+            RefreshFolderCountSync()
+        end
+    else
+        setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', manualQty)
+    end
+
+    SKIN:Bang('!UpdateMeasure', 'MeasureInputField4')
+    SKIN:Bang('!UpdateMeter', 'MeterLabeledInput3FieldBackground')
+    SKIN:Bang('!UpdateMeter', 'MeterLabeledInput3Text')
+    SKIN:Bang('!UpdateMeter', 'MeterFolderCountSyncToggleTitle')
+    SKIN:Bang('!UpdateMeter', 'MeterFolderCountSyncToggleBackground')
+    SKIN:Bang('!UpdateMeter', 'MeterFolderCountSyncToggleFill')
 end
 
 
@@ -883,7 +962,7 @@ local function syncItemActionState(record, mode)
 
 
     setActionLocalizationVariable('ActionItemPrimary_LabelText', primaryLabelKey)
-    ApplyEditorTextFit('MeterItemActionPrimaryLabel', primaryLabelKey, '#Loc_' .. primaryLabelKey .. '#', 'EditorUIFontSize', 'ItemActionPrimaryW')
+    ApplyEditorTextFit('MeterItemActionPrimaryLabel', '#Loc_' .. primaryLabelKey .. '#', 'EditorUIFontSize', 'ItemActionPrimaryW', 'ItemActionPrimaryH', 'wrap4')
 
 
 
@@ -900,7 +979,7 @@ local function syncItemActionState(record, mode)
 
 
     applyActionContract('ActionItemCancelDelete', cancelEnabled, cancelCommand, '#Loc_Editor_Action_DeleteCancel#', cancelBgColor, cancelTextColor)
-    ApplyEditorTextFit('MeterItemActionCancelLabel', 'Editor_Action_DeleteCancel', '#Loc_Editor_Action_DeleteCancel#', 'EditorUIFontSize', 'ItemActionCancelW')
+    ApplyEditorTextFit('MeterItemActionCancelLabel', '#Loc_Editor_Action_DeleteCancel#', 'EditorUIFontSize', 'ItemActionCancelW', 'ItemActionCancelH', 'wrap4')
 
 
 
@@ -909,7 +988,7 @@ local function syncItemActionState(record, mode)
 
 
     applyActionContract('ActionItemConfirmDelete', confirmEnabled, confirmCommand, '#Loc_Editor_Action_DeleteTooltip#', confirmBgColor, confirmTextColor)
-    ApplyEditorTextFit('MeterItemActionConfirmLabel', 'Editor_Action_DeleteConfirm', '#Loc_Editor_Action_DeleteConfirm#', 'EditorUIFontSize', 'ItemActionConfirmW')
+    ApplyEditorTextFit('MeterItemActionConfirmLabel', '#Loc_Editor_Action_DeleteConfirm#', 'EditorUIFontSize', 'ItemActionConfirmW', 'ItemActionConfirmH', 'wrap4')
 
 
 
@@ -1085,8 +1164,6 @@ local function clearEditorUI()
 
     setRunConfirmToggleUi(false)
 
-
-
     setLabeledInput('EditorLabeledInputValue', 'EditorLabeledInputDisplayText', 'EditorLabeledInputPlaceholder', 'MeterLabeledInputText', '')
 
 
@@ -1096,6 +1173,8 @@ local function clearEditorUI()
 
 
     setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', '0')
+
+    EditorLifecycle.SetFolderCountSyncUi(nil)
 
 
 
@@ -1143,8 +1222,6 @@ local function updateEmptyTargetUI(record)
 
     setRunConfirmToggleUi(false)
 
-
-
     setLabeledInput('EditorLabeledInputValue', 'EditorLabeledInputDisplayText', 'EditorLabeledInputPlaceholder', 'MeterLabeledInputText', tostring(record.x))
 
 
@@ -1154,6 +1231,8 @@ local function updateEmptyTargetUI(record)
 
 
     setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', tostring(record.Qty or 0))
+
+    EditorLifecycle.SetFolderCountSyncUi(record)
 
 
 
@@ -1201,8 +1280,6 @@ local function updateTargetUI(record)
 
     setRunConfirmToggleUi(normalizeConfirmBeforeRun(record.ConfirmBeforeRun) == '1')
 
-
-
     setLabeledInput('EditorLabeledInputValue', 'EditorLabeledInputDisplayText', 'EditorLabeledInputPlaceholder', 'MeterLabeledInputText', tostring(record.x))
 
 
@@ -1212,6 +1289,8 @@ local function updateTargetUI(record)
 
 
     setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', tostring(record.Qty or 0))
+
+    EditorLifecycle.SetFolderCountSyncUi(record)
 
 
 

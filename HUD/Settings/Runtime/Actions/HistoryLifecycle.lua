@@ -175,7 +175,8 @@ function methods.ResetToDefaults()
 
     local resetFieldKeys = {}
     for _, fieldKey in ipairs(schema.trackedFieldKeys) do
-        if fieldKey ~= 'startupAutoRun' then
+        local field = methods.getField(fieldKey)
+        if field and field.externalState ~= true then
             resetFieldKeys[#resetFieldKeys + 1] = fieldKey
         end
     end
@@ -200,7 +201,11 @@ function methods.ResetToDefaults()
 
     methods.closeDropdownInternal()
 
-    local restoreTargets = methods.restoreSnapshot(defaultSnapshot, { suppressRender = true, fieldKeys = resetFieldKeys, skipFieldKeys = { 'startupAutoRun' } })
+    if methods.ResetHudMirrorPersistentMetadataForOverallReset then
+        methods.ResetHudMirrorPersistentMetadataForOverallReset()
+    end
+
+    local restoreTargets = methods.restoreSnapshot(defaultSnapshot, { suppressRender = true, fieldKeys = resetFieldKeys })
     methods.ResetAllSkinPositions()
 
     local afterSnapshot = methods.captureSnapshot()
@@ -250,6 +255,7 @@ local function cleanupHiddenResidentUiState()
     end
     methods.StopSettingsResponsiveLayoutTimer()
     SKIN:Bang('!SetVariable', 'BlockHudSettingsModalAlertDeferredOpen', '0')
+    SKIN:Bang('!SetVariable', 'BlockHudSettingsMinecraftAtlasModalDeferredOpen', '0')
     methods.clearPendingJukeboxPlaybackSourceMode()
     methods.ResetUpdateJobs()
     SKIN:Bang('!CommandMeasure', 'MeasureSettingsDeferredLanguageSwitch', 'Stop 1')
@@ -261,6 +267,7 @@ function methods.ResumeSettingsResident()
     methods.PreloadModalAlert()
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'ApplyLayout()')
     methods.StartSettingsResponsiveLayoutTimer()
+    methods.ScheduleStartupAutoRunStateProbe({ delayTicks = 0 })
     if methods.resumePendingLoadIfNeeded then
         methods.resumePendingLoadIfNeeded()
     end
@@ -303,6 +310,7 @@ function methods.CloseSettings()
 
     function methods.HandleClose()
         app.residentUpdate.SuspendSurface('Settings')
+        methods.clearPendingConfirmation()
         local versionSwitchClose = trim(SKIN:GetVariable('SettingsVersionSwitchClose', '0')) == '1'
         if versionSwitchClose then
             SKIN:Bang('!SetVariable', 'SettingsVersionSwitchClose', '0')
@@ -502,8 +510,14 @@ function methods.CloseSettings()
             settingsVisibleOnInitialize = true
         end
 
+        local computerInfoReady = methods.RestorePersistentCache('computerInfo')
+
         if not settingsVisibleOnInitialize then
+            if computerInfoReady then
+                methods.hydrateStartupAutoRunFieldFromCache()
+            end
             methods.SuspendSettingsResident()
+            methods.ScheduleStartupAutoRunStateProbe({ delayTicks = 0 })
             return 0
         end
 
@@ -512,7 +526,6 @@ function methods.CloseSettings()
 
 
 
-        local computerInfoReady = methods.RestorePersistentCache('computerInfo')
 
 
 
@@ -567,6 +580,10 @@ function methods.CloseSettings()
 
 
 
+
+        if computerInfoReady then
+            methods.ScheduleStartupAutoRunStateProbe({ delayTicks = 0 })
+        end
 
         if not computerInfoReady then
 

@@ -237,3 +237,258 @@ function Test-BlockHudSkinRoot {
 
     return $true
 }
+
+function Get-BlockHudFixedRootRequiredRelativePaths {
+    @(
+        '@Resources\Defaults\Runtime\SkinLayoutContract.json'
+        '@Resources\Defaults\Runtime\images\clockSpriteSheet.png'
+        '@Resources\Defaults\Runtime\images\playerLookAtlas.png'
+        '@Resources\Defaults\Runtime\images\playerSteveStatic.png'
+        '@Resources\Defaults\Runtime\images\hotbar.png'
+        '@Resources\Defaults\Runtime\images\inv.png'
+        'HUD\Settings\Settings.ini'
+        'HUD\Hotbar\Hotbar.ini'
+        'HUD\Inventory\Inventory.ini'
+        'Utilities\Bootstrap\ZPosBootstrap.ini'
+        'Utilities\Bootstrap\ZPosBootstrap.lua'
+        'Utilities\Diagnostics\Diagnostics.ini'
+        'Utilities\Diagnostics\Diagnostics.lua'
+        'Utilities\LatestUpdate\LatestUpdate.ini'
+        'Utilities\LatestUpdate\LatestUpdate.lua'
+        'Utilities\Modal\Modal.ini'
+        'Utilities\Modal\Modal.lua'
+        'Utilities\tools\DefaultItemLocalization.Common.ps1'
+        'Utilities\tools\GetVersionReleaseCatalog.ps1'
+        'Utilities\tools\ImportFromOldVersion.ps1'
+        'Utilities\tools\ImportFromOldVersion\AssetsAndRollback.ps1'
+        'Utilities\tools\ImportFromOldVersion\CoreDiscovery.ps1'
+        'Utilities\tools\ImportFromOldVersion\InteractiveSourceSelection.ps1'
+        'Utilities\tools\ImportFromOldVersion\ItemImageRepair.ps1'
+        'Utilities\tools\ImportFromOldVersion\JukeboxAndProgress.ps1'
+        'Utilities\tools\ImportFromOldVersion\PlayerEditorAndRun.ps1'
+        'Utilities\tools\ImportFromOldVersion\SettingsLayoutAndImages.ps1'
+        'Utilities\tools\ImportFromOldVersion\VariablesAndCompatibility.ps1'
+        'Utilities\tools\InstallVersionRelease.PackageTransport.ps1'
+        'Utilities\tools\InstallVersionRelease.ps1'
+        'Utilities\tools\ItemImageAsset.Policy.ps1'
+        'Utilities\tools\LatestUpdate.Common.ps1'
+        'Utilities\tools\LatestUpdateSession.ps1'
+        'Utilities\tools\Localization.Common.ps1'
+        'Utilities\tools\LowSpecSettings.Policy.ps1'
+        'Utilities\tools\OpenSettingsLogFolder.ps1'
+        'Utilities\tools\OpenVersionManager.ps1'
+        'Utilities\tools\OpenVersionManager\ConfigurationAndInstallations.ps1'
+        'Utilities\tools\OpenVersionManager\CoreProcessAndPaths.ps1'
+        'Utilities\tools\OpenVersionManager\DialogsActionsAndHelpers.ps1'
+        'Utilities\tools\OpenVersionManager\InteractiveModuleLoader.ps1'
+        'Utilities\tools\OpenVersionManager\MainForm.ps1'
+        'Utilities\tools\OpenVersionManager\SessionLaunch.ps1'
+        'Utilities\tools\Remove-LegacyLayoutTransportAdapter.ps1'
+        'Utilities\tools\SkinLayout.Common.ps1'
+        'Utilities\tools\StartLatestUpdate.ps1'
+        'Utilities\tools\SwitchActiveSkinVersion.ps1'
+        'Utilities\tools\Update-DefaultItemLabels.ps1'
+        'Utilities\tools\UpdateHelperLocalizationCache.ps1'
+        'Utilities\tools\UpdateToLatestVersion.ps1'
+        'Utilities\tools\UpdateToLatestVersion\CleanupOldRoot.ps1'
+        'Utilities\tools\UpdateToLatestVersion\CleanupTempRoot.ps1'
+        'Utilities\tools\UpdateToLatestVersion\CorePathsAndPackage.ps1'
+        'Utilities\tools\UpdateToLatestVersion\ReplacementAndSwitch.ps1'
+        'Utilities\tools\UpdateToLatestVersion\CurrentVersionDataReset.ps1'
+        'Utilities\tools\UpdateToLatestVersion\ResetRecovery.ps1'
+        'Utilities\tools\UpdateToLatestVersion\ResetRecoveryGuard.ps1'
+        'Utilities\tools\VersionManager.OperationLock.ps1'
+        'Utilities\tools\VersionManager.ReleaseCatalog.ps1'
+        'Utilities\tools\VersionManager.ReleaseIdentity.ps1'
+        'Utilities\tools\VersionManager.UiState.ps1'
+        'Utilities\tools\VersionManager.UpdateCache.ps1'
+    )
+}
+
+function Get-BlockHudFixedRootHandoffPaths {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $dataRoot = Join-Path (Resolve-BlockHudFullPath -Path $Root) '@Resources\Customs\Data'
+    return [PSCustomObject]@{
+        DataRoot = $dataRoot
+        RequestPath = Join-Path $dataRoot 'FixedRootActivationRequest.json'
+        AckPath = Join-Path $dataRoot 'FixedRootActivationAck.json'
+    }
+}
+
+function Get-BlockHudSha256Hex {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return (($sha.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) -join '')
+        }
+        finally { $sha.Dispose() }
+    }
+    finally { $stream.Dispose() }
+}
+
+function Assert-BlockHudFixedRootRuntimeContract {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Context,
+        [switch]$RequireTransportAdapter,
+        [switch]$RequireTransportAdapterAbsent,
+        [switch]$AllowMissingManagerLocalResetHelper
+    )
+
+    $resolvedRoot = Resolve-BlockHudFullPath -Path $Root
+    foreach ($relativeDirectory in @('@Resources', 'HUD', 'Utilities', 'ExtraContent')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $resolvedRoot $relativeDirectory) -PathType Container)) {
+            throw "$Context is missing the required directory: $relativeDirectory"
+        }
+    }
+    foreach ($relativePath in @(Get-BlockHudFixedRootRequiredRelativePaths)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $resolvedRoot $relativePath) -PathType Leaf)) {
+            if ($AllowMissingManagerLocalResetHelper -and
+                [string]::Equals(
+                    $relativePath,
+                    'Utilities\tools\UpdateToLatestVersion\CurrentVersionDataReset.ps1',
+                    [System.StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+            throw "$Context is missing the required runtime file: $relativePath"
+        }
+    }
+
+    $contract = Get-BlockHudLayoutContract -Root $resolvedRoot
+    if ($null -eq $contract -or $null -eq $contract.legacyTransportAdapter) {
+        throw "$Context does not define the legacy transport adapter contract."
+    }
+    $manifestRelativePath = [string]$contract.legacyTransportAdapter.manifestRelativePath
+    if ([string]::IsNullOrWhiteSpace($manifestRelativePath)) {
+        throw "$Context has an empty legacy transport adapter manifest path."
+    }
+    $manifestPath = Join-Path $resolvedRoot $manifestRelativePath
+    if ($RequireTransportAdapter -and -not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "$Context is missing the signed legacy transport adapter manifest: $manifestRelativePath"
+    }
+    if ($RequireTransportAdapter) {
+        try {
+            $manifest = [System.IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
+        }
+        catch {
+            throw "$Context has an invalid legacy transport adapter manifest: $($_.Exception.Message)"
+        }
+        $adapter = $contract.legacyTransportAdapter
+        if ([int]$manifest.adapterContractVersion -ne 1 -or
+            -not [string]::Equals([string]$manifest.marker, [string]$adapter.marker, [System.StringComparison]::Ordinal)) {
+            throw "$Context has a legacy transport adapter manifest with the wrong identity."
+        }
+        $listed = @{}
+        foreach ($entry in @($manifest.files)) {
+            $relativePath = ([string]$entry.relativePath).Trim('\', '/')
+            if ([string]::IsNullOrWhiteSpace($relativePath) -or $listed.ContainsKey($relativePath)) {
+                throw "$Context has a duplicate or empty legacy transport adapter manifest entry."
+            }
+            $listed[$relativePath] = $entry
+        }
+        $expectedFiles = @($adapter.files)
+        if ($listed.Count -ne $expectedFiles.Count) {
+            throw "$Context does not contain the exact legacy transport adapter file set."
+        }
+        foreach ($spec in $expectedFiles) {
+            $relativePath = ([string]$spec.relativePath).Trim('\', '/')
+            if (-not $listed.ContainsKey($relativePath) -or
+                -not [string]::Equals([string]$listed[$relativePath].kind, [string]$spec.kind, [System.StringComparison]::Ordinal)) {
+                throw "$Context has an unexpected legacy transport adapter entry: $relativePath"
+            }
+            $path = Join-Path $resolvedRoot $relativePath
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                throw "$Context is missing a signed legacy transport adapter file: $relativePath"
+            }
+            if (-not [string]::Equals((Get-BlockHudSha256Hex -Path $path), [string]$listed[$relativePath].sha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "$Context has a modified legacy transport adapter file: $relativePath"
+            }
+        }
+    }
+    if ($RequireTransportAdapterAbsent -and (Test-Path -LiteralPath $manifestPath)) {
+        throw "$Context still contains the legacy transport adapter manifest after Bootstrap cleanup: $manifestRelativePath"
+    }
+    if ($RequireTransportAdapterAbsent) {
+        foreach ($spec in @($contract.legacyTransportAdapter.files)) {
+            $relativePath = ([string]$spec.relativePath).Trim('\', '/')
+            if (Test-Path -LiteralPath (Join-Path $resolvedRoot $relativePath)) {
+                throw "$Context still contains a legacy transport adapter file after Bootstrap cleanup: $relativePath"
+            }
+        }
+    }
+}
+
+function New-BlockHudFixedRootImmutableSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Context
+    )
+
+    $resolvedRoot = Resolve-BlockHudFullPath -Path $Root
+    Assert-BlockHudFixedRootRuntimeContract -Root $resolvedRoot -Context $Context
+    $relativePaths = New-Object System.Collections.Generic.List[string]
+    $utilitiesRoot = Join-Path $resolvedRoot 'Utilities'
+    foreach ($file in @(Get-ChildItem -LiteralPath $utilitiesRoot -File -Recurse -Force | Sort-Object FullName)) {
+        [void]$relativePaths.Add($file.FullName.Substring($resolvedRoot.Length).TrimStart('\', '/'))
+    }
+    foreach ($relativePath in @(Get-BlockHudFixedRootRequiredRelativePaths)) {
+        if (-not $relativePath.StartsWith('Utilities\', [System.StringComparison]::OrdinalIgnoreCase) -and
+            -not $relativePaths.Contains($relativePath)) {
+            [void]$relativePaths.Add($relativePath)
+        }
+    }
+
+    $files = @()
+    foreach ($relativePath in @($relativePaths | Sort-Object -Unique)) {
+        $path = Join-Path $resolvedRoot $relativePath
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "$Context changed while its immutable file snapshot was being captured: $relativePath"
+        }
+        $files += [PSCustomObject]@{
+            RelativePath = $relativePath
+            Sha256 = Get-BlockHudSha256Hex -Path $path
+        }
+    }
+    return [PSCustomObject]@{
+        Files = @($files)
+        UtilitiesFileCount = @($files | Where-Object { $_.RelativePath.StartsWith('Utilities\', [System.StringComparison]::OrdinalIgnoreCase) }).Count
+    }
+}
+
+function Assert-BlockHudFixedRootImmutableSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)]$Snapshot,
+        [Parameter(Mandatory = $true)][string]$Context
+    )
+
+    $resolvedRoot = Resolve-BlockHudFullPath -Path $Root
+    $expected = @{}
+    foreach ($entry in @($Snapshot.Files)) {
+        $relativePath = [string]$entry.RelativePath
+        $expected[$relativePath] = [string]$entry.Sha256
+        $path = Join-Path $resolvedRoot $relativePath
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "$Context lost an immutable runtime file: $relativePath"
+        }
+        $actualHash = Get-BlockHudSha256Hex -Path $path
+        if (-not [string]::Equals($actualHash, [string]$entry.Sha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "$Context changed an immutable runtime file: $relativePath"
+        }
+    }
+
+    $actualUtilities = @(Get-ChildItem -LiteralPath (Join-Path $resolvedRoot 'Utilities') -File -Recurse -Force |
+        ForEach-Object { $_.FullName.Substring($resolvedRoot.Length).TrimStart('\', '/') })
+    if ($actualUtilities.Count -ne [int]$Snapshot.UtilitiesFileCount) {
+        throw ("{0} changed the canonical Utilities file set. expected={1} actual={2}" -f $Context, [int]$Snapshot.UtilitiesFileCount, $actualUtilities.Count)
+    }
+    foreach ($relativePath in $actualUtilities) {
+        if (-not $expected.ContainsKey([string]$relativePath)) {
+            throw "$Context added an unexpected canonical Utilities file: $relativePath"
+        }
+    }
+}

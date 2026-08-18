@@ -1,7 +1,6 @@
 return function(app)
     local methods = app.methods
     local trim = app.trim
-    local settingsTextFitProbeMeter = 'MeterSettingsTextFitProbe'
 
     local function contractVariable(name, fallback)
         return SKIN:GetVariable(name, fallback or '')
@@ -26,19 +25,17 @@ return function(app)
         return math.floor(numeric + 0.5)
     end
 
-    local function applyTextFit(meterName, locKey, text, baseFontVariable, width, minScale, unitPixelFactor)
-        if not app.textFit or not app.textFit.ApplyMeterTextFit then
-            return
+    local function applyTextFit(meterName, text, baseFontVariable, width, height, policy)
+        if not app.textFitter then
+            return nil
         end
-        app.textFit.ApplyMeterTextFit(SKIN, meterName, text, {
-            locKey = locKey,
+        return app.textFitter:Apply({
+            meterName = meterName,
+            text = text,
             baseFontSize = methods.numericVariable(baseFontVariable, 10) or 10,
             widthPx = width,
-            minScale = minScale or 0.70,
-            unitPixelFactor = unitPixelFactor,
-            probeMeterName = settingsTextFitProbeMeter,
-            setText = false,
-            update = false,
+            heightPx = height,
+            policy = policy or 'wrap4',
         })
     end
 

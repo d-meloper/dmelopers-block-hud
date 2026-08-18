@@ -72,6 +72,7 @@ function methods.refreshVisuals()
             'MeterSettingsTab5BG', 'MeterSettingsTab5Label',
             'MeterSettingsTab6BG', 'MeterSettingsTab6Label',
             'MeterSettingsTab7BG', 'MeterSettingsTab7Label',
+            'MeterSettingsTab8BG', 'MeterSettingsTab8Label',
 
             'MeterSettingsFooterPrevBG', 'MeterSettingsFooterPrevLabel',
 

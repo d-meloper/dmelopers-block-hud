@@ -100,6 +100,13 @@
                                                      "relativePath":  "tools\\ImportFromOldVersion.ps1",
                                                      "kind":  "importWrapper"
                                                  }
+                                             ],
+                                   "fixedRootCompatibilityAssets":  [
+                                                 {
+                                                     "relativePath":  "@Resources\\Defaults\\Runtime\\images\\playerSpriteSheet.png",
+                                                     "kind":  "fixedRootCompatibilityAsset",
+                                                     "sha256":  "F6F4077AF83F977A0A98FEA91145D46EC2C5B4C3EE68297C4061177C03C55D35"
+                                                 }
                                              ]
                                }
 }

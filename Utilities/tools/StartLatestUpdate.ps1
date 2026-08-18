@@ -6,6 +6,7 @@ param(
     [string]$ExpectedVersion = '',
     [string]$ReleaseVariant = '',
     [string]$AssetName = '',
+    [string]$ExpectedPackageSha256 = '',
     [long]$StartedAtUnixSeconds = 0,
     [ValidateSet('', 'continue', 'cancel')][string]$Decision = '',
     [switch]$ProbeState,
@@ -181,7 +182,7 @@ function Get-LatestUpdateProbeSnapshot {
     $sessionPid = [int](Get-LatestUpdateObjectProperty -Object $state -Name 'SessionPid' -DefaultValue 0)
     $sessionStartedAtUtcTicks = [long](Get-LatestUpdateObjectProperty -Object $state -Name 'SessionStartedAtUtcTicks' -DefaultValue 0)
     $signature = '{0}|{1}|{2}|{3}|{4}' -f $stateSchema, $stateToken, $stateStatus, $sessionPid, $sessionStartedAtUtcTicks
-    $kind = if ($stateSchema -ne 1 -or -not [string]::Equals($stateToken, $LaunchToken, [System.StringComparison]::Ordinal)) {
+    $kind = if ($stateSchema -ne 2 -or -not [string]::Equals($stateToken, $LaunchToken, [System.StringComparison]::Ordinal)) {
         'stale'
     }
     elseif ($stateStatus -in @('success', 'canceled', 'error')) {
@@ -278,14 +279,14 @@ function Invoke-LatestUpdateLaunch {
         }
     }
 
-    $script:Intent = New-LatestUpdateIntent -LaunchToken $LaunchToken -ExpectedVersion $ExpectedVersion -ReleaseVariant $ReleaseVariant -AssetName $AssetName -StartedAtUnixSeconds $StartedAtUnixSeconds
+    $script:Intent = New-LatestUpdateIntent -LaunchToken $LaunchToken -ExpectedVersion $ExpectedVersion -ReleaseVariant $ReleaseVariant -AssetName $AssetName -ExpectedPackageSha256 $ExpectedPackageSha256 -StartedAtUnixSeconds $StartedAtUnixSeconds
     Write-LatestUpdateJson -Path (Get-LatestUpdateIntentPath -Root $script:ResolvedRoot) -Value $script:Intent
     # No live operation remains at this boundary, so an unscoped decision JSON
     # can only belong to a completed older token and must not linger forever.
     Remove-LatestUpdateDecisionFile -Root $script:ResolvedRoot
     Remove-LatestUpdateNativeDecisionForToken -Root $script:ResolvedRoot -LaunchToken $LaunchToken
     [void](Save-LatestUpdateState -Root $script:ResolvedRoot -Intent $script:Intent -Status 'staging' -SessionPid $PID -Message 'Preparing the downloaded update package.' -LogPath (Get-LatestUpdateLogPath -Root $script:ResolvedRoot))
-    $script:StagingPath = Copy-LatestUpdatePackageToStaging -Root $script:ResolvedRoot -LaunchToken $LaunchToken -SourcePath $DownloadedPackagePath
+    $script:StagingPath = Copy-LatestUpdatePackageToStaging -Root $script:ResolvedRoot -LaunchToken $LaunchToken -SourcePath $DownloadedPackagePath -ExpectedPackageSha256 $script:Intent.ExpectedPackageSha256
     Write-LatestUpdateLog -Root $script:ResolvedRoot -Stage 'staged' -Message $script:StagingPath
     $process = Start-LatestUpdateIndependentSession -Root $script:ResolvedRoot -Token $LaunchToken
     try {

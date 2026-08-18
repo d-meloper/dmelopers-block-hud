@@ -36,6 +36,9 @@ local function refreshEditorResidentVisualState()
     syncItemActionState(currentTarget)
     syncEditorControlGate()
     syncPageDisplay()
+    if tonumber(trim(SKIN:GetVariable('EditorPageIndex', '1'))) == 2 and type(RefreshFolderCountSync) == 'function' then
+        RefreshFolderCountSync()
+    end
     refreshThemeVisuals()
 end
 
@@ -44,6 +47,7 @@ function ResumeEditorResident(allowConsumerMirror)
     closeRequestMode = nil
     closeCommitChanged = false
     ensureResidentUpdateController().ResumeSurface('Editor')
+    SKIN:Bang('!CommandMeasure', 'MeasureItemImageAnimator', 'Resume()')
     PreloadModalAlert()
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'ApplyLayout()')
     StartEditorResponsiveLayoutTimer()
@@ -62,6 +66,7 @@ function ResumeEditorResident(allowConsumerMirror)
 end
 
 function SuspendEditorResident()
+    SKIN:Bang('!CommandMeasure', 'MeasureItemImageAnimator', 'Suspend()')
     cancelDeferredInitialize()
     setEditorLoadingVisible(false)
     clearPickerRunState('path')
@@ -879,6 +884,12 @@ local function StepEditorPage(delta)
 
 
     syncPageDisplay()
+
+    SKIN:Bang('!CommandMeasure', 'MeasureItemImageAnimator', 'RefreshBindings()')
+
+    if nextPage == 2 and type(RefreshFolderCountSync) == 'function' then
+        RefreshFolderCountSync()
+    end
 
 
 

@@ -744,9 +744,9 @@ function Save-VersionManagerLaunchState {
     if (Get-Command Set-VersionManagerSettingsCacheVariables -ErrorAction SilentlyContinue) {
         try {
             Set-VersionManagerSettingsCacheVariables -Root $Root -Values ([ordered]@{
-                VersionManagerLaunchToken = [string]$payload.LaunchToken
-                VersionManagerLaunchStatus = [string]$payload.Status
-                VersionManagerLaunchMessage = [string]$payload.Message
+                VersionManagerLaunchToken = [string]$LaunchTokenValue
+                VersionManagerLaunchStatus = [string]$Status
+                VersionManagerLaunchMessage = [string]$Message
             })
         }
         catch {

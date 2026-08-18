@@ -5,6 +5,7 @@ param(
     [string]$ExpectedVersion,
     [string]$ExpectedReleaseVariant,
     [switch]$ResetCurrentVersion,
+    [switch]$InheritedOperationLock,
     [switch]$NonInteractive,
     [switch]$EmitResultPairs,
     [switch]$PassThruResultObject
@@ -24,6 +25,7 @@ catch {
 
 . (Join-Path $PSScriptRoot 'Localization.Common.ps1')
 . (Join-Path $PSScriptRoot 'VersionManager.ReleaseIdentity.ps1')
+. (Join-Path $PSScriptRoot 'VersionManager.OperationLock.ps1')
 
 $script:LogMessages = New-Object System.Collections.Generic.List[string]
 $script:LogPath = Get-BlockHudCanonicalLogPath -ScriptRoot $PSScriptRoot
@@ -39,11 +41,13 @@ $script:LatestRootCreated = $false
 $script:StageRootCreated = $false
 $script:FixedRootReplacementStarted = $false
 $script:FixedRootInstalled = $false
+$script:FixedRootQuiesced = $false
 $script:ImportStarted = $false
 $script:SwitchSucceeded = $false
 $script:PostUpdateActivationSucceeded = $false
 $script:ResetRecoveryTransaction = $null
 $script:ResetRecoveryGuardReady = $false
+$script:UpdateOperationLock = $null
 $script:ResultPairs = [ordered]@{
     DMEL_STATUS = ''
     DMEL_SOURCEPATH = ''
@@ -55,6 +59,7 @@ $script:ResultPairs = [ordered]@{
 $script:ModuleRoot = Join-Path $PSScriptRoot 'UpdateToLatestVersion'
 . (Join-Path $script:ModuleRoot 'CorePathsAndPackage.ps1')
 . (Join-Path $script:ModuleRoot 'ReplacementAndSwitch.ps1')
+. (Join-Path $script:ModuleRoot 'CurrentVersionDataReset.ps1')
 . (Join-Path $script:ModuleRoot 'ResetRecovery.ps1')
 
 
@@ -121,11 +126,13 @@ try {
 }
 catch {
     $operationError = $_
-    if ($ResetCurrentVersion -and $null -ne $script:ResetRecoveryTransaction -and
-        -not $script:PostUpdateActivationSucceeded) {
+    if ($null -ne $script:ResetRecoveryTransaction -and -not $script:PostUpdateActivationSucceeded) {
         try {
             if (-not [string]::IsNullOrWhiteSpace($script:ReplacementRollbackRoot) -and
                 (Test-Path -LiteralPath $script:ReplacementRollbackRoot -PathType Container)) {
+                if (Test-Path -LiteralPath $script:ResolvedCurrentRoot -PathType Container) {
+                    Invoke-QuiesceCurrentRoot -Root $script:ResolvedCurrentRoot
+                }
                 if (Test-Path -LiteralPath $script:ResolvedCurrentRoot -PathType Container) {
                     Restore-InstalledFixedRootBestEffort `
                         -FinalRoot $script:ResolvedCurrentRoot `
@@ -141,14 +148,17 @@ catch {
             if (-not $script:ResetRecoveryGuardReady) {
                 Remove-SafeUpdateTempRootBestEffort -Root ([string]$script:ResetRecoveryTransaction.JournalRoot) -Reason 'recovery guard startup failure'
             }
+            if ($script:FixedRootQuiesced -and (Test-Path -LiteralPath $script:ResolvedCurrentRoot -PathType Container)) {
+                Invoke-PostUpdateRefresh -Root $script:ResolvedCurrentRoot
+            }
         }
         catch {
-            Write-Log ("Current-version reset restore attempt failed in outer catch: {0}" -f $_.Exception.Message) 'ERROR'
+            Write-Log ("Fixed-root restore attempt failed in outer catch: {0}" -f $_.Exception.Message) 'ERROR'
             try {
                 Set-ResetRecoveryPhase -Phase 'RecoveryPending'
             }
             catch {
-                Write-Log ("Could not hand failed reset restoration to the recovery guard: {0}" -f $_.Exception.Message) 'ERROR'
+                Write-Log ("Could not hand failed fixed-root restoration to the recovery guard: {0}" -f $_.Exception.Message) 'ERROR'
             }
         }
     }
@@ -211,6 +221,8 @@ finally {
     Remove-UpdateExtractRootBestEffort
     Remove-UpdateStageParentBestEffort
     Remove-UpdateFailedRootBestEffort
+    Exit-VersionManagerOperationMutex -Lock $script:UpdateOperationLock
+    $script:UpdateOperationLock = $null
     Save-Log
     if ($PassThruResultObject) {
         Write-Output ([PSCustomObject]$script:ResultPairs)

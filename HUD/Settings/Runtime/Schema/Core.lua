@@ -13,6 +13,8 @@ settingsFiles = {
 
         Support = 'Support.inc',
 
+        HudMirror = 'HudMirror.inc',
+
     },
 refreshTargetsByName = {
 
@@ -25,6 +27,8 @@ refreshTargetsByName = {
         Editor = { config = 'HUD\\Editor', file = 'Editor.ini' },
 
         Settings = { config = 'HUD\\Settings', file = 'Settings.ini' },
+
+        HudMirrorController = { config = 'HUD\\Mirror\\Controller', file = 'Controller.ini' },
 
         Jukebox = { config = 'ExtraContent\\Jukebox', file = 'Jukebox.ini' },
         JukeboxDiscSlot = { config = 'ExtraContent\\Jukebox\\DiscSlot', file = 'JukeboxDiscSlot.ini' },

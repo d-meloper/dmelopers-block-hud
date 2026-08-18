@@ -33,6 +33,12 @@ function RestoreDiscSlotResidentOnRefresh()
     return ResumeDiscSlotResident()
 end
 
+function ReportStateAfterJukeboxRefresh()
+    return callJukebox(
+        string.format('RestoreDiscSlotStateAfterJukeboxRefresh(%q)', isHidden() and '0' or '1')
+    )
+end
+
 function RefreshDiscs()
     if scanRunning then
         return false
@@ -318,11 +324,7 @@ function ExternalPrevious()
 end
 
 function ExternalPlayPause()
-    if requestExternalTransport('playpause', 'ExternalPlayPause()') then
-        callJukebox('HideDiscSlot()')
-        return true
-    end
-    return false
+    return requestExternalTransport('playpause', 'ExternalPlayPause()')
 end
 
 function ExternalNext()

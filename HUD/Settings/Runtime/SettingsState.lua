@@ -143,9 +143,13 @@ return function(tabCount, contentTabCount)
 
         pendingLoadReopenDropdown = false,
 
+        pendingLoadSilent = false,
+
 
 
         pendingLoadValue = nil,
+
+        pendingLoadStartupMethod = nil,
 
         pendingLoadTexturePath = nil,
 
@@ -158,6 +162,28 @@ return function(tabCount, contentTabCount)
 
 
         pendingLoadHistoryLabel = nil,
+
+        pendingMinecraftSkinAtlasRequest = nil,
+        pendingMinecraftSkinAtlasRetry = nil,
+        minecraftSkinAtlasRequestCounter = 0,
+        minecraftSkinAtlasLastProgress = -1,
+        minecraftSkinPlayerFolderSizeBytes = 0,
+        minecraftSkinPlayerFolderSizePending = false,
+        minecraftSkinPlayerFolderSizeRescanRequested = false,
+        minecraftSkinPlayerFolderSizeViewActive = false,
+        minecraftSkinPlayerFolderSizeNeedsRefresh = true,
+
+        pendingStartupFastAutoRunConfirmation = nil,
+
+        startupFastAutoRunConfirmationCounter = 0,
+
+        startupAutoRunRequestCounter = 0,
+
+        pendingStartupAutoRunRequestToken = '',
+
+        pendingStartupAutoRunRecoveryAttempted = false,
+
+        pendingStartupAutoRunFailure = nil,
 
 
 
@@ -202,6 +228,10 @@ return function(tabCount, contentTabCount)
         pendingRefreshOptions = nil,
 
         pendingRefreshDelayTicksRemaining = 0,
+
+        pendingJukeboxSettingsApply = nil,
+
+        jukeboxSettingsApplyRequestCounter = 0,
 
         pendingLanguageSwitchValue = nil,
 

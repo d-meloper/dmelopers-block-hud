@@ -9,8 +9,12 @@ local lastHighlightSource = nil
 local lastClickT = 0
 local useClickSound = 0
 local lastItemName = 'NONE'
-local lastLanguageCode = nil
-local lastCreatorProfileLanguageCode = nil
+local languageState = {
+    itemTextCode = nil,
+    rawCode = nil,
+    normalizedCode = nil,
+    creatorProfileCode = nil,
+}
 local lastHighlightHlx = nil
 local lastHighlightHly = nil
 local lastSelectedHighlightKey = nil
@@ -37,7 +41,7 @@ local LocalizationTextFit = nil
 HighlightSlotActionLaunch = nil
 local IsMissingHintVisible = true
 local isOptionHovering = false
-local isTooltipVisible = false
+local isTooltipVisible = nil
 local R = ''
 local UpdateItemText
 local isRainmeterConfigActive = nil
@@ -73,7 +77,7 @@ local dragThreshold = 8
 local activeDragVisual = false
 local dragPayloadKey = nil
 local dragPayload = nil
-local dragVisualImagePath = nil
+local dragVisualImage = { path = nil, crop = nil }
 local dragVisualImageX = nil
 local dragVisualImageY = nil
 local dragVisualImageSize = nil
@@ -140,7 +144,15 @@ end
 local function isSettingsPanelActive()
     return isPanelActive('Settings') and isSettingsOpen()
 end
+function IsHudMirrorReplica()
+    local role = tostring(SKIN:GetVariable('MirrorRole', '') or '')
+    role = role:match('^%s*(.-)%s*$'):lower()
+    return role == 'replica' or tonumber(SKIN:GetVariable('HudMirrorReplica', '0')) == 1
+end
 isEditorInteractive = function()
+    if IsHudMirrorReplica() then
+        return false
+    end
     return isEditorOpen()
 end
 getEditorInteractionMode = function()
@@ -431,6 +443,10 @@ local function LoadEssentials()
     LanguageBranching = dofile(R .. 'Defaults\\Runtime\\luas\\LanguageBranching.lua')
     LanguageRegistry = dofile(R .. 'Defaults\\Runtime\\luas\\LanguageRegistry.lua')
     LocalizationTextFit = dofile(R .. 'Defaults\\Runtime\\luas\\LocalizationTextFit.lua')
+    LocalizationTextFit = LocalizationTextFit.Create(SKIN, {
+        widthProbeMeterName = 'MeterInventoryTextFitProbe',
+        wrapProbeMeterName = 'MeterInventoryTextFitWrapProbe',
+    })
     local skinRoot = tostring(SKIN:GetVariable('ROOTCONFIGPATH', '') or '')
     skinRoot = skinRoot:gsub('^%s+', ''):gsub('%s+$', '')
     if skinRoot ~= '' and skinRoot:sub(-1) ~= '\\' and skinRoot:sub(-1) ~= '/' then
@@ -445,16 +461,16 @@ local function LoadEssentials()
     SKIN:Bang(_G.DMeloper.BANG_SET_VARIABLE, 'HighlightShapeSize', tostring(SlotSize + HighlightSizeOffset))
 end
 function ApplyInventoryStaticLocalizationTextFits()
-    if IsHotbar or not LocalizationTextFit or not LocalizationTextFit.ApplyMeterTextFit then
+    if IsHotbar or not LocalizationTextFit then
         return
     end
-    LocalizationTextFit.ApplyMeterTextFit(SKIN, 'MeterEditorModeBadgeLabel', '#Loc_Inventory_EditorModeBadgeText#', {
+    return LocalizationTextFit:Apply({
+        meterName = 'MeterEditorModeBadgeLabel',
+        text = '#Loc_Inventory_EditorModeBadgeText#',
         baseFontSize = GetSkinNumber('EditorModeBadgeFontSize', 20),
         widthPx = math.max(0, GetSkinNumber('EditorModeBadgeW', 245) - 18),
-        minScale = 0.55,
-        probeMeterName = 'MeterInventoryTextFitProbe',
-        setText = false,
-        update = false,
+        heightPx = GetSkinNumber('EditorModeBadgeH', 40),
+        policy = 'wrap4',
     })
 end
 local function callHerobrine(methodName, ...)
@@ -490,6 +506,9 @@ local function RunTooltipShowAt(text, isOption, x, y)
     RunTooltipCommand(string.format('ShowItemNameAt(%q, %s, %s, %s)', tostring(text or ''), isOption and 'true' or 'false', tostring(x), tostring(y)))
 end
 local function RunTooltipHide()
+    if isTooltipVisible == false then
+        return
+    end
     isTooltipVisible = false
     RunTooltipCommand('Hide()')
 end
@@ -653,6 +672,7 @@ function InventoryLifecycle.InventoryVisibleMirrorConfigs(rootPath)
         rootPath .. '\\HUD\\Inventory',
         rootPath .. '\\HUD\\InventoryBG',
         rootPath .. '\\HUD\\Editor',
+        rootPath .. '\\HUD\\Mirror\\Controller',
     }
 end
 function InventoryLifecycle.IsInventoryFeatureEnabled()
@@ -781,7 +801,12 @@ local function IsInventoryItem(s)
     return s == _G.DMeloper.OPEN_INVENTORY_KEY
 end
 local function CurrentLanguageCode()
-    return LanguageRegistry.NormalizeLanguageCode(SKIN, LanguageBranching.CurrentSkinLanguageCode(SKIN, 'en-US'), 'en-US')
+    local rawLanguageCode = LanguageBranching.CurrentSkinLanguageCode(SKIN, 'en-US')
+    if languageState.normalizedCode == nil or languageState.rawCode ~= rawLanguageCode then
+        languageState.rawCode = rawLanguageCode
+        languageState.normalizedCode = LanguageRegistry.NormalizeLanguageCode(SKIN, rawLanguageCode, 'en-US')
+    end
+    return languageState.normalizedCode
 end
 local function ReservedInventoryDisplayName()
     return LanguageRegistry.GetInventoryLabel(SKIN, CurrentLanguageCode())
@@ -804,10 +829,10 @@ local function SyncCreatorProfileLink()
         return
     end
     local currentLanguageCode = CurrentLanguageCode()
-    if lastCreatorProfileLanguageCode == currentLanguageCode then
+    if languageState.creatorProfileCode == currentLanguageCode then
         return
     end
-    lastCreatorProfileLanguageCode = currentLanguageCode
+    languageState.creatorProfileCode = currentLanguageCode
     local action = '["' .. CreatorProfileUrl() .. '"]'
     for _, meterName in ipairs(CREATOR_PROFILE_METERS) do
         SKIN:Bang(_G.DMeloper.BANG_SET_OPTION, meterName, 'LeftMouseUpAction', action)
@@ -822,10 +847,10 @@ local function ResetItemTextCache()
 end
 local function SyncLanguageSensitiveItemText()
     local currentLanguageCode = CurrentLanguageCode()
-    if lastLanguageCode == currentLanguageCode then
+    if languageState.itemTextCode == currentLanguageCode then
         return
     end
-    lastLanguageCode = currentLanguageCode
+    languageState.itemTextCode = currentLanguageCode
     if ItemInfosHolder and type(ItemInfosHolder.RefreshInfos) == 'function' then
         ItemInfosHolder.RefreshInfos()
     end
@@ -847,7 +872,7 @@ local function ShowHotbarText()
     SKIN:Bang('!CommandMeasure', 'MeasureFade', 'Show()')
 end
 local function AddNotice(origin, notice, isHotbar)
-    if not IsMissingHintVisible then return end
+    if not IsMissingHintVisible then return origin end
     if origin == '' then return notice end
     if isHotbar then return origin .. ' ' .. notice end
     return origin .. '\n' .. notice
@@ -890,11 +915,35 @@ local function showExternalHotbarText(text, pinnedOwner, textMode)
     ShowHotbarText()
     return true
 end
+function BroadcastHudMirrorHotbarCommand(command)
+    if not IsHotbar or IsHudMirrorReplica() then
+        return false
+    end
+    local root = trimText(SKIN:GetVariable('ROOTCONFIG', ''))
+    if root == '' or trimText(command) == '' then
+        return false
+    end
+    SKIN:Bang(
+        '!CommandMeasure',
+        'MeasureHudMirrorController',
+        'BroadcastHotbarCommand(' .. string.format('%q', command) .. ')',
+        root .. '\\HUD\\Mirror\\Controller'
+    )
+    return true
+end
 function ShowExternalHotbarText(text, mode)
-    return showExternalHotbarText(text, nil, mode)
+    local shown = showExternalHotbarText(text, nil, mode)
+    if shown then
+        BroadcastHudMirrorHotbarCommand(string.format('ShowExternalHotbarText(%q,%q)', tostring(text or ''), tostring(mode or '')))
+    end
+    return shown
 end
 function ShowPinnedExternalHotbarText(owner, text, mode)
-    return showExternalHotbarText(text, owner, mode)
+    local shown = showExternalHotbarText(text, owner, mode)
+    if shown then
+        BroadcastHudMirrorHotbarCommand(string.format('ShowPinnedExternalHotbarText(%q,%q,%q)', tostring(owner or ''), tostring(text or ''), tostring(mode or '')))
+    end
+    return shown
 end
 function ReleasePinnedExternalHotbarText(owner)
     LoadEssentials()
@@ -907,6 +956,7 @@ function ReleasePinnedExternalHotbarText(owner)
     end
     pinnedExternalHotbarTextOwner = ''
     SKIN:Bang('!CommandMeasure', 'MeasureFade', 'Unpin()')
+    BroadcastHudMirrorHotbarCommand(string.format('ReleasePinnedExternalHotbarText(%q)', owner))
     return true
 end
 function ShowBackgroundHotbarText(owner, text, mode)
@@ -924,6 +974,7 @@ function ShowBackgroundHotbarText(owner, text, mode)
         hotbarTextMode = 'static'
     end
     SKIN:Bang('!CommandMeasure', 'MeasureFade', string.format('SetBackgroundText(%q,%q,%q)', owner, text, hotbarTextMode))
+    BroadcastHudMirrorHotbarCommand(string.format('ShowBackgroundHotbarText(%q,%q,%q)', owner, text, hotbarTextMode))
     return true
 end
 function ClearBackgroundHotbarText(owner)
@@ -936,6 +987,7 @@ function ClearBackgroundHotbarText(owner)
         return false
     end
     SKIN:Bang('!CommandMeasure', 'MeasureFade', string.format('ClearBackgroundText(%q)', owner))
+    BroadcastHudMirrorHotbarCommand(string.format('ClearBackgroundHotbarText(%q)', owner))
     return true
 end
 
@@ -1234,6 +1286,9 @@ function EnterOptionHover(label)
         RunTooltipCommand(string.format('EnterOption(%q)', tostring(label or '')))
     end
 end
+function EnterOptionHoverVariable(variableName)
+    EnterOptionHover(SKIN:GetVariable(tostring(variableName or '')) or '')
+end
 function LeaveOptionHover()
     LoadEssentials()
     isOptionHovering = false
@@ -1408,7 +1463,8 @@ end
 local function hideDragVisual()
     resetDragHoverTracking()
     clearDragPayload()
-    dragVisualImagePath = nil
+    dragVisualImage.path = nil
+    dragVisualImage.crop = nil
     dragVisualImageX = nil
     dragVisualImageY = nil
     dragVisualImageSize = nil
@@ -1456,9 +1512,14 @@ local function ensureDragPayload(meta)
         return nil
     end
     local offsetX, offsetY, offsetSize = ImageAdjuster.GetAdjustments(dragRecord.ImageKey)
+    local presentation = EditorItemService.GetImagePresentation(
+        R,
+        dragRecord.ImageKey,
+        SKIN:GetVariable('ItemImageAtlasProfiles', ''))
     dragPayloadKey = payloadKey
     dragPayload = {
-        imagePath = EditorItemService.GetImagePath(R, dragRecord.ImageKey),
+        imagePath = presentation.ImagePath,
+        imageCrop = presentation.ImageCrop,
         qty = dragRecord.Qty or 0,
         adjustedItemSize = ItemSize + offsetSize,
         offsetX = offsetX,
@@ -1477,9 +1538,14 @@ local function updateDragVisual(x, y, meta)
     local imageY = y - (payload.adjustedItemSize / 2) + payload.offsetY
     local imageDirty = false
     local textDirty = false
-    if payload.imagePath ~= dragVisualImagePath then
-        dragVisualImagePath = payload.imagePath
+    if payload.imagePath ~= dragVisualImage.path then
+        dragVisualImage.path = payload.imagePath
         SKIN:Bang('!SetOption', DRAG_IMAGE_METER, 'ImageName', payload.imagePath)
+        imageDirty = true
+    end
+    if payload.imageCrop ~= dragVisualImage.crop then
+        dragVisualImage.crop = payload.imageCrop
+        SKIN:Bang('!SetOption', DRAG_IMAGE_METER, 'ImageCrop', payload.imageCrop)
         imageDirty = true
     end
     if imageX ~= dragVisualImageX then
@@ -1827,6 +1893,7 @@ end
 -- Split from @Resources\Defaults\Runtime\luas\HighlightSlot.lua lines 1686-2446.
 local function performClickAction(info)
     if not info then return end
+    if IsHudMirrorReplica() then return end
     local now = os.clock()
     if (now - lastClickT) < 0.5 then return end
     lastClickT = now
@@ -1905,6 +1972,9 @@ function OnSlotMouseUp(ix, iy)
 end
 function NotifyDragInside()
     LoadEssentials()
+    if IsHudMirrorReplica() then
+        return
+    end
     if not isEditorOpen() then
         return
     end
@@ -1922,7 +1992,13 @@ function OnMouseMove(x, y)
     lastMouseY = y
     local disableSlotHoverHighlight = isLowSpecSlotHoverHighlightDisabled()
     local disableHoverTextTooltip = isLowSpecHoverTextTooltipDisabled()
-    local meta = currentEditorMeta()
+    local meta = IsHudMirrorReplica() and nil or currentEditorMeta()
+    if not IsHotbar and not meta then
+        SKIN:Bang(
+            '!CommandMeasure',
+            'MeasureAnimation',
+            string.format('HandleMouseMove(%s,%s)', tostring(x), tostring(y)))
+    end
     local dragActive = meta and meta.DragActive or false
     if not IsHotbar then
         if not disableHoverTextTooltip then
@@ -2019,7 +2095,7 @@ function OnMouseDown(x, y)
     clearHotbarWindowDragState()
     local disableSlotHoverHighlight = isLowSpecSlotHoverHighlightDisabled()
     local disableHoverTextTooltip = isLowSpecHoverTextTooltipDisabled()
-    local meta = currentEditorMeta()
+    local meta = IsHudMirrorReplica() and nil or currentEditorMeta()
     if shouldIgnoreHotbarEditorSurface() then
         LeaveSlot()
         isMouseDown = false
@@ -2057,7 +2133,7 @@ end
 function OnMouseLeave()
     LoadEssentials()
     clearHotbarWindowDragState()
-    local meta = currentEditorMeta()
+    local meta = IsHudMirrorReplica() and nil or currentEditorMeta()
     if meta and meta.DragActive then
         dragInsideNotified = false
         SKIN:Bang('!CommandMeasure', 'MeasureInputCommit', 'NotifyDragOutside()', editorConfigPath())
@@ -2076,7 +2152,7 @@ function OnMouseUp(x, y)
     lastMouseY = y
     local disableSlotHoverHighlight = isLowSpecSlotHoverHighlightDisabled()
     local disableHoverTextTooltip = isLowSpecHoverTextTooltipDisabled()
-    local meta = currentEditorMeta()
+    local meta = IsHudMirrorReplica() and nil or currentEditorMeta()
     local dragActive = meta and meta.DragActive or false
     if not dragActive and isOptionHovering then
         isMouseDown = false
@@ -2151,6 +2227,77 @@ function OnMouseUp(x, y)
     isMouseDown = false
     clearHotbarWindowDragState()
 end
+
+function HudMirrorLocalPoint(normalizedX, normalizedY)
+    LoadEssentials()
+    local size = math.max(1, tonumber(SlotSize) or 1)
+    return X + ((tonumber(normalizedX) or 0) * size),
+        Y + ((tonumber(normalizedY) or 0) * size)
+end
+
+local function syncReplicaPointerPoint(x, y)
+    LoadEssentials()
+    x = tonumber(x) or 0
+    y = tonumber(y) or 0
+    if x >= 0 and x < SlotColumns and y >= 0 and y < SlotRows then
+        x, y = HudMirrorLocalPoint(x, y)
+    end
+    local idxX, idxY = ResolveSlotAtPoint(x, y)
+    if idxX == nil or idxY == nil then
+        LeaveSlot()
+        return false
+    end
+    if not syncSlotMeterState(idxX, idxY) then
+        return false
+    end
+    lastMouseX = x
+    lastMouseY = y
+    if isLowSpecSlotHoverHighlightDisabled() then
+        HideHighlight()
+    end
+    return true
+end
+
+function OnReplicaPointerMove(x, y)
+    return syncReplicaPointerPoint(x, y)
+end
+
+function OnReplicaPointerDown(x, y)
+    return syncReplicaPointerPoint(x, y)
+end
+
+function OnReplicaPointerUp(x, y)
+    if not syncReplicaPointerPoint(x, y) then
+        return false
+    end
+    performClickAction(curInfo)
+    return true
+end
+
+function OnReplicaPointerLeave()
+    LoadEssentials()
+    LeaveSlot()
+    return true
+end
+
+function OnMirroredMouseMove(normalizedX, normalizedY)
+    local x, y = HudMirrorLocalPoint(normalizedX, normalizedY)
+    return OnMouseMove(x, y)
+end
+
+function OnMirroredMouseDown(normalizedX, normalizedY)
+    local x, y = HudMirrorLocalPoint(normalizedX, normalizedY)
+    return OnMouseDown(x, y)
+end
+
+function OnMirroredMouseUp(normalizedX, normalizedY)
+    local x, y = HudMirrorLocalPoint(normalizedX, normalizedY)
+    return OnMouseUp(x, y)
+end
+
+function OnMirroredMouseLeave()
+    return OnMouseLeave()
+end
 local EDITOR_DRAFT_META_KEYS = {
     'SchemaVersion',
     'Dirty',
@@ -2223,6 +2370,7 @@ end
 function ResumeInventoryResident()
     LoadEssentials()
     ResidentUpdateController.ResumeSurface('Inventory')
+    SKIN:Bang('!CommandMeasure', 'MeasureItemImageAnimator', 'Resume()')
     PreloadModal()
     SKIN:Bang('!CommandMeasure', 'MeasurePlayerSkinState', 'Sync()')
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'PrepareInventoryRefreshPosition()')
@@ -2238,6 +2386,7 @@ function ResumeInventoryResident()
     ApplyInventoryStaticLocalizationTextFits()
     SKIN:Bang('!UpdateMeter', 'MeterEditorModeBadgeLabel')
     SKIN:Bang('!CommandMeasure', 'MeasureItemInfoInitializer', 'InitInfos()')
+    SKIN:Bang('!CommandMeasure', 'MeasureItemInfoInitializer', 'RefreshFolderCounts()')
     SKIN:Bang('!Redraw')
 end
 function RestoreInventoryResidentOnRefresh()
@@ -2250,9 +2399,11 @@ function RestoreInventoryResidentOnRefresh()
         return
     end
     ResumeInventoryResident()
+    SKIN:Bang('!Show')
 end
 function SuspendInventoryResident()
     LoadEssentials()
+    SKIN:Bang('!CommandMeasure', 'MeasureItemImageAnimator', 'Suspend()')
     callHerobrine('CloseInventory')
     ResetInteractionState()
     StopInventoryResponsiveLayoutTimer()
@@ -2291,6 +2442,12 @@ function ApplyInventoryBackdropOpenZOrder(rootPath)
             SKIN:Bang('!ZPos', '-2', configPath)
         end
     end
+    SKIN:Bang(
+        '!CommandMeasure',
+        'MeasureHudMirrorController',
+        'ApplyInventoryBackdropReplicaZOrder()',
+        rootPath .. '\\HUD\\Mirror\\Controller'
+    )
 end
 
 function RestoreInventoryBackgroundActiveConfig()
@@ -2320,9 +2477,11 @@ function RestoreInventoryAfterBackgroundReady()
     end
     local inventoryConfig = rootPath .. '\\HUD\\Inventory'
     local inventoryActive = isRainmeterConfigActive(inventoryConfig)
+    local mirrorOpen = trimText(SKIN:GetVariable('HudMirrorInventoryOpenFingerprint', '')) ~= ''
     prepareInventoryOpenPosition(inventoryActive, inventoryConfig)
     if not inventoryActive then
-        RequestInventoryActivation(inventoryConfig)
+        RequestInventoryActivation(inventoryConfig, mirrorOpen)
+        SKIN:Bang('!SetVariable', 'HudMirrorInventoryOpenFingerprint', '')
         return
     end
     local editorOpen = isEditorOpen()
@@ -2336,6 +2495,7 @@ function RestoreInventoryAfterBackgroundReady()
         SKIN:Bang('!Redraw', inventoryConfig)
     end
     HighlightCommandMeasureForActiveConfig('MeasureHighlight', 'RollHerobrineInventoryReplacement()', inventoryConfig)
+    SKIN:Bang('!SetVariable', 'HudMirrorInventoryOpenFingerprint', '')
 end
 
 function RestoreInventoryBackgroundActiveConfigOnRefresh()
@@ -2356,7 +2516,6 @@ function RestoreInventoryBackgroundActiveConfigOnRefresh()
     end
     RestoreInventoryBackgroundActiveConfig()
     RestoreInventoryAfterBackgroundReady()
-    ApplyInventoryBackdropOpenZOrder(rootPath)
 end
 function DeactivateClosedInventoryBackgroundOnRefresh()
     LoadEssentials()
@@ -2380,15 +2539,27 @@ function DeactivateInventoryBackgroundActiveConfig()
         HideInventoryBackgroundActiveConfig()
     end
 end
-function RequestInventoryBackgroundActivation(inventoryBgConfig)
+function RequestInventoryBackgroundActivation(inventoryBgConfig, skipDeferredRestore)
     local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
-    InventoryLifecycle.CreateInventoryBgSurface(rootPath):ActivateIfInactive()
+    local activated = InventoryLifecycle.CreateInventoryBgSurface(rootPath):ActivateIfInactive()
+    if activated then
+        SKIN:Bang('!Hide', inventoryBgConfig)
+    end
+    if skipDeferredRestore == true then
+        return
+    end
     SKIN:Bang('!SetVariable', 'BlockHudInventoryOpenDeferredRestore', '1')
     SKIN:Bang('!UpdateMeasure', 'MeasureInventoryOpenDeferredRestore')
 end
-function RequestInventoryActivation(inventoryConfig)
+function RequestInventoryActivation(inventoryConfig, skipDeferredRestore)
     local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
-    InventoryLifecycle.CreateInventorySurface(rootPath):ActivateIfInactive()
+    local activated = InventoryLifecycle.CreateInventorySurface(rootPath):ActivateIfInactive()
+    if activated then
+        SKIN:Bang('!Hide', inventoryConfig)
+    end
+    if skipDeferredRestore == true then
+        return
+    end
     SKIN:Bang('!SetVariable', 'BlockHudInventoryPanelOpenDeferredRestore', '1')
     SKIN:Bang('!UpdateMeasure', 'MeasureInventoryPanelOpenDeferredRestore')
 end
@@ -2534,13 +2705,32 @@ function ActivateAllInventory()
     local rootPath = tostring(SKIN:GetVariable('ROOTCONFIG', '') or '')
     local inventoryBgConfig = rootPath .. '\\HUD\\InventoryBG'
     local inventoryConfig = rootPath .. '\\HUD\\Inventory'
+    local mirrorFingerprint = trimText(SKIN:GetVariable('HudMirrorInteractionMonitorFingerprint', ''))
+    local mirrorOpen = mirrorFingerprint ~= ''
+    local canonicalFingerprint = trimText(SKIN:GetVariable('ResponsiveLayoutCurrentMonitorFingerprint', ''))
+    local monitorOpen = mirrorOpen or canonicalFingerprint ~= ''
+    if mirrorOpen then
+        SKIN:Bang(
+            '!CommandMeasure',
+            'MeasureHudMirrorController',
+            'BeginInventoryOpenFromMirror(' .. string.format('%q', mirrorFingerprint) .. ')',
+            rootPath .. '\\HUD\\Mirror\\Controller'
+        )
+    elseif canonicalFingerprint ~= '' then
+        SKIN:Bang(
+            '!CommandMeasure',
+            'MeasureHudMirrorController',
+            'BeginInventoryOpenFromCanonicalHotbar(' .. string.format('%q', canonicalFingerprint) .. ')',
+            rootPath .. '\\HUD\\Mirror\\Controller'
+        )
+    end
     local editorOpen = isEditorOpen()
     local inventoryBgActive = isRainmeterConfigActive(inventoryBgConfig)
     local inventoryActive = isRainmeterConfigActive(inventoryConfig)
     SetInventoryVisibleState(true, rootPath)
     prepareInventoryOpenPosition(inventoryActive, inventoryConfig)
     if not inventoryBgActive then
-        RequestInventoryBackgroundActivation(inventoryBgConfig)
+        RequestInventoryBackgroundActivation(inventoryBgConfig, monitorOpen)
         return
     end
     if editorOpen then
@@ -2559,7 +2749,7 @@ function ActivateAllInventory()
         showResidentConfigAfterLayout(inventoryConfig)
         HighlightCommandMeasureForActiveConfig('MeasureHighlight', 'ResumeInventoryResident()', inventoryConfig)
     else
-        RequestInventoryActivation(inventoryConfig)
+        RequestInventoryActivation(inventoryConfig, monitorOpen)
     end
     if editorOpen and inventoryActive then
         SKIN:Bang('!UpdateMeasure', 'MeasureEditorModeBadgeVisibility', inventoryConfig)
@@ -2655,7 +2845,14 @@ end
 function HandleInventoryBackgroundMouseMove(x, y)
     LoadEssentials()
     local meta = currentEditorMeta()
-    if not meta or not meta.DragActive then
+    if not meta then
+        SKIN:Bang(
+            '!CommandMeasure',
+            'MeasurePlayerLookBridge',
+            string.format('HandleMouseMove(%s,%s)', tostring(x), tostring(y)))
+        return
+    end
+    if not meta.DragActive then
         return
     end
     local currentX = tonumber(SKIN:GetVariable('CURRENTCONFIGX', '')) or tonumber(SKIN:GetVariable('PWORKAREAX', '0')) or 0
@@ -2789,7 +2986,7 @@ function HandleSettingsButtonClick()
     settingsSurface:CommandIfActive('MeasureSettingsCommit', "OpenSettingsRoute('normal','general','1')")
 end
 function HandleRefreshButtonClick()
-    SKIN:Bang('!RefreshApp')
+    SKIN:Bang('[!Delay 16][!RefreshApp]')
 end
 function HandleSteveSkinEditButtonClick()
     LoadEssentials()

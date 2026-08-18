@@ -51,7 +51,7 @@ function Convert-PickerMetadataValue([string]$Value) {
     return ([string]$Value).Replace("`r", ' ').Replace("`n", ' ')
 }
 
-function Write-PickerResult([string]$Action, [string]$ImageKey = '', [string]$ItemImageAssets = '', [string]$Label = '') {
+function Write-PickerResult([string]$Action, [string]$ImageKey = '', [string]$ItemImageAssets = '', [string]$Label = '', [string]$ActionType = '') {
     if ([string]::IsNullOrEmpty($Action)) {
         return
     }
@@ -64,8 +64,9 @@ function Write-PickerResult([string]$Action, [string]$ImageKey = '', [string]$It
         $hasItemImageAssets = [string]::IsNullOrEmpty($ItemImageAssets) -eq $false
         $hasLabel = [string]::IsNullOrWhiteSpace($Label) -eq $false
 
-        if ($hasImageKey -or $hasItemImageAssets -or $hasLabel) {
+        if ($hasImageKey -or $hasItemImageAssets -or $hasLabel -or [string]::IsNullOrEmpty($ActionType) -eq $false) {
             $stdout.Write('DMEL_ACTION=' + $Action + "`n")
+            $stdout.Write('DMEL_ACTIONTYPE=' + $ActionType + "`n")
             if ($hasLabel) {
                 $stdout.Write('DMEL_LABEL=' + (Convert-PickerMetadataValue $Label) + "`n")
             }

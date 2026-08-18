@@ -27,7 +27,7 @@ function requestEmergencyStop(reason)
 
     local measure = SKIN:GetMeasure('MeasureJukeboxEmergencyStopRun')
     if not measure then
-        SKIN:Bang('!Log', 'Jukebox emergency stop could not run: missing emergency stop measure. Reason=' .. tostring(reason or ''), 'Error')
+        SKIN:Bang('!Log', 'Jukebox emergency stop could not run: missing emergency stop measure. Reason=' .. tostring(reason or ''), 'Warning')
         return false
     end
 
@@ -392,6 +392,23 @@ local function discardPendingDiscSlotPlayback()
     forceHideJukeboxAnimator()
 end
 
+local function logBackgroundEventPollFailure(values, fallback)
+    values = values or {}
+    local code = trim(values.DMEL_CODE)
+    if code == '' then
+        code = 'OUTPUT_INVALID'
+    end
+    local message = trim(values.DMEL_MESSAGE)
+    if message == '' then
+        message = trim(fallback)
+    end
+    if message == '' then
+        message = 'The Jukebox player status could not be checked.'
+    end
+    SKIN:Bang('!Log', 'Jukebox background event poll failed: code=' .. code .. '; ' .. message, 'Warning')
+    return false
+end
+
 local function requestDiscSlotAutoAdvance(shuffleEnabled)
     if not isDiscSlotCommandTargetActive() then
         return false
@@ -429,6 +446,9 @@ end
 
 local function handleResult(kind, output, defaultKey)
     local values = parsePairs(output)
+    if kind == 'playback' or kind == 'poll' then
+        setJukeboxEventSignalMode(values)
+    end
     local status = upper(values.DMEL_STATUS)
     local logPath = trim(values.DMEL_LOGPATH)
     if logPath == '' then
@@ -444,6 +464,9 @@ local function handleResult(kind, output, defaultKey)
         clearDiscSlotPlaybackSelection()
         requestEmergencyStop('missing-helper-status')
         forceHideJukeboxAnimator()
+        if kind == 'poll' then
+            return logBackgroundEventPollFailure(values, fallbackForKey(key))
+        end
         showAlert('error', key, fallbackForKey(key), logPath, placeholder)
         return false
     end
@@ -492,6 +515,9 @@ local function handleResult(kind, output, defaultKey)
         requestEmergencyStop('helper-error-' .. trim(values.DMEL_CODE))
         forceHideJukeboxAnimator()
     end
+    if kind == 'poll' then
+        return logBackgroundEventPollFailure(values, fallbackForKey(key))
+    end
     showAlert(level, key, fallbackForKey(key), logPath, placeholder)
     return false
 end
@@ -504,6 +530,11 @@ runMeasure = function(kind, measureName, missingKey)
     end
 
     if not SKIN:GetMeasure(measureName) then
+        if kind == 'poll' then
+            return logBackgroundEventPollFailure(
+                { DMEL_CODE = 'MEASURE_MISSING' },
+                fallbackForKey(missingKey))
+        end
         showAlert('error', missingKey, fallbackForKey(missingKey), modalAlertLogPath())
         return false
     end

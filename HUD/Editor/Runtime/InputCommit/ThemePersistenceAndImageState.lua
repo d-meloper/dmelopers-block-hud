@@ -250,6 +250,10 @@ local function syncReservedSlotPersistence()
 
         Qty = tostring(RESERVED_SLOT.Qty),
 
+        ActionType = '',
+
+        FolderCountSync = '0',
+
     }
 
     local paths = ensureService().GetPaths(editorRoot)

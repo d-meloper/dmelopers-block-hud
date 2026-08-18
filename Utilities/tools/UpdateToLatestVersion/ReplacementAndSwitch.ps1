@@ -64,43 +64,6 @@ function Remove-RootBestEffort {
     }
 }
 
-function Remove-RootWithResult {
-    param(
-        [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)][string]$Reason
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Root) -or -not (Test-Path -LiteralPath $Root)) {
-        return [PSCustomObject]@{
-            Status = 'OK'
-            Message = 'Root was already absent.'
-        }
-    }
-
-    try {
-        Set-Location ([System.IO.Path]::GetTempPath())
-    }
-    catch {
-    }
-
-    try {
-        Remove-Item -LiteralPath $Root -Force -Recurse
-        Write-Log ("Cleaned root after {0}: {1}" -f $Reason, $Root)
-        return [PSCustomObject]@{
-            Status = 'OK'
-            Message = 'Cleanup completed.'
-        }
-    }
-    catch {
-        $message = "Failed to clean root after ${Reason}: $Root ($($_.Exception.Message))"
-        Write-Log $message 'WARN'
-        return [PSCustomObject]@{
-            Status = 'WARN'
-            Message = $message
-        }
-    }
-}
-
 function Test-ConfigFileExists {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
@@ -222,12 +185,81 @@ function Get-RainmeterActiveConfigSet {
             continue
         }
 
-        if ($trimmed -match '^Active\s*=\s*1\s*$') {
+        if ($trimmed -match '^Active\s*=\s*[1-9][0-9]*\s*$') {
             $activeConfigs[$currentSection] = $true
         }
     }
 
     return $activeConfigs
+}
+
+function Get-CurrentRootActiveConfigs {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $configPath = Get-RainmeterConfigPath
+    if ([string]::IsNullOrWhiteSpace($configPath) -or -not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+        throw 'Rainmeter.ini is unavailable; fixed-root replacement cannot prove that the active root is quiescent.'
+    }
+    $rootConfigName = Get-RootConfigName -Root $Root
+    $prefix = $rootConfigName + '\'
+    return @(Get-RainmeterActiveConfigSet | ForEach-Object { $_.Keys } | Where-Object {
+        [string]::Equals([string]$_, $rootConfigName, [System.StringComparison]::OrdinalIgnoreCase) -or
+        ([string]$_).StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)
+    } | Sort-Object -Unique)
+}
+
+function Invoke-QuiesceCurrentRoot {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [ValidateRange(5, 60)][int]$TimeoutSeconds = 20
+    )
+
+    $activeConfigs = @(Get-CurrentRootActiveConfigs -Root $Root)
+    foreach ($configName in $activeConfigs) {
+        Write-Log ("Quiescing active fixed-root config [{0}]" -f $configName)
+        Invoke-RainmeterBang -Bang '!DeactivateConfig' -Arguments @([string]$configName)
+    }
+    if ($activeConfigs.Count -eq 0) {
+        Write-Log 'Fixed-root quiescence barrier found no active configs.'
+        return
+    }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $remaining = @(Get-CurrentRootActiveConfigs -Root $Root)
+        if ($remaining.Count -eq 0) {
+            Write-Log ("Fixed-root quiescence barrier completed for {0} configs." -f $activeConfigs.Count)
+            return
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    $stillActive = @(Get-CurrentRootActiveConfigs -Root $Root)
+    throw ("Fixed-root replacement stopped before mutation because Rainmeter configs remained active: {0}" -f ($stillActive -join ', '))
+}
+
+function ConvertTo-RootCleanupResult {
+    param(
+        [AllowNull()][object[]]$Output,
+        [Parameter(Mandatory = $true)][string]$Context
+    )
+
+    $matches = @($Output | Where-Object {
+        $null -ne $_ -and $null -ne $_.PSObject.Properties['Status'] -and $null -ne $_.PSObject.Properties['Message']
+    })
+    if ($matches.Count -eq 1) {
+        return [PSCustomObject]@{
+            Status = [string]$matches[0].Status
+            Message = [string]$matches[0].Message
+        }
+    }
+    $message = if ($matches.Count -eq 0) {
+        "$Context did not return its Status/Message cleanup contract; cleanup remains deferred."
+    }
+    else {
+        "$Context returned more than one Status/Message cleanup result; cleanup remains deferred."
+    }
+    Write-Log $message 'WARN'
+    return [PSCustomObject]@{ Status = 'WARN'; Message = $message }
 }
 
 function Invoke-RetiredCurrentRootConfigCleanup {
@@ -706,6 +738,15 @@ function Invoke-UpdateToLatest {
         throw 'CurrentTargetRoot is not a valid Block HUD install root.'
     }
     $script:ResolvedCurrentRoot = $resolvedCurrentRoot
+    if (-not $InheritedOperationLock) {
+        $script:UpdateOperationLock = Enter-VersionManagerOperationMutex -TargetRoot $resolvedCurrentRoot
+        if (-not [bool]$script:UpdateOperationLock.Acquired) {
+            throw 'Another Skin manager or version update operation is already active.'
+        }
+        if ([bool]$script:UpdateOperationLock.Abandoned) {
+            Write-Log ("Recovered an abandoned version-operation mutex: {0}" -f [string]$script:UpdateOperationLock.Name) 'WARN'
+        }
+    }
     Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $resolvedCurrentRoot
     Use-CanonicalHelperLogPath -Root $resolvedCurrentRoot -Prefix 'UpdateToLatestVersion'
 
@@ -809,7 +850,7 @@ function Invoke-UpdateToLatest {
     Write-Log ("PackageIdentity: {0}" -f $identityName)
     Write-Log ("DestinationRoot: {0}" -f $latestRoot)
     if ($ResetCurrentVersion) {
-        Write-Log 'DestinationRoot policy: exact CurrentTargetRoot replacement for explicit same-version reset; current data import is disabled.'
+        Write-Log 'DestinationRoot policy: keep the exact CurrentTargetRoot and overlay only same-version package default data; current data import is disabled.'
     }
     else {
         Write-Log 'DestinationRoot policy: fixed package identity root; version-suffixed side-by-side update roots are disabled.'
@@ -825,6 +866,22 @@ function Invoke-UpdateToLatest {
         }
     }
 
+    $packageContractParameters = @{
+        Root = $packageRoot
+        Context = 'Downloaded update package'
+        RequireTransportAdapter = $true
+    }
+    if ($ResetCurrentVersion) {
+        $packageContractParameters.AllowMissingManagerLocalResetHelper = $true
+    }
+    Assert-BlockHudFixedRootRuntimeContract @packageContractParameters
+    $packageImmutableSnapshot = $null
+    if (-not $ResetCurrentVersion) {
+        $packageImmutableSnapshot = New-BlockHudFixedRootImmutableSnapshot `
+            -Root $packageRoot `
+            -Context 'Downloaded update package'
+    }
+
     if (-not $ResetCurrentVersion) {
         $packageImportScript = Get-BlockHudRuntimeToolPath -Root $packageRoot -RelativeToolPath 'ImportFromOldVersion.ps1'
         if (-not (Test-Path -LiteralPath $packageImportScript -PathType Leaf)) {
@@ -836,10 +893,35 @@ function Invoke-UpdateToLatest {
         Write-Log 'Current-version reset preflight intentionally skipped legacy import validation because no live data may be imported.'
     }
 
+    if ($ResetCurrentVersion) {
+        $resetResult = Invoke-CurrentVersionDataReset `
+            -CurrentRoot $resolvedCurrentRoot `
+            -PackageRoot $packageRoot `
+            -SkinsRoot $skinsRoot
+        if ($null -eq $resetResult -or $null -eq $resetResult.PSObject.Properties['Status'] -or
+            -not [string]::Equals([string]$resetResult.Status, 'OK', [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Current-version data reset did not return its explicit success contract.'
+        }
+        Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'OK'
+        Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $resolvedCurrentRoot
+        Set-ResultPairValue -Key 'DMEL_BACKUPPATH' -Value ''
+        Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value 'Applied the same-version package default data at the current skin root and restored the previous active configs.'
+        $script:PostUpdateActivationSucceeded = $true
+        return
+    }
+
     if (Test-Path -LiteralPath $latestRoot) {
         Write-Log 'Fixed-root update path: destination resolves to the current active root; staging latest package before replacement.'
 
         $stageRoot = New-StagedLatestRoot -PackageRoot $packageRoot -IdentityName $identityName
+        Assert-BlockHudFixedRootRuntimeContract `
+            -Root $stageRoot `
+            -Context 'Staged fixed-root package' `
+            -RequireTransportAdapter
+        Assert-BlockHudFixedRootImmutableSnapshot `
+            -Root $stageRoot `
+            -Snapshot $packageImmutableSnapshot `
+            -Context 'Staged fixed-root package'
         if (-not $ResetCurrentVersion) {
             $stageImportScript = Get-BlockHudRuntimeToolPath -Root $stageRoot -RelativeToolPath 'ImportFromOldVersion.ps1'
             if (-not (Test-Path -LiteralPath $stageImportScript -PathType Leaf)) {
@@ -856,105 +938,90 @@ function Invoke-UpdateToLatest {
             $stagedReleaseVariant = Get-SkinRootReleaseVariant -Root $stageRoot
             Assert-ExpectedReleaseVariant -ActualReleaseVariant $stagedReleaseVariant -ExpectedReleaseVariant $effectiveExpectedReleaseVariant -Context 'Staged reset package'
             Write-Log 'Current-version reset staged a pristine package without importing any current-root data.'
-
-            $script:ResetRecoveryTransaction = New-ResetRecoveryTransaction `
-                -CurrentRoot $resolvedCurrentRoot `
-                -SkinsRoot $skinsRoot `
-                -StageParentRoot $script:StageParentRoot `
-                -ExtractRoot $script:ExtractRoot
-            Start-ResetRecoveryGuard -Transaction $script:ResetRecoveryTransaction
         }
 
-        Invoke-RetiredCurrentRootConfigCleanup -Root $resolvedCurrentRoot
+        Assert-BlockHudFixedRootImmutableSnapshot `
+            -Root $stageRoot `
+            -Snapshot $packageImmutableSnapshot `
+            -Context 'Prepared fixed-root stage'
+        Assert-BlockHudFixedRootRuntimeContract `
+            -Root $stageRoot `
+            -Context 'Prepared fixed-root stage' `
+            -RequireTransportAdapter
+        $installedImmutableSnapshot = New-BlockHudFixedRootImmutableSnapshot `
+            -Root $stageRoot `
+            -Context 'Prepared fixed-root stage'
+        $script:ResetRecoveryTransaction = New-ResetRecoveryTransaction `
+            -CurrentRoot $resolvedCurrentRoot `
+            -SkinsRoot $skinsRoot `
+            -StageParentRoot $script:StageParentRoot `
+            -ExtractRoot $script:ExtractRoot
+        Initialize-FixedRootActivationHandoff -StagedRoot $stageRoot -Transaction $script:ResetRecoveryTransaction
+        Start-ResetRecoveryGuard -Transaction $script:ResetRecoveryTransaction
+        Invoke-QuiesceCurrentRoot -Root $resolvedCurrentRoot
+        $script:FixedRootQuiesced = $true
+
         $replacementParameters = @{
             CurrentRoot = $resolvedCurrentRoot
             StagedRoot = $stageRoot
             SkinsRoot = $skinsRoot
-        }
-        if ($ResetCurrentVersion) {
-            $replacementParameters['PreparedRollbackRoot'] = [string]$script:ResetRecoveryTransaction.RollbackRoot
+            PreparedRollbackRoot = [string]$script:ResetRecoveryTransaction.RollbackRoot
         }
         $rollbackRoot = Invoke-FixedRootReplacement @replacementParameters
-        if ($ResetCurrentVersion) {
-            Set-ResetRecoveryPhase -Phase 'NewRootInstalled'
-        }
+        Assert-BlockHudFixedRootRuntimeContract `
+            -Root $resolvedCurrentRoot `
+            -Context 'Installed fixed root' `
+            -RequireTransportAdapter
+        Assert-BlockHudFixedRootImmutableSnapshot `
+            -Root $resolvedCurrentRoot `
+            -Snapshot $installedImmutableSnapshot `
+            -Context 'Installed fixed root'
+        Set-ResetRecoveryPhase -Phase 'NewRootInstalled'
         Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $resolvedCurrentRoot
         Set-ResultPairValue -Key 'DMEL_BACKUPPATH' -Value ''
         Use-CanonicalHelperLogPath -Root $resolvedCurrentRoot -Prefix 'UpdateToLatestVersion'
 
         try {
-            if ($ResetCurrentVersion) {
-                Set-ResetRecoveryPhase -Phase 'Activating'
-            }
+            Set-ResetRecoveryPhase -Phase 'Activating'
             Invoke-PostUpdateRefresh -Root $resolvedCurrentRoot
-            if ($ResetCurrentVersion) {
-                Set-ResetRecoveryPhase -Phase 'Activated'
-            }
+            Wait-FixedRootActivationHandoff `
+                -Root $resolvedCurrentRoot `
+                -Transaction $script:ResetRecoveryTransaction `
+                -ImmutableSnapshot $installedImmutableSnapshot
+            Set-ResetRecoveryPhase -Phase 'Activated'
+            Set-ResetRecoveryPhase -Phase 'Committed'
             $script:PostUpdateActivationSucceeded = $true
         }
         catch {
-            $refreshFailure = $_.Exception.Message
-            Write-Log ("Post-update refresh failed after fixed-root replacement: {0}" -f $refreshFailure) 'ERROR'
+            $activationFailure = $_.Exception.Message
+            Write-Log ("Post-update activation failed after fixed-root replacement: {0}" -f $activationFailure) 'ERROR'
             try {
-                Restore-InstalledFixedRootBestEffort -FinalRoot $resolvedCurrentRoot -RollbackRoot $rollbackRoot -Reason 'post-update refresh failure'
-                if ($ResetCurrentVersion) {
-                    try {
-                        Set-ResetRecoveryPhase -Phase 'Restored'
-                    }
-                    catch {
-                        Write-Log ("Restored the previous root, but could not acknowledge recovery in the journal: {0}" -f $_.Exception.Message) 'WARN'
-                    }
+                Invoke-QuiesceCurrentRoot -Root $resolvedCurrentRoot
+                Restore-InstalledFixedRootBestEffort -FinalRoot $resolvedCurrentRoot -RollbackRoot $rollbackRoot -Reason 'post-update activation failure'
+                try {
+                    Set-ResetRecoveryPhase -Phase 'Restored'
+                }
+                catch {
+                    Write-Log ("Restored the previous root, but could not acknowledge recovery in the journal: {0}" -f $_.Exception.Message) 'WARN'
                 }
             }
             catch {
-                throw ("Post-update refresh failed and automatic fixed-root restore also failed. refresh_error={0}; restore_error={1}" -f $refreshFailure, $_.Exception.Message)
+                try { Set-ResetRecoveryPhase -Phase 'RecoveryPending' }
+                catch { }
+                throw ("Post-update activation failed and automatic fixed-root restore also failed. activation_error={0}; restore_error={1}" -f $activationFailure, $_.Exception.Message)
             }
 
-            throw ("Post-update refresh failed; restored the previous fixed root. {0}" -f $refreshFailure)
+            throw ("Post-update activation failed; restored the previous fixed root. {0}" -f $activationFailure)
         }
 
+        Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'OK'
         if ($ResetCurrentVersion) {
-            # The manager-local helper set may be newer than the same-version package
-            # that just replaced CurrentTargetRoot. Keep reset cleanup owned by this
-            # already-loaded process and its recovery guard, not by package-local code.
-            $cleanupResult = Remove-RootWithResult -Root $script:ReplacementRollbackParent -Reason 'successful current-version reset'
+            Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value 'Reset the current skin to a pristine package of the same version and verified Bootstrap activation at the exact active install root.'
         }
         else {
-            $cleanupResult = Invoke-DetachedTempRootCleanup -Root $rollbackRoot -Reason 'successful fixed-root update'
+            Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value 'Updated to the latest version, imported data, and verified Bootstrap activation at the fixed install root.'
         }
-        if ([string]::Equals([string]$cleanupResult.Status, 'OK', [System.StringComparison]::OrdinalIgnoreCase)) {
-            Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'OK'
-            if ($ResetCurrentVersion) {
-                Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value 'Reset the current skin to a pristine package of the same version and replaced the exact active install root.'
-                try {
-                    Set-ResetRecoveryPhase -Phase 'Committed'
-                }
-                catch {
-                    Write-Log ("Current-version reset completed, but the recovery journal could not be finalized: {0}" -f $_.Exception.Message) 'WARN'
-                    Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'WARN'
-                    Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value 'Reset the current skin successfully, but temporary recovery metadata cleanup is still pending.'
-                }
-            }
-            else {
-                Remove-SafeUpdateTempRootBestEffort -Root $script:ReplacementRollbackParent -Reason 'fixed-root rollback parent'
-                Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value 'Updated to the latest version, imported data, and replaced the fixed install root.'
-            }
-        }
-        else {
-            Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'WARN'
-            if ($ResetCurrentVersion) {
-                Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value ("Reset the current skin and activated the pristine same-version package, but rollback-root cleanup is still pending: {0}" -f [string]$cleanupResult.Message)
-                try {
-                    Set-ResetRecoveryPhase -Phase 'CleanupPending'
-                }
-                catch {
-                    Write-Log ("Could not hand pending rollback cleanup to the recovery guard: {0}" -f $_.Exception.Message) 'WARN'
-                }
-            }
-            else {
-                Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value ("Updated to the latest version and replaced the fixed install root, but temporary rollback-root cleanup did not complete: {0}" -f [string]$cleanupResult.Message)
-            }
-        }
+        Write-Log 'Committed fixed-root replacement; the recovery guard will remove the rollback root after the owner process exits.'
 
         return
     }
@@ -993,15 +1060,16 @@ function Invoke-UpdateToLatest {
     }
 
     try {
-        $cleanupResult = Invoke-DetachedOldRootCleanup -OldRoot $resolvedCurrentRoot -SkinsRoot $skinsRoot
+        $cleanupOutput = @(Invoke-DetachedOldRootCleanup -OldRoot $resolvedCurrentRoot -SkinsRoot $skinsRoot)
     }
     catch {
-        $cleanupResult = [PSCustomObject]@{
+        $cleanupOutput = @([PSCustomObject]@{
             Status = 'ERROR'
             Message = $_.Exception.Message
             ResultPath = ''
-        }
+        })
     }
+    $cleanupResult = ConvertTo-RootCleanupResult -Output $cleanupOutput -Context 'Old-root cleanup helper'
     Write-Log ("Old-root cleanup result: {0} - {1}" -f [string]$cleanupResult.Status, [string]$cleanupResult.Message)
     if ([string]::Equals([string]$cleanupResult.Status, 'OK', [System.StringComparison]::OrdinalIgnoreCase)) {
         Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'OK'

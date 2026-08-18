@@ -1,6 +1,6 @@
 local M = {}
 
-M.SCHEMA_VERSION = 2
+M.SCHEMA_VERSION = 3
 M.REPOSITORY_SLUG = 'd-meloper/dmelopers-block-hud'
 M.TEST_REPOSITORY_SLUG = 'oup030416/dmelopers-block-hud-test'
 
@@ -14,6 +14,7 @@ local VARIANTS = {
         releaseKey = 'LatestReleaseKorea',
         releaseNameKey = 'LatestReleaseNameKorea',
         assetKey = 'LatestAssetNameKorea',
+        sha256Key = 'LatestAssetSha256Korea',
         publishedKey = 'LatestPublishedAtUtcKorea',
         assetName = 'DMelopers-Block-HUD_Korea.zip',
     },
@@ -21,6 +22,7 @@ local VARIANTS = {
         releaseKey = 'LatestReleaseGlobal',
         releaseNameKey = 'LatestReleaseNameGlobal',
         assetKey = 'LatestAssetNameGlobal',
+        sha256Key = 'LatestAssetSha256Global',
         publishedKey = 'LatestPublishedAtUtcGlobal',
         assetName = 'DMelopers-Block-HUD_Global.zip',
     },
@@ -31,6 +33,7 @@ local CACHE_KEYS = {
     'VersionManagerCacheRepositorySlug',
     'VersionManagerCacheReleaseVariant',
     'VersionManagerCacheAssetName',
+    'VersionManagerCacheAssetSha256',
     'VersionManagerCacheStatus',
     'VersionManagerCacheErrorCode',
     'VersionManagerCacheFailureHint',
@@ -256,6 +259,14 @@ local function normalizeVariant(raw)
     return nil
 end
 
+local function normalizeSha256(raw)
+    local normalized = trim(raw)
+    if #normalized ~= 64 or not normalized:match('^[0-9A-Fa-f]+$') then
+        return nil
+    end
+    return normalized:upper()
+end
+
 function M.CompareStableVersions(leftRaw, rightRaw)
     local left = parseStableVersion(leftRaw)
     local right = parseStableVersion(rightRaw)
@@ -304,6 +315,7 @@ function M.CacheProvenanceMatches(cache, variant, expectedRepositorySlug)
         and supportedRepositorySlug(cache.repositorySlug) == repositorySlug
         and normalizeVariant(cache.releaseVariant) == normalizedVariant
         and trim(cache.assetName) == assetName
+        and normalizeSha256(cache.assetSha256) ~= nil
 end
 
 function M.UtcTimestampSeconds(raw)
@@ -398,6 +410,15 @@ function M.ParsePayload(raw, variant, expectedRepositorySlug)
         end
     end
 
+    local advertisedSha256, sha256Error = requiredString(values, variantContract.sha256Key)
+    if not advertisedSha256 then
+        return nil, sha256Error
+    end
+    local assetSha256 = normalizeSha256(advertisedSha256)
+    if not assetSha256 then
+        return nil, 'variant release asset SHA-256 is malformed'
+    end
+
     local publishedAtUtc = ''
     local publishedEntry = values[variantContract.publishedKey]
     if publishedEntry and publishedEntry.valueType == 'string'
@@ -410,6 +431,7 @@ function M.ParsePayload(raw, variant, expectedRepositorySlug)
         variant = normalizedVariant,
         latestVersion = latestVersion.tag,
         assetName = assetName,
+        assetSha256 = assetSha256,
         publishedAtUtc = publishedAtUtc,
     }
 end
@@ -436,6 +458,7 @@ function M.Create(options)
             repositorySlug = readVariable('VersionManagerCacheRepositorySlug'),
             releaseVariant = readVariable('VersionManagerCacheReleaseVariant'),
             assetName = readVariable('VersionManagerCacheAssetName'),
+            assetSha256 = readVariable('VersionManagerCacheAssetSha256'),
             status = readVariable('VersionManagerCacheStatus'),
             errorCode = readVariable('VersionManagerCacheErrorCode'),
             failureHint = readVariable('VersionManagerCacheFailureHint'),
@@ -583,6 +606,7 @@ function M.Create(options)
             VersionManagerCacheRepositorySlug = expectedRepository,
             VersionManagerCacheReleaseVariant = payload.variant,
             VersionManagerCacheAssetName = payload.assetName,
+            VersionManagerCacheAssetSha256 = payload.assetSha256,
             VersionManagerCacheStatus = 'ready',
             VersionManagerCacheErrorCode = '',
             VersionManagerCacheFailureHint = '',

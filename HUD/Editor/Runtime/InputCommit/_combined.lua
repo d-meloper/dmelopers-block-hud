@@ -143,6 +143,17 @@ local function normalizeConfirmBeforeRun(value)
     return EnsureEditorValueHelpers().normalizeConfirmBeforeRun(value)
 end
 
+function normalizeActionType(value)
+    return trim(value):lower() == 'folder' and 'folder' or ''
+end
+
+function normalizeFolderCountSync(value, actionType)
+    if normalizeActionType(actionType) ~= 'folder' then
+        return '0'
+    end
+    return trim(value) == '1' and '1' or '0'
+end
+
 
 
 local function hasSkinGetVariable()
@@ -288,6 +299,10 @@ local RESERVED_SLOT = {
     Qty = 0,
 
     ConfirmBeforeRun = '0',
+
+    ActionType = '',
+
+    FolderCountSync = '0',
 
 
 
@@ -1143,6 +1158,8 @@ local function setImageKey(resolved)
         SyncEditorPixelationState(imageKey)
     end
 
+    SKIN:Bang('!CommandMeasure', 'MeasureItemImageAnimator', 'RefreshBindings()')
+
 
 
 end
@@ -1742,6 +1759,10 @@ local function syncReservedSlotPersistence()
         Action = RESERVED_SLOT.ExecPath,
 
         Qty = tostring(RESERVED_SLOT.Qty),
+
+        ActionType = '',
+
+        FolderCountSync = '0',
 
     }
 
@@ -2765,6 +2786,10 @@ local function cloneRecord(record)
 
         ConfirmBeforeRun = normalizeConfirmBeforeRun(record.ConfirmBeforeRun),
 
+        ActionType = normalizeActionType(record.ActionType),
+
+        FolderCountSync = normalizeFolderCountSync(record.FolderCountSync, record.ActionType),
+
 
 
         Qty = record.Qty or 0,
@@ -2827,6 +2852,10 @@ local function emptyRecord(source, x, y)
 
         ConfirmBeforeRun = '0',
 
+        ActionType = '',
+
+        FolderCountSync = '0',
+
 
 
         Populated = false,
@@ -2860,6 +2889,10 @@ local function writeRecordToPath(path, prefix, record)
     writeItemField(path, prefix, record.Section, 'Qty', tostring(record.Qty or 0))
 
     writeItemField(path, prefix, record.Section, 'ConfirmBeforeRun', normalizeConfirmBeforeRun(record.ConfirmBeforeRun))
+
+    writeItemField(path, prefix, record.Section, 'ActionType', normalizeActionType(record.ActionType))
+
+    writeItemField(path, prefix, record.Section, 'FolderCountSync', normalizeFolderCountSync(record.FolderCountSync, record.ActionType))
 
 
 
@@ -2904,6 +2937,10 @@ local function writeDraftRecord(record)
 
             ConfirmBeforeRun = '0',
 
+            ActionType = '',
+
+            FolderCountSync = '0',
+
         }
 
     end
@@ -2919,6 +2956,10 @@ local function writeDraftRecord(record)
     mirrorConsumerVariable('EditorDraftItem_' .. record.Section .. '_Qty', tostring(record.Qty or 0))
 
     mirrorConsumerVariable('EditorDraftItem_' .. record.Section .. '_ConfirmBeforeRun', normalizeConfirmBeforeRun(record.ConfirmBeforeRun))
+
+    mirrorConsumerVariable('EditorDraftItem_' .. record.Section .. '_ActionType', normalizeActionType(record.ActionType))
+
+    mirrorConsumerVariable('EditorDraftItem_' .. record.Section .. '_FolderCountSync', normalizeFolderCountSync(record.FolderCountSync, record.ActionType))
 
 end
 
@@ -2977,6 +3018,10 @@ local function updateCurrentTarget(record)
         Qty = record.Qty,
 
         ConfirmBeforeRun = normalizeConfirmBeforeRun(record.ConfirmBeforeRun),
+
+        ActionType = normalizeActionType(record.ActionType),
+
+        FolderCountSync = normalizeFolderCountSync(record.FolderCountSync, record.ActionType),
 
 
 
@@ -3249,7 +3294,11 @@ EditorLocalizationTextFit = nil
 
 function EnsureEditorLocalizationTextFit()
     if EditorLocalizationTextFit == nil then
-        EditorLocalizationTextFit = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\LocalizationTextFit.lua')
+        local textFitModule = dofile((SKIN:GetVariable('@') or '') .. 'Defaults\\Runtime\\luas\\LocalizationTextFit.lua')
+        EditorLocalizationTextFit = textFitModule.Create(SKIN, {
+            widthProbeMeterName = 'MeterEditorTextFitProbe',
+            wrapProbeMeterName = 'MeterEditorTextFitWrapProbe',
+        })
     end
     return EditorLocalizationTextFit
 end
@@ -3270,19 +3319,18 @@ function EditorTextFitNumericVariable(name, fallback)
     return (ok and tonumber(parsed)) or fallback
 end
 
-function ApplyEditorTextFit(meterName, locKey, text, baseFontVariable, widthVariable)
-    local helper = EnsureEditorLocalizationTextFit()
-    if not helper or not helper.ApplyMeterTextFit then
-        return
+function ApplyEditorTextFit(meterName, text, baseFontVariable, widthVariable, heightVariable, policy)
+    local fitter = EnsureEditorLocalizationTextFit()
+    if not fitter then
+        return nil
     end
-    helper.ApplyMeterTextFit(SKIN, meterName, text, {
-        locKey = locKey,
+    return fitter:Apply({
+        meterName = meterName,
+        text = text,
         baseFontSize = EditorTextFitNumericVariable(baseFontVariable, 10) or 10,
         widthPx = EditorTextFitNumericVariable(widthVariable, 0) or 0,
-        minScale = 0.70,
-        probeMeterName = 'MeterEditorTextFitProbe',
-        setText = false,
-        update = false,
+        heightPx = EditorTextFitNumericVariable(heightVariable, 0) or 0,
+        policy = policy or 'wrap4',
     })
 end
 
@@ -3293,35 +3341,87 @@ local function applyEditorStaticTextFitTarget(target)
     local text = target.text or ('#Loc_' .. target.key .. '#')
     ApplyEditorTextFit(
         target.meter,
-        target.key or '',
         text,
         target.base,
-        target.width
+        target.width,
+        target.height,
+        target.policy
     )
 end
 
 function ApplyEditorStaticLocalizationTextFits()
     local targets = {
-        { meter = 'MeterViewerLoadButtonLabel', key = 'Editor_LoadButton', base = 'ViewerLoadButtonFontSize', width = 'ViewerLoadButtonW' },
-        { meter = 'MeterEditorLoadingLabelLine1', key = 'Editor_Loading_Line1', text = '#EditorLoadingTextLine1#', base = 'EditorUIFontSize', width = 'PanelWidth' },
-        { meter = 'MeterEditorLoadingLabelLine2', key = 'Editor_Loading_Line2', text = '#EditorLoadingTextLine2#', base = 'EditorUIFontSize', width = 'PanelWidth' },
-        { meter = 'MeterEditorNoSelectionMessage', key = 'Editor_NoSelection', base = 12, width = 'EditorNoSelectionMessageW' },
-        { meter = 'MeterTopBarResetButtonLabel', key = 'Settings_Notice_Clear', base = 'EditorUIFontSize', width = 'ActionReset_W' },
-        { meter = 'MeterSlotFormTitle', key = 'Editor_FormTitle', base = 'LabeledInputTitleFontSize', width = 'SlotFormTitle_W' },
-        { meter = 'MeterSlotPathTitle', key = 'Editor_PathTitle', base = 'LabeledInputTitleFontSize', width = 'SlotPathTitle_W' },
-        { meter = 'MeterRunConfirmToggleTitle', key = 'Editor_RunConfirmToggleTitle', base = 12, width = 'EditorRunConfirmToggleTitle_W' },
-        { meter = 'MeterLabeledInputGroupTitle', key = 'Editor_PositionGroupTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInputGroupTitle_W' },
-        { meter = 'MeterLabeledInputTitle', key = 'Editor_XTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInputTitle_W' },
-        { meter = 'MeterLabeledInput2Title', key = 'Editor_YTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInput2Title_W' },
-        { meter = 'MeterLabeledInput3Title', key = 'Editor_QtyTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInput3Title_W' },
-        { meter = 'MeterImageAdjustGroupTitle', key = 'Editor_ImageAdjustGroupTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjustGroupTitle_W' },
-        { meter = 'MeterImageAdjustTitle', key = 'Editor_XTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjustTitle_W' },
-        { meter = 'MeterImageAdjust2Title', key = 'Editor_YTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjust2Title_W' },
-        { meter = 'MeterImageAdjust3Title', key = 'Editor_ImageAdjustSizeTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjust3Title_W' },
+        { meter = 'MeterViewerLoadButtonLabel', key = 'Editor_LoadButton', base = 'ViewerLoadButtonFontSize', width = 'ViewerLoadButtonW', height = 'ViewerLoadButtonH' },
+        { meter = 'MeterEditorLoadingLabelLine1', key = 'Editor_Loading_Line1', text = '#EditorLoadingTextLine1#', base = 'EditorUIFontSize', width = 'PanelWidth', height = 18, policy = 'single-line' },
+        { meter = 'MeterEditorLoadingLabelLine2', key = 'Editor_Loading_Line2', text = '#EditorLoadingTextLine2#', base = 'EditorUIFontSize', width = 'PanelWidth', height = 18, policy = 'single-line' },
+        { meter = 'MeterEditorNoSelectionMessage', key = 'Editor_NoSelection', base = 12, width = 'EditorNoSelectionMessageW', height = 'EditorNoSelectionMessageH' },
+        { meter = 'MeterTopBarResetButtonLabel', key = 'Settings_Notice_Clear', base = 'EditorUIFontSize', width = 'ActionReset_W', height = 'ActionReset_H' },
+        { meter = 'MeterFormTitle', key = 'Editor_FormTitle', base = 'LabeledInputTitleFontSize', width = 'SlotFormTitle_W', height = 'SlotFormTitle_H' },
+        { meter = 'MeterPathTitle', key = 'Editor_PathTitle', base = 'LabeledInputTitleFontSize', width = 'SlotPathTitle_W', height = 'SlotPathTitle_H' },
+        { meter = 'MeterRunConfirmToggleTitle', key = 'Editor_RunConfirmToggleTitle', base = 12, width = 'EditorRunConfirmToggleTitle_W', height = 'EditorRunConfirmToggleTitle_H' },
+        { meter = 'MeterLabeledInputGroupTitle', key = 'Editor_PositionGroupTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInputGroupTitle_W', height = 'SlotLabeledInputGroupTitle_H' },
+        { meter = 'MeterLabeledInputTitle', key = 'Editor_XTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInputTitle_W', height = 'SlotLabeledInputTitle_H' },
+        { meter = 'MeterLabeledInput2Title', key = 'Editor_YTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInput2Title_W', height = 'SlotLabeledInput2Title_H' },
+        { meter = 'MeterLabeledInput3Title', key = 'Editor_QtyTitle', base = 'LabeledInputTitleFontSize', width = 'SlotLabeledInput3Title_W', height = 'SlotLabeledInput3Title_H' },
+        { meter = 'MeterFolderCountSyncToggleTitle', key = 'Editor_FolderCountSyncTitle', base = 12, width = 'EditorFolderCountSyncToggleTitle_W', height = 'EditorFolderCountSyncToggleTitle_H' },
+        { meter = 'MeterImageAdjustGroupTitle', key = 'Editor_ImageAdjustGroupTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjustGroupTitle_W', height = 'SlotImageAdjustGroupTitle_H' },
+        { meter = 'MeterImageAdjustTitle', key = 'Editor_XTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjustTitle_W', height = 'SlotImageAdjustTitle_H' },
+        { meter = 'MeterImageAdjust2Title', key = 'Editor_YTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjust2Title_W', height = 'SlotImageAdjust2Title_H' },
+        { meter = 'MeterImageAdjust3Title', key = 'Editor_ImageAdjustSizeTitle', base = 'LabeledInputTitleFontSize', width = 'SlotImageAdjust3Title_W', height = 'SlotImageAdjust3Title_H' },
     }
     for _, target in ipairs(targets) do
         applyEditorStaticTextFitTarget(target)
     end
+end
+
+function EditorLifecycle.SetFolderCountUnavailable(unavailable)
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncUnavailable', unavailable and '1' or '0')
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncTooltip', unavailable and '#Loc_Editor_FolderCountSyncUnavailable#' or '#Loc_Editor_FolderCountSyncTooltip#')
+    SKIN:Bang('!UpdateMeter', 'MeterFolderCountSyncToggleTitle')
+    SKIN:Bang('!UpdateMeter', 'MeterFolderCountSyncToggleBackground')
+    SKIN:Bang('!UpdateMeter', 'MeterFolderCountSyncToggleFill')
+end
+
+function EditorLifecycle.SetFolderCountSyncUi(record)
+    local service = ensureService()
+    local populated = record and record.Populated == true
+    local reserved = record and service.IsReservedHotbarSlot(record.Source, record.x, record.y)
+    local actionType = populated and normalizeActionType(record.ActionType) or ''
+    local eligible = populated and not reserved and actionType == 'folder'
+    local linked = eligible and normalizeFolderCountSync(record.FolderCountSync, actionType) == '1'
+    local manualQty = record and tostring(record.Qty or 0) or '0'
+
+    SKIN:Bang('!SetVariable', 'EditorActionTypeValue', actionType)
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncValue', linked and '1' or '0')
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncEligible', eligible and '1' or '0')
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncCommand', eligible and '[!CommandMeasure MeasureInputCommit "ToggleFolderCountSyncUi()"]' or '')
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncCursor', eligible and '1' or '0')
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncTitleColor', eligible and SKIN:GetVariable('EditorInputTextColor', '') or SKIN:GetVariable('EditorButtonDisabledTextColor', ''))
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncToggleBgColor', eligible and SKIN:GetVariable('EditorButtonBgColor', '') or SKIN:GetVariable('EditorButtonDisabledBgColor', ''))
+    SKIN:Bang('!SetVariable', 'EditorFolderCountSyncFillColor', linked and SKIN:GetVariable('EditorFolderCountSyncFillOnColor', '') or SKIN:GetVariable('EditorFolderCountSyncFillOffColor', '0,0,0,0'))
+    SKIN:Bang('!SetVariable', 'EditorQtyInputEnabled', linked and '0' or '1')
+    SKIN:Bang('!SetVariable', 'EditorQtyInputCommand', linked and '' or '[!CommandMeasure MeasureInputCommit "PrepareInputTarget(\'qty\')"][!UpdateMeasure MeasureInputField4][!CommandMeasure MeasureInputField4 "ExecuteBatch 1-2"]')
+    SKIN:Bang('!SetVariable', 'EditorQtyInputCursor', linked and '0' or '1')
+    SKIN:Bang('!SetVariable', 'EditorQtyInputBgColor', linked and SKIN:GetVariable('EditorButtonDisabledBgColor', '') or SKIN:GetVariable('EditorInputBgColor', ''))
+    SKIN:Bang('!SetVariable', 'EditorQtyInputStrokeColor', linked and SKIN:GetVariable('EditorButtonDisabledTextColor', '') or SKIN:GetVariable('EditorInputStrokeColor', ''))
+    SKIN:Bang('!SetVariable', 'EditorQtyInputTextColor', linked and SKIN:GetVariable('EditorButtonDisabledTextColor', '') or SKIN:GetVariable('EditorInputTextColor', ''))
+    EditorLifecycle.SetFolderCountUnavailable(false)
+
+    if linked then
+        setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', '0')
+        if type(RefreshFolderCountSync) == 'function' and tonumber(trim(SKIN:GetVariable('EditorPageIndex', '1'))) == 2 then
+            RefreshFolderCountSync()
+        end
+    else
+        setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', manualQty)
+    end
+
+    SKIN:Bang('!UpdateMeasure', 'MeasureInputField4')
+    SKIN:Bang('!UpdateMeter', 'MeterLabeledInput3FieldBackground')
+    SKIN:Bang('!UpdateMeter', 'MeterLabeledInput3Text')
+    SKIN:Bang('!UpdateMeter', 'MeterFolderCountSyncToggleTitle')
+    SKIN:Bang('!UpdateMeter', 'MeterFolderCountSyncToggleBackground')
+    SKIN:Bang('!UpdateMeter', 'MeterFolderCountSyncToggleFill')
 end
 
 
@@ -3603,7 +3703,7 @@ local function syncItemActionState(record, mode)
 
 
     setActionLocalizationVariable('ActionItemPrimary_LabelText', primaryLabelKey)
-    ApplyEditorTextFit('MeterItemActionPrimaryLabel', primaryLabelKey, '#Loc_' .. primaryLabelKey .. '#', 'EditorUIFontSize', 'ItemActionPrimaryW')
+    ApplyEditorTextFit('MeterItemActionPrimaryLabel', '#Loc_' .. primaryLabelKey .. '#', 'EditorUIFontSize', 'ItemActionPrimaryW', 'ItemActionPrimaryH', 'wrap4')
 
 
 
@@ -3620,7 +3720,7 @@ local function syncItemActionState(record, mode)
 
 
     applyActionContract('ActionItemCancelDelete', cancelEnabled, cancelCommand, '#Loc_Editor_Action_DeleteCancel#', cancelBgColor, cancelTextColor)
-    ApplyEditorTextFit('MeterItemActionCancelLabel', 'Editor_Action_DeleteCancel', '#Loc_Editor_Action_DeleteCancel#', 'EditorUIFontSize', 'ItemActionCancelW')
+    ApplyEditorTextFit('MeterItemActionCancelLabel', '#Loc_Editor_Action_DeleteCancel#', 'EditorUIFontSize', 'ItemActionCancelW', 'ItemActionCancelH', 'wrap4')
 
 
 
@@ -3629,7 +3729,7 @@ local function syncItemActionState(record, mode)
 
 
     applyActionContract('ActionItemConfirmDelete', confirmEnabled, confirmCommand, '#Loc_Editor_Action_DeleteTooltip#', confirmBgColor, confirmTextColor)
-    ApplyEditorTextFit('MeterItemActionConfirmLabel', 'Editor_Action_DeleteConfirm', '#Loc_Editor_Action_DeleteConfirm#', 'EditorUIFontSize', 'ItemActionConfirmW')
+    ApplyEditorTextFit('MeterItemActionConfirmLabel', '#Loc_Editor_Action_DeleteConfirm#', 'EditorUIFontSize', 'ItemActionConfirmW', 'ItemActionConfirmH', 'wrap4')
 
 
 
@@ -3805,8 +3905,6 @@ local function clearEditorUI()
 
     setRunConfirmToggleUi(false)
 
-
-
     setLabeledInput('EditorLabeledInputValue', 'EditorLabeledInputDisplayText', 'EditorLabeledInputPlaceholder', 'MeterLabeledInputText', '')
 
 
@@ -3816,6 +3914,8 @@ local function clearEditorUI()
 
 
     setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', '0')
+
+    EditorLifecycle.SetFolderCountSyncUi(nil)
 
 
 
@@ -3863,8 +3963,6 @@ local function updateEmptyTargetUI(record)
 
     setRunConfirmToggleUi(false)
 
-
-
     setLabeledInput('EditorLabeledInputValue', 'EditorLabeledInputDisplayText', 'EditorLabeledInputPlaceholder', 'MeterLabeledInputText', tostring(record.x))
 
 
@@ -3874,6 +3972,8 @@ local function updateEmptyTargetUI(record)
 
 
     setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', tostring(record.Qty or 0))
+
+    EditorLifecycle.SetFolderCountSyncUi(record)
 
 
 
@@ -3921,8 +4021,6 @@ local function updateTargetUI(record)
 
     setRunConfirmToggleUi(normalizeConfirmBeforeRun(record.ConfirmBeforeRun) == '1')
 
-
-
     setLabeledInput('EditorLabeledInputValue', 'EditorLabeledInputDisplayText', 'EditorLabeledInputPlaceholder', 'MeterLabeledInputText', tostring(record.x))
 
 
@@ -3932,6 +4030,8 @@ local function updateTargetUI(record)
 
 
     setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', tostring(record.Qty or 0))
+
+    EditorLifecycle.SetFolderCountSyncUi(record)
 
 
 
@@ -4588,7 +4688,209 @@ local function getSelectedRecord()
 
 end
 
+EditorLifecycle.FolderCountState = EditorLifecycle.FolderCountState or { Generation = 0, Expected = nil, Phase = 'idle' }
 
+function EditorLifecycle.SelectedRecordMatchesFolderCountExpected(record)
+    local expected = EditorLifecycle.FolderCountState.Expected
+    return record and expected
+        and record.Source == expected.Source
+        and tonumber(record.x) == expected.X
+        and tonumber(record.y) == expected.Y
+        and trim(record.ExecPath) == expected.Path
+        and normalizeActionType(record.ActionType) == 'folder'
+        and normalizeFolderCountSync(record.FolderCountSync, record.ActionType) == '1'
+end
+
+function EditorLifecycle.SplitFolderParent(path)
+    local normalized = trim(path):gsub('/', '\\')
+    normalized = normalized:gsub('\\+$', '')
+    if normalized:match('^%a:$') then
+        return nil, nil, 'root'
+    end
+    if normalized:sub(1, 2) == '\\\\' then
+        local componentCount = 0
+        for _ in normalized:sub(3):gmatch('[^\\]+') do
+            componentCount = componentCount + 1
+        end
+        if componentCount == 2 then
+            return nil, nil, 'root'
+        end
+        if componentCount < 2 then
+            return nil, nil
+        end
+    end
+    local parent, name = normalized:match('^(.*\\)([^\\]+)$')
+    if not parent or not name or name == '' then
+        return nil, nil
+    end
+    return parent, name, 'parent'
+end
+
+function EditorLifecycle.NormalizeFolderPathForCompare(path)
+    return trim(path):gsub('/', '\\'):gsub('\\+$', ''):lower()
+end
+
+function EditorLifecycle.BeginFolderCountRefresh()
+    local state = EditorLifecycle.FolderCountState
+    local expected = state.Expected
+    if not expected or expected.Generation ~= state.Generation then
+        return false
+    end
+    state.Phase = 'reset'
+    local callback = string.format('[!CommandMeasure MeasureInputCommit "HandleFolderCountResult(%d, \'reset\')"]', state.Generation)
+    SKIN:Bang('!SetOption', 'MeasureEditorFolderFileCount', 'OnUpdateAction', callback)
+    SKIN:Bang('!SetOption', 'MeasureEditorFolderFileCount', 'Folder', '')
+    SKIN:Bang('!EnableMeasure', 'MeasureEditorFolderFileCount')
+    SKIN:Bang('!UpdateMeasure', 'MeasureEditorFolderFileCount')
+    return true
+end
+
+function RefreshFolderCountSync()
+    local state = EditorLifecycle.FolderCountState
+    local record = getSelectedRecord()
+    state.Generation = state.Generation + 1
+    state.Expected = nil
+    state.Phase = 'preflight'
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderPreflight')
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderPreflightName')
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderRootPreflight')
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderRootPreflightPath')
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderFileCount')
+    SKIN:Bang('!SetVariable', 'EditorFolderCountGeneration', tostring(state.Generation))
+    EditorLifecycle.SetFolderCountUnavailable(false)
+
+    if not record or not record.Populated
+        or normalizeActionType(record.ActionType) ~= 'folder'
+        or normalizeFolderCountSync(record.FolderCountSync, record.ActionType) ~= '1' then
+        return false
+    end
+
+    local service = ensureService()
+    if service.IsReservedHotbarSlot(record.Source, record.x, record.y) then
+        return false
+    end
+
+    local path = trim(record.ExecPath)
+    local parent, name, preflightMode = EditorLifecycle.SplitFolderParent(path)
+    if path == '' or not preflightMode then
+        setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', '0')
+        EditorLifecycle.SetFolderCountUnavailable(true)
+        SKIN:Bang('!Redraw')
+        return false
+    end
+
+    state.Expected = {
+        Generation = state.Generation,
+        Source = record.Source,
+        X = tonumber(record.x),
+        Y = tonumber(record.y),
+        Path = path,
+        Parent = parent,
+        Name = name,
+        PreflightMode = preflightMode,
+    }
+    SKIN:Bang('!SetVariable', 'EditorFolderCountTargetPath', path)
+    if preflightMode == 'root' then
+        local callback = string.format('[!UpdateMeasure MeasureEditorFolderRootPreflightPath][!CommandMeasure MeasureInputCommit "HandleFolderRootPreflight(%d)"]', state.Generation)
+        SKIN:Bang('!SetOption', 'MeasureEditorFolderRootPreflight', 'FinishAction', callback)
+        SKIN:Bang('!EnableMeasure', 'MeasureEditorFolderRootPreflight')
+        SKIN:Bang('!EnableMeasure', 'MeasureEditorFolderRootPreflightPath')
+        SKIN:Bang('!UpdateMeasure', 'MeasureEditorFolderRootPreflight')
+    else
+        SKIN:Bang('!SetVariable', 'EditorFolderCountParentPath', parent)
+        SKIN:Bang('!SetVariable', 'EditorFolderCountFolderName', name)
+        local callback = string.format('[!UpdateMeasure MeasureEditorFolderPreflightName][!CommandMeasure MeasureInputCommit "HandleFolderCountPreflight(%d)"]', state.Generation)
+        SKIN:Bang('!SetOption', 'MeasureEditorFolderPreflight', 'FinishAction', callback)
+        SKIN:Bang('!EnableMeasure', 'MeasureEditorFolderPreflight')
+        SKIN:Bang('!EnableMeasure', 'MeasureEditorFolderPreflightName')
+        SKIN:Bang('!UpdateMeasure', 'MeasureEditorFolderPreflight')
+    end
+    return true
+end
+
+function HandleFolderCountPreflight(generation)
+    local state = EditorLifecycle.FolderCountState
+    local expected = state.Expected
+    if not expected or tonumber(generation) ~= expected.Generation or expected.Generation ~= state.Generation then
+        return false
+    end
+    local record = getSelectedRecord()
+    if not EditorLifecycle.SelectedRecordMatchesFolderCountExpected(record) then
+        return false
+    end
+    local nameMeasure = SKIN:GetMeasure('MeasureEditorFolderPreflightName')
+    local actualName = nameMeasure and trim(nameMeasure:GetStringValue()) or ''
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderPreflight')
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderPreflightName')
+    if actualName:lower() ~= expected.Name:lower() then
+        setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', '0')
+        EditorLifecycle.SetFolderCountUnavailable(true)
+        SKIN:Bang('!Redraw')
+        return false
+    end
+    EditorLifecycle.SetFolderCountUnavailable(false)
+    return EditorLifecycle.BeginFolderCountRefresh()
+end
+
+function HandleFolderRootPreflight(generation)
+    local state = EditorLifecycle.FolderCountState
+    local expected = state.Expected
+    if not expected or expected.PreflightMode ~= 'root'
+        or tonumber(generation) ~= expected.Generation or expected.Generation ~= state.Generation then
+        return false
+    end
+    local record = getSelectedRecord()
+    if not EditorLifecycle.SelectedRecordMatchesFolderCountExpected(record) then
+        return false
+    end
+    local pathMeasure = SKIN:GetMeasure('MeasureEditorFolderRootPreflightPath')
+    local actualPath = pathMeasure and pathMeasure:GetStringValue() or ''
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderRootPreflight')
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderRootPreflightPath')
+    if EditorLifecycle.NormalizeFolderPathForCompare(actualPath) ~= EditorLifecycle.NormalizeFolderPathForCompare(expected.Path) then
+        setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', '0')
+        EditorLifecycle.SetFolderCountUnavailable(true)
+        SKIN:Bang('!Redraw')
+        return false
+    end
+    EditorLifecycle.SetFolderCountUnavailable(false)
+    return EditorLifecycle.BeginFolderCountRefresh()
+end
+
+function HandleFolderCountResult(generation, phase)
+    local state = EditorLifecycle.FolderCountState
+    local expected = state.Expected
+    if not expected or tonumber(generation) ~= expected.Generation or expected.Generation ~= state.Generation then
+        return false
+    end
+    local record = getSelectedRecord()
+    if not EditorLifecycle.SelectedRecordMatchesFolderCountExpected(record) then
+        return false
+    end
+    local callbackPhase = trim(phase)
+    if callbackPhase ~= state.Phase then
+        return false
+    end
+    if callbackPhase == 'reset' then
+        state.Phase = 'count'
+        local callback = string.format('[!CommandMeasure MeasureInputCommit "HandleFolderCountResult(%d, \'count\')"]', state.Generation)
+        SKIN:Bang('!SetOption', 'MeasureEditorFolderFileCount', 'OnUpdateAction', callback)
+        SKIN:Bang('!SetOption', 'MeasureEditorFolderFileCount', 'Folder', expected.Path)
+        SKIN:Bang('!UpdateMeasure', 'MeasureEditorFolderFileCount')
+        return true
+    end
+    if callbackPhase ~= 'count' then
+        return false
+    end
+    local measure = SKIN:GetMeasure('MeasureEditorFolderFileCount')
+    local count = measure and tonumber(measure:GetValue()) or 0
+    SKIN:Bang('!DisableMeasure', 'MeasureEditorFolderFileCount')
+    count = math.max(0, math.floor(count or 0))
+    setLabeledInput('EditorLabeledInput3Value', 'EditorLabeledInput3DisplayText', 'EditorLabeledInput3Placeholder', 'MeterLabeledInput3Text', tostring(count))
+    EditorLifecycle.SetFolderCountUnavailable(false)
+    SKIN:Bang('!Redraw')
+    return true
+end
 
 local function clearPreparedInputTarget()
 
@@ -5024,7 +5326,7 @@ local function buildSnapshotSignature(snapshot)
 
 
 
-                '%s:%d:%d:%q:%q:%q:%q:%d:%s',
+                '%s:%d:%d:%q:%q:%q:%q:%q:%q:%d:%s',
 
 
 
@@ -5051,6 +5353,10 @@ local function buildSnapshotSignature(snapshot)
                 record.ExecPath or '',
 
                 normalizeConfirmBeforeRun(record.ConfirmBeforeRun),
+
+                normalizeActionType(record.ActionType),
+
+                normalizeFolderCountSync(record.FolderCountSync, record.ActionType),
 
 
 
@@ -5146,7 +5452,7 @@ end
 
 
 
-local function isCurrentSnapshotAtSessionBaseline()
+local function isCurrentSnapshotAtSessionBaseline(snapshot)
 
 
 
@@ -5162,7 +5468,7 @@ local function isCurrentSnapshotAtSessionBaseline()
 
 
 
-    return buildSnapshotSignature(captureDraftSnapshot()) == buildSnapshotSignature(sessionBaselineSnapshot)
+    return buildSnapshotSignature(snapshot or captureDraftSnapshot()) == buildSnapshotSignature(sessionBaselineSnapshot)
 
 
 
@@ -5170,7 +5476,7 @@ end
 
 
 
-local function updateHistoryButtonState()
+local function updateHistoryButtonState(snapshot)
 
 
 
@@ -5190,7 +5496,7 @@ local function updateHistoryButtonState()
 
 
 
-    local canReset = not isCurrentSnapshotAtSessionBaseline()
+    local canReset = not isCurrentSnapshotAtSessionBaseline(snapshot)
 
 
 
@@ -5258,15 +5564,15 @@ end
 
 
 
-local function syncSessionDirtyState()
+local function syncSessionDirtyState(snapshot)
 
 
 
-    setDirty(not isCurrentSnapshotAtSessionBaseline())
+    setDirty(not isCurrentSnapshotAtSessionBaseline(snapshot))
 
 
 
-    updateHistoryButtonState()
+    updateHistoryButtonState(snapshot)
 
 
 
@@ -5310,7 +5616,7 @@ local function initializeSessionHistory(force)
 
 
 
-    syncSessionDirtyState()
+    syncSessionDirtyState(sessionBaselineSnapshot)
 
 
 
@@ -5358,7 +5664,7 @@ local function rememberDraftChange(label, beforeSnapshot)
 
 
 
-        syncSessionDirtyState()
+        syncSessionDirtyState(afterSnapshot)
 
 
 
@@ -5394,7 +5700,7 @@ local function rememberDraftChange(label, beforeSnapshot)
 
 
 
-    syncSessionDirtyState()
+    syncSessionDirtyState(afterSnapshot)
 
 
 
@@ -5402,6 +5708,26 @@ local function rememberDraftChange(label, beforeSnapshot)
 
 
 
+end
+
+function ToggleFolderCountSyncUi()
+    local record = getSelectedRecord()
+    if not record or not record.Populated or normalizeActionType(record.ActionType) ~= 'folder' then
+        return false
+    end
+    local service = ensureService()
+    if service.IsReservedHotbarSlot(record.Source, record.x, record.y) then
+        return false
+    end
+    playUiClick()
+    local beforeSnapshot = captureDraftSnapshot()
+    record.FolderCountSync = normalizeFolderCountSync(record.FolderCountSync, record.ActionType) == '1' and '0' or '1'
+    writeDraftRecord(record)
+    setSelection(record)
+    if rememberDraftChange(L('Editor_History_FolderCountSync', 'Folder file count link changed'), beforeSnapshot) then
+        refreshDraftItemConsumersLite()
+    end
+    return true
 end
 
 -- Split from Editor\InputCommit.lua lines 5263-6493.
@@ -5701,6 +6027,14 @@ local function recordsEquivalent(left, right)
 
             return false
 
+        end
+
+        if normalizeActionType(leftRecord.ActionType) ~= normalizeActionType(rightRecord.ActionType) then
+            return false
+        end
+
+        if normalizeFolderCountSync(leftRecord.FolderCountSync, leftRecord.ActionType) ~= normalizeFolderCountSync(rightRecord.FolderCountSync, rightRecord.ActionType) then
+            return false
         end
 
         if tostring(leftRecord.Qty or 0) ~= tostring(rightRecord.Qty or 0) then
@@ -6018,7 +6352,7 @@ end
 
 
 
-local function updateFieldAtLocator(locator, fieldName, value)
+local function updateFieldAtLocator(locator, fieldName, value, actionType)
 
 
 
@@ -6128,7 +6462,12 @@ local function updateFieldAtLocator(locator, fieldName, value)
 
 
 
-        if record.ExecPath == resolvedPath then
+        local resolvedActionType = normalizeActionType(actionType)
+        local resolvedFolderCountSync = normalizeFolderCountSync(record.FolderCountSync, resolvedActionType)
+
+        if record.ExecPath == resolvedPath
+            and normalizeActionType(record.ActionType) == resolvedActionType
+            and normalizeFolderCountSync(record.FolderCountSync, record.ActionType) == resolvedFolderCountSync then
 
 
 
@@ -6141,6 +6480,10 @@ local function updateFieldAtLocator(locator, fieldName, value)
 
 
         record.ExecPath = resolvedPath
+
+        record.ActionType = resolvedActionType
+
+        record.FolderCountSync = resolvedFolderCountSync
 
 
 
@@ -6536,7 +6879,9 @@ local function normalizeInvalidDraftChanges()
 
                     or record.Qty ~= RESERVED_SLOT.Qty
 
-                    or normalizeConfirmBeforeRun(record.ConfirmBeforeRun) ~= '0' then
+                    or normalizeConfirmBeforeRun(record.ConfirmBeforeRun) ~= '0'
+                    or normalizeActionType(record.ActionType) ~= ''
+                    or normalizeFolderCountSync(record.FolderCountSync, record.ActionType) ~= '0' then
 
 
 
@@ -6575,6 +6920,10 @@ local function normalizeInvalidDraftChanges()
                         Qty = RESERVED_SLOT.Qty,
 
                         ConfirmBeforeRun = '0',
+
+                        ActionType = '',
+
+                        FolderCountSync = '0',
 
 
 
@@ -7462,7 +7811,7 @@ end
 
 
 
-local function commitPathForLocator(value, locator, displayLabel)
+local function commitPathForLocator(value, locator, displayLabel, actionType)
 
 
 
@@ -7476,13 +7825,19 @@ local function commitPathForLocator(value, locator, displayLabel)
 
         setPathInput(resolved, displayLabel)
 
+        SKIN:Bang('!SetVariable', 'EditorActionTypeValue', normalizeActionType(actionType))
+
+        if normalizeActionType(actionType) ~= 'folder' then
+            SKIN:Bang('!SetVariable', 'EditorFolderCountSyncValue', '0')
+        end
+
 
 
     end
 
 
 
-    updateFieldAtLocator(locator, 'Action', resolved)
+    updateFieldAtLocator(locator, 'Action', resolved, actionType)
 
 
 
@@ -7558,6 +7913,8 @@ function UpdatePickedProgramAtLocator(pathValue, imageValue, locator)
     end
 
     local pathChanged = record.ExecPath ~= resolvedPath
+        or normalizeActionType(record.ActionType) ~= ''
+        or normalizeFolderCountSync(record.FolderCountSync, record.ActionType) ~= '0'
     local imageChanged = imageKey ~= "" and record.ImageKey ~= imageKey
     if not pathChanged and not imageChanged then
         return
@@ -7566,6 +7923,8 @@ function UpdatePickedProgramAtLocator(pathValue, imageValue, locator)
     local beforeSnapshot = captureDraftSnapshot()
     if pathChanged then
         record.ExecPath = resolvedPath
+        record.ActionType = ''
+        record.FolderCountSync = '0'
     end
     if imageChanged then
         record.ImageKey = imageKey
@@ -7600,6 +7959,10 @@ local function commitPickedProgramForLocator(pathValue, imageValue, locator, dis
 
         setPathInput(resolvedPath, displayLabel)
 
+        SKIN:Bang('!SetVariable', 'EditorActionTypeValue', '')
+
+        SKIN:Bang('!SetVariable', 'EditorFolderCountSyncValue', '0')
+
 
 
         if imageKey ~= "" then
@@ -7625,6 +7988,14 @@ local function commitPickedProgramForLocator(pathValue, imageValue, locator, dis
 end
 
 local function commitQtyForLocator(value, locator)
+
+    local record = getRecordByLocator(locator)
+    if record and normalizeFolderCountSync(record.FolderCountSync, record.ActionType) == '1' then
+        if shouldMirrorInputToVisibleSelection(locator) and type(RefreshFolderCountSync) == 'function' then
+            RefreshFolderCountSync()
+        end
+        return
+    end
 
 
 
@@ -7941,6 +8312,11 @@ function PrepareInputTarget(target)
 
     local record = getSelectedRecord()
 
+    if normalizedTarget == 'qty' and record
+        and normalizeFolderCountSync(record.FolderCountSync, record.ActionType) == '1' then
+        return
+    end
+
 
 
     clearPreparedInputTarget()
@@ -7985,11 +8361,11 @@ function PrepareInputTarget(target)
 
 end
 
-function CommitPath(value, displayLabel)
+function CommitPath(value, displayLabel, actionType)
 
 
 
-    commitPathForLocator(value, nil, displayLabel)
+    commitPathForLocator(value, nil, displayLabel, actionType)
 
 
 
@@ -8449,6 +8825,10 @@ function AddSelectedDraftItem()
 
     record.ConfirmBeforeRun = normalizeConfirmBeforeRun(SKIN:GetVariable('EditorRunConfirmToggleValue', '0'))
 
+    record.ActionType = normalizeActionType(SKIN:GetVariable('EditorActionTypeValue', ''))
+
+    record.FolderCountSync = normalizeFolderCountSync(SKIN:GetVariable('EditorFolderCountSyncValue', '0'), record.ActionType)
+
 
 
     record.Populated = true
@@ -8883,12 +9263,18 @@ EditorInputCommitPixelBridge = {
     localize = function(key, fallback)
         return L(key, fallback)
     end,
+    languageCode = function()
+        return currentLanguageCode()
+    end,
     userAlert = function(message)
         local summary = trim(message)
         if summary == '' then
             summary = 'Image pixelation failed.'
         end
         return showEditorModalAlert('error', '', summary)
+    end,
+    unsupportedAlert = function(message)
+        return showEditorModalAlert('warn', '', trim(message))
     end,
     setLoadingVisible = setEditorLoadingVisible,
     commitImageKey = function(imageKey)
@@ -8967,6 +9353,9 @@ local function refreshEditorResidentVisualState()
     syncItemActionState(currentTarget)
     syncEditorControlGate()
     syncPageDisplay()
+    if tonumber(trim(SKIN:GetVariable('EditorPageIndex', '1'))) == 2 and type(RefreshFolderCountSync) == 'function' then
+        RefreshFolderCountSync()
+    end
     refreshThemeVisuals()
 end
 
@@ -8975,6 +9364,7 @@ function ResumeEditorResident(allowConsumerMirror)
     closeRequestMode = nil
     closeCommitChanged = false
     ensureResidentUpdateController().ResumeSurface('Editor')
+    SKIN:Bang('!CommandMeasure', 'MeasureItemImageAnimator', 'Resume()')
     PreloadModalAlert()
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'ApplyLayout()')
     StartEditorResponsiveLayoutTimer()
@@ -8993,6 +9383,7 @@ function ResumeEditorResident(allowConsumerMirror)
 end
 
 function SuspendEditorResident()
+    SKIN:Bang('!CommandMeasure', 'MeasureItemImageAnimator', 'Suspend()')
     cancelDeferredInitialize()
     setEditorLoadingVisible(false)
     clearPickerRunState('path')
@@ -9810,6 +10201,12 @@ local function StepEditorPage(delta)
 
 
     syncPageDisplay()
+
+    SKIN:Bang('!CommandMeasure', 'MeasureItemImageAnimator', 'RefreshBindings()')
+
+    if nextPage == 2 and type(RefreshFolderCountSync) == 'function' then
+        RefreshFolderCountSync()
+    end
 
 
 

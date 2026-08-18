@@ -87,6 +87,7 @@ function Sync-VersionManagerUpdateCacheVariables {
         VersionManagerCacheRepositorySlug = [string](Get-VersionManagerObjectPropertyValue -Object $Cache -Name 'RepositorySlug' -DefaultValue '')
         VersionManagerCacheReleaseVariant = [string](Get-VersionManagerObjectPropertyValue -Object $Cache -Name 'ReleaseVariant' -DefaultValue '')
         VersionManagerCacheAssetName = [string](Get-VersionManagerObjectPropertyValue -Object $Cache -Name 'AssetName' -DefaultValue '')
+        VersionManagerCacheAssetSha256 = [string](Get-VersionManagerObjectPropertyValue -Object $Cache -Name 'AssetSha256' -DefaultValue '')
         VersionManagerCacheStatus = [string](Get-VersionManagerObjectPropertyValue -Object $Cache -Name 'Status' -DefaultValue '')
         VersionManagerCacheErrorCode = [string](Get-VersionManagerObjectPropertyValue -Object $Cache -Name 'ErrorCode' -DefaultValue '')
         VersionManagerCacheFailureHint = [string](Get-VersionManagerObjectPropertyValue -Object $Cache -Name 'FailureHint' -DefaultValue '')
@@ -216,6 +217,7 @@ function Get-VersionManagerUpdateCacheDefaults {
         ReleaseName = ''
         ReleaseUrl = ''
         AssetName = ''
+        AssetSha256 = ''
         AssetUrl = ''
         AssetSize = 0
         PublishedAtUtc = ''

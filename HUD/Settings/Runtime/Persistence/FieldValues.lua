@@ -6,6 +6,16 @@ return function(app)
     local shallowCopy = app.shallowCopy
     local logNotice = app.logNotice
     local setVariable = app.setVariable
+    local HUD_MIRROR_TARGETS = {
+        Hotbar = true,
+        IndicatorHeart = true,
+        IndicatorArmor = true,
+        IndicatorFood = true,
+        IndicatorAir = true,
+        IndicatorExp = true,
+        Clock = true,
+        ClockSprite = true,
+    }
     function methods.readRuntimeState(targetId)
 
         local core = methods.responsiveLayoutCore()
@@ -304,6 +314,12 @@ return function(app)
 
     end
 
+    local function formatClockColorRgb(red, green, blue)
+
+        return string.format('%d,%d,%d', red, green, blue)
+
+    end
+
 
 
     local function parseStoredClockColorValue(raw)
@@ -404,6 +420,44 @@ return function(app)
 
     end
 
+    function methods.normalizeClockColorFieldValue(field, raw, fallback)
+
+        local normalized, red, green, blue, alpha = parseHexClockColorValue(raw)
+
+        if not normalized then
+
+            normalized, red, green, blue, alpha = parseStoredClockColorValue(raw)
+
+        end
+
+        if not normalized then
+
+            normalized, red, green, blue, alpha = parseHexClockColorValue(fallback)
+
+        end
+
+        if not normalized then
+
+            normalized, red, green, blue, alpha = parseStoredClockColorValue(fallback)
+
+        end
+
+        if not normalized then
+
+            red, green, blue, alpha = 255, 255, 255, 255
+
+        end
+
+        if field and field.colorStorage == 'rgb' then
+
+            return formatClockColorRgb(red, green, blue)
+
+        end
+
+        return formatClockColorRgba(red, green, blue, alpha)
+
+    end
+
 
 
     function methods.displayClockColorValue(raw)
@@ -498,9 +552,9 @@ return function(app)
             local mode = string.lower(trim(raw))
             return mode == 'external' and 'external' or 'local'
         end
-        if field and (field.key == 'clockTextColor' or field.key == 'hotbarTextColor') then
+        if field and field.dropdownId == 'clockColor' then
 
-            return methods.normalizeClockColorValue(raw, fallback)
+            return methods.normalizeClockColorFieldValue(field, raw, fallback)
 
         end
 
@@ -514,6 +568,13 @@ return function(app)
         for _, targetName in ipairs(field.refreshTargets or {}) do
             targetSet[targetName] = true
         end
+        local loadingTextKey = trim(field.refreshLoadingTextKey or '')
+        if loadingTextKey ~= '' and trim(targetSet.__loadingText or '') == '' then
+            targetSet.__loadingText = methods.localize(loadingTextKey, field.refreshLoadingTextFallback or '')
+        end
+        if trim(field.refreshCompletionTarget or '') == 'JukeboxReady' then
+            targetSet.__waitForJukeboxReady = true
+        end
     end
     function methods.fieldTargetsSettings(field)
         for _, targetName in ipairs(field and field.refreshTargets or {}) do
@@ -522,6 +583,28 @@ return function(app)
             end
         end
         return false
+    end
+    function methods.fieldTargetsHudMirror(field)
+        if not field or field.sessionOnly or field.settingsFile == 'State' then
+            return false
+        end
+        for _, targetName in ipairs(field.refreshTargets or {}) do
+            if HUD_MIRROR_TARGETS[targetName] then
+                return true
+            end
+        end
+        return false
+    end
+    function methods.syncHudMirrorFieldVariable(field, resolved)
+        if not methods.fieldTargetsHudMirror(field) or trim(field.variableName or '') == '' then
+            return false
+        end
+        local value = tostring(resolved or '')
+        SKIN:Bang('!SetVariableGroup', field.variableName, value, 'HudMirrorRuntime')
+        if field.hudMirrorResponsiveBase == true then
+            SKIN:Bang('!SetVariableGroup', 'ResponsiveBase_' .. field.variableName, value, 'HudMirrorRuntime')
+        end
+        return true
     end
     function methods.syncSettingsTargetVariable(field, resolved)
         if not field or trim(field.variableName or '') == '' or not methods.fieldTargetsSettings(field) then

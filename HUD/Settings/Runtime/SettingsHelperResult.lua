@@ -34,6 +34,8 @@ end
 function M.parseStartupAutoRunResult(raw, fallback, normalizeToggle)
     local normalized = M.normalizeStartupAutoRunOutput(raw)
     local values = M.parseCommandCaptureVariables(normalized)
+    local fallbackValue = type(fallback) == 'table' and fallback.value or fallback
+    local fallbackFastValue = type(fallback) == 'table' and fallback.fastValue or '0'
     local literal = trim(values.DMEL_VALUE or '')
     if literal ~= '0' and literal ~= '1' then
         literal = ''
@@ -50,11 +52,28 @@ function M.parseStartupAutoRunResult(raw, fallback, normalizeToggle)
         status = 'OK'
     end
 
+    local fastLiteral = trim(values.DMEL_FAST_VALUE or '')
+    local shortcutLiteral = trim(values.DMEL_SHORTCUT_VALUE or '')
+    local method = trim(values.DMEL_METHOD or ''):lower()
+    local taskState = trim(values.DMEL_TASK_STATE or ''):lower()
+    local recovery = trim(values.DMEL_RECOVERY or ''):lower()
+    local validMethods = { none = true, shortcut = true, task = true, conflict = true, invalid = true }
+    local validTaskStates = { absent = true, valid = true, disabled = true, invalid = true, foreign = true }
+    local validRecoveries = { none = true, shortcut = true, partial = true, failed = true }
     local normalize = normalizeToggle or normalizeToggleValue
     return {
         status = status,
-        literal = literal ~= '' and literal or normalize(fallback),
+        literal = literal ~= '' and literal or normalize(fallbackValue),
         hasLiteral = literal == '0' or literal == '1',
+        fastLiteral = (fastLiteral == '0' or fastLiteral == '1') and fastLiteral or normalize(fallbackFastValue),
+        hasFastLiteral = fastLiteral == '0' or fastLiteral == '1',
+        shortcutLiteral = (shortcutLiteral == '0' or shortcutLiteral == '1') and shortcutLiteral or '0',
+        hasShortcutLiteral = shortcutLiteral == '0' or shortcutLiteral == '1',
+        method = validMethods[method] and method or '',
+        taskState = validTaskStates[taskState] and taskState or '',
+        recovery = validRecoveries[recovery] and recovery or '',
+        recoveryCode = trim(values.DMEL_RECOVERY_CODE or ''),
+        requestToken = trim(values.DMEL_REQUEST_TOKEN or ''),
         code = trim(values.DMEL_CODE or ''),
         message = trim(values.DMEL_MESSAGE or ''),
         normalizedOutput = normalized,

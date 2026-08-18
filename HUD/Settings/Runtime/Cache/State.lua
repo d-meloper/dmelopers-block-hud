@@ -149,15 +149,23 @@ return function(app)
     function methods.resumePendingLoadIfNeeded()
         local loadKind = trim(state.pendingLoadKind or '')
         if loadKind == '' then
+            if type(state.pendingMinecraftSkinAtlasRetry) == 'table' and methods.RequestMinecraftSkinAtlasFailureModal then
+                methods.RequestMinecraftSkinAtlasFailureModal()
+            end
             return false
         end
 
-        local message = trim(SKIN:GetVariable('SettingsLoadingDisplayText', ''))
-        methods.setLoadingVisible(true, message ~= '' and message or nil)
+        if state.pendingLoadSilent ~= true then
+            local message = trim(SKIN:GetVariable('SettingsLoadingDisplayText', ''))
+            methods.setLoadingVisible(true, message ~= '' and message or nil)
+        end
         if state.pendingLoadHelperRunning == true then
             methods.SetUpdateJob('helperWatchdog', true)
         else
             methods.SetUpdateJob('deferredLoad', true)
+        end
+        if loadKind == 'minecraftSkinAtlasRender' and methods.PollMinecraftSkinAtlasProgress then
+            methods.SetUpdateJob('atlasProgress', true)
         end
         return true
     end
@@ -191,12 +199,18 @@ return function(app)
         local abandonReason = trim(options.abandonActiveHelperReason or '')
         local clearIgnoredHelper = options.clearIgnoredHelper == true
         local ignoredHelperKind = trim(options.ignoredHelperKind or '')
+        local clearingLoadKind = trim(state.pendingLoadKind or '')
         state.pendingLoadKind = nil
         state.pendingLoadFieldKey = nil
         state.pendingLoadRowIndex = 0
         state.pendingLoadDelayTicksRemaining = 0
         state.pendingLoadReopenDropdown = false
+        state.pendingLoadSilent = false
         state.pendingLoadValue = nil
+        state.pendingLoadStartupMethod = nil
+        state.pendingStartupAutoRunRequestToken = ''
+        state.pendingStartupAutoRunRecoveryAttempted = false
+        state.pendingStartupAutoRunFailure = nil
         state.pendingLoadTexturePath = nil
         state.pendingLoadUsername = nil
         state.pendingLoadBeforeSnapshot = nil
@@ -213,6 +227,12 @@ return function(app)
         setVariable('SettingsPendingLoadFieldKey', '')
         setVariable('SettingsPendingLoadRowIndex', '0')
         methods.SetUpdateJob('deferredLoad', false)
+        if clearingLoadKind == 'minecraftSkinAtlasRender' then
+            if methods.stopMinecraftSkinAtlasProgress then
+                methods.stopMinecraftSkinAtlasProgress()
+            end
+            state.pendingMinecraftSkinAtlasRequest = nil
+        end
     end
     function methods.clearPendingLoadHelperState()
         state.pendingLoadHelperRunning = false
@@ -283,6 +303,53 @@ return function(app)
         local helperReason = 'watchdog-timeout'
         if timeoutSeconds > 0 then
             helperReason = helperReason .. ':' .. tostring(timeoutSeconds)
+        end
+        if loadKind == 'minecraftSkinAtlasRender' then
+            if helperMeasureName ~= '' and SKIN:GetMeasure(helperMeasureName) then
+                SKIN:Bang('!CommandMeasure', helperMeasureName, 'Kill')
+            end
+            if methods.failMinecraftSkinAtlasRequest then
+                methods.failMinecraftSkinAtlasRequest('The atlas generation helper timed out.')
+            end
+            methods.clearPendingLoadState()
+            methods.setLoadingVisible(false)
+            methods.renderActivePage()
+            return
+        end
+        if loadKind == 'startupAutoRunApply' or loadKind == 'startupAutoRunRecoveryProbe' then
+            if helperMeasureName ~= '' and SKIN:GetMeasure(helperMeasureName) then
+                SKIN:Bang('!CommandMeasure', helperMeasureName, 'Kill')
+                SKIN:Bang('!CommandMeasure', helperMeasureName, 'Close')
+            end
+            methods.clearPendingLoadHelperState()
+            logNotice(
+                'Settings startup auto-run helper timed out: loadKind='
+                    .. tostring(loadKind)
+                    .. ' timeoutSeconds='
+                    .. tostring(timeoutSeconds)
+            )
+            if loadKind == 'startupAutoRunApply'
+                and methods.beginStartupAutoRunRecoveryProbe(
+                    {
+                        code = 'HELPER_TIMEOUT',
+                        recovery = '',
+                        recoveryCode = '',
+                    },
+                    helperReason
+                ) then
+                return
+            end
+            if methods.applyStartupAutoRunRecoveryProbeOutput then
+                methods.applyStartupAutoRunRecoveryProbeOutput('')
+            end
+            if methods.finishPendingLoadCycle then
+                methods.finishPendingLoadCycle()
+            else
+                methods.clearPendingLoadState()
+                methods.setLoadingVisible(false)
+                methods.renderActivePage()
+            end
+            return
         end
         methods.clearPendingLoadState({
             abandonActiveHelperReason = helperReason,

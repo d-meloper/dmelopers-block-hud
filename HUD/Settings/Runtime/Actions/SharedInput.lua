@@ -16,6 +16,12 @@ return function(app)
 
         state.pendingConfirmActionKey = nil
 
+        if methods.clearPendingStartupFastAutoRunConfirmation then
+
+            methods.clearPendingStartupFastAutoRunConfirmation()
+
+        end
+
 
 
 
@@ -603,7 +609,7 @@ return function(app)
 
 
 
-        local fieldKey = methods.fieldKeyForVisibleRow(rowIndex, 'text')
+        local fieldKey = methods.fieldKeyForVisibleRow(rowIndex)
 
 
 
@@ -619,7 +625,7 @@ return function(app)
 
 
 
-        if not fieldKey or not methods.hasDropdown(field) then
+        if not fieldKey or (field.controlType ~= 'text' and field.controlType ~= 'multiDropdown') or not methods.hasDropdown(field) then
 
 
 
@@ -642,12 +648,18 @@ return function(app)
 
 
 
+
+        local numericRowIndex = tonumber(rowIndex) or 0
+
+        if field.dropdownId == 'hudMirrorSelection'
+            and methods.ValidateHudMirrorDropdownMonitor
+            and not methods.ValidateHudMirrorDropdownMonitor(field, numericRowIndex) then
+            return
+        end
 
         if methods.isFieldDisabled and methods.isFieldDisabled(field) then
             return
         end
-
-        local numericRowIndex = tonumber(rowIndex) or 0
 
 
 

@@ -306,8 +306,7 @@ end
 local function updateInventoryPlayerMeters(skin)
     skin:Bang('!UpdateMeasure', 'MeasurePlayerDefaultHidden')
     skin:Bang('!UpdateMeasure', 'MeasurePlayerCustomHidden')
-    skin:Bang('!UpdateMeter', 'MeterPlayerDefault')
-    skin:Bang('!UpdateMeter', 'MeterPlayerCustom')
+    skin:Bang('!CommandMeasure', 'MeasureAnimation', 'Sync()')
 end
 local function hideInventoryReplacement(skin)
     if not state.inventory.active then

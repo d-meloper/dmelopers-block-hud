@@ -4,7 +4,7 @@ return {
         oneShotMeasures = { 'MeasureInventoryEnableGuard', 'MeasurePlayerDefaultHidden', 'MeasurePlayerCustomHidden', 'MeasureEditorModeBadgeVisibility' },
         drivers = {
             runtime = { config = 'HUD/Inventory/RuntimeDriver', file = 'RuntimeDriver.ini', resume = true },
-            animation = { config = 'HUD/Inventory/AnimationDriver', file = 'AnimationDriver.ini', resume = false },
+            itemImageAnimation = { config = 'HUD/Inventory/ItemImageAnimationDriver', file = 'ItemImageAnimationDriver.ini', resume = true },
         },
     },
     Editor = {
@@ -12,6 +12,7 @@ return {
         oneShotMeasures = { 'MeasureViewerPreviewBaseImageX', 'MeasureViewerPreviewBaseImageY', 'MeasureViewerPreviewBaseImageW', 'MeasureViewerPreviewBaseImageH' },
         drivers = {
             runtime = { config = 'HUD/Editor/RuntimeDriver', file = 'RuntimeDriver.ini', resume = true },
+            itemImageAnimation = { config = 'HUD/Editor/ItemImageAnimationDriver', file = 'ItemImageAnimationDriver.ini', resume = true },
         },
     },
     Settings = {

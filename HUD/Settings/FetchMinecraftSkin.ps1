@@ -13,11 +13,40 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $OutputEncoding = $utf8NoBom
 $script:DebugLogPath = $null
 $script:DebugLogSectionStarted = $false
-. (Join-Path $PSScriptRoot '..\..\Utilities\tools\Localization.Common.ps1')
+$entrypointScriptRoot = [System.IO.Path]::GetFullPath($PSScriptRoot)
+$localizationCommonCandidates = @(
+    [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($entrypointScriptRoot, '..', '..', 'Utilities', 'tools', 'Localization.Common.ps1')),
+    [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($entrypointScriptRoot, '..', 'tools', 'Localization.Common.ps1'))
+)
+$localizationCommonPath = @($localizationCommonCandidates | Where-Object { [System.IO.File]::Exists($_) } | Select-Object -First 1)[0]
+if ([string]::IsNullOrWhiteSpace($localizationCommonPath)) {
+    throw 'Localization helper module is missing.'
+}
+. $localizationCommonPath
 
 Add-Type -AssemblyName System.Drawing
 
-$skinRoot = Get-LocalizationSkinRoot -ScriptRoot $PSScriptRoot
+function Resolve-MinecraftSkinHelperRoot {
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptRoot,
+        [Parameter(Mandatory = $true)][string]$RequiredRelativePath
+    )
+
+    $candidateRoots = @(
+        [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($ScriptRoot, '..', '..')),
+        [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($ScriptRoot, '..'))
+    )
+    foreach ($candidateRoot in $candidateRoots) {
+        if ([System.IO.File]::Exists([System.IO.Path]::Combine($candidateRoot, $RequiredRelativePath))) {
+            return $candidateRoot
+        }
+    }
+
+    return Get-LocalizationSkinRoot -ScriptRoot $ScriptRoot
+}
+
+$atlasCacheRelativePath = '@Resources\Defaults\Runtime\helpers\MinecraftSkinLookAtlasCache.Common.ps1'
+$skinRoot = Resolve-MinecraftSkinHelperRoot -ScriptRoot $entrypointScriptRoot -RequiredRelativePath $atlasCacheRelativePath
 $languageCode = Read-LanguageCode -SkinRoot $skinRoot
 $locTable = Read-LocaleTable -SkinRoot $skinRoot -LanguageCode $languageCode
 
@@ -28,6 +57,10 @@ $resultPairs = [ordered]@{
     DMEL_IMAGEPATH = ''
     DMEL_TEXTUREPATH = ''
     DMEL_MODEL = ''
+    DMEL_CACHEKEY = ''
+    DMEL_ATLASPATH = ''
+    DMEL_ATLASREADY = '0'
+    DMEL_ATLAS_REQUIRED = '0'
     DMEL_MESSAGE = ''
     DMEL_LOGPATH = ''
     DMEL_DEBUGLOG = ''
@@ -569,6 +602,8 @@ function Download-MinecraftSkinTexture(
 
 $tempTexturePath = $null
 $tempBodyPath = $null
+$tempAtlasPath = $null
+$tempMarkerPath = $null
 $requestStage = ''
 try {
     $resolvedUsername = Trim-Text $Username
@@ -577,7 +612,7 @@ try {
     $boundedTimeoutSeconds = [Math]::Max(1, [Math]::Min(60, $TimeoutSeconds))
     $timeoutMilliseconds = [int]($boundedTimeoutSeconds * 1000)
     if (-not [string]::IsNullOrWhiteSpace($resolvedOutputDirectory)) {
-        $script:DebugLogPath = Get-BlockHudCanonicalLogPath -ScriptRoot $PSScriptRoot
+        $script:DebugLogPath = Get-BlockHudCanonicalLogPath -Root $skinRoot -ScriptRoot $entrypointScriptRoot
     }
     Write-DebugLog ("BEGIN username='" + $resolvedUsername + "' outputDirectory='" + $resolvedOutputDirectory + "' requestedModel='" + $requestedModel + "' timeoutSeconds=" + $boundedTimeoutSeconds)
 
@@ -620,29 +655,62 @@ try {
 
     $finalTexturePath = Join-Path $resolvedOutputDirectory ('MinecraftSkinTexture_' + $sanitizedUsername + '.png')
     $finalBodyPath = Join-Path $resolvedOutputDirectory ('MinecraftSkinBody_' + $sanitizedUsername + '.png')
+    $atlasCacheModulePath = Join-Path $skinRoot $atlasCacheRelativePath
+    if (-not [System.IO.File]::Exists($atlasCacheModulePath)) {
+        throw 'Minecraft skin atlas cache module is missing.'
+    }
+    . $atlasCacheModulePath
+    $finalMarkerPath = Get-BlockHudMinecraftSkinRenderMarkerPath -OutputDirectory $resolvedOutputDirectory -CacheKey $sanitizedUsername
     $tempTexturePath = Join-Path $resolvedOutputDirectory ('MinecraftSkinTexture_' + $sanitizedUsername + '.' + [System.Guid]::NewGuid().ToString('N') + '.tmp')
     $tempBodyPath = Join-Path $resolvedOutputDirectory ('MinecraftSkinBody_' + $sanitizedUsername + '.' + [System.Guid]::NewGuid().ToString('N') + '.tmp')
+    $tempMarkerPath = $finalMarkerPath + '.' + [System.Guid]::NewGuid().ToString('N') + '.tmp'
 
     $requestStage = 'textureDownload'
     Download-MinecraftSkinTexture -Url ([string]$texture.Url) -DestinationPath $tempTexturePath -TimeoutMilliseconds $timeoutMilliseconds
     Assert-ValidMinecraftSkinTexture -Path $tempTexturePath
 
-    $rendererPath = [System.IO.Path]::Combine($PSScriptRoot, 'RenderMinecraftSkinTexture.ps1')
+    $rendererPath = [System.IO.Path]::Combine($entrypointScriptRoot, 'RenderMinecraftSkinTexture.ps1')
     if (-not [System.IO.File]::Exists($rendererPath)) {
         throw 'Renderer script is missing.'
     }
 
     $requestStage = 'textureRender'
-    & $rendererPath -SourcePath $tempTexturePath -OutputPath $tempBodyPath -Model $renderModel
-    if (-not (Test-PngSignature $tempBodyPath)) {
-        throw 'Renderer returned an invalid PNG image.'
-    }
+    $cacheHit = Test-BlockHudMinecraftSkinStaticCache `
+        -IncomingTexturePath $tempTexturePath `
+        -InstalledTexturePath $finalTexturePath `
+        -BodyPath $finalBodyPath `
+        -MarkerPath $finalMarkerPath `
+        -Model $renderModel
 
-    Move-Item -LiteralPath $tempTexturePath -Destination $finalTexturePath -Force
-    $tempTexturePath = $null
-    Move-Item -LiteralPath $tempBodyPath -Destination $finalBodyPath -Force
-    $tempBodyPath = $null
-    Write-DebugLog ("SUCCESS texturePath='" + [System.IO.Path]::GetFullPath($finalTexturePath) + "' bodyPath='" + [System.IO.Path]::GetFullPath($finalBodyPath) + "' model='" + $renderModel + "'")
+    if ($cacheHit) {
+        Remove-Item -LiteralPath $tempTexturePath -Force
+        $tempTexturePath = $null
+    }
+    else {
+        & $rendererPath -SourcePath $tempTexturePath -OutputPath $tempBodyPath -Model $renderModel
+        if (-not (Test-BlockHudPngDimensions -Path $tempBodyPath -Width 130 -Height 260)) {
+            throw 'Renderer returned an invalid static PNG image.'
+        }
+        Write-BlockHudMinecraftSkinRenderMarker -Path $tempMarkerPath -Model $renderModel -TexturePath $tempTexturePath
+        if (-not (Test-BlockHudMinecraftSkinRenderMarker -Path $tempMarkerPath -Model $renderModel -TexturePath $tempTexturePath)) {
+            throw 'Renderer returned an invalid model cache marker.'
+        }
+
+        Install-BlockHudFileSetTransactionally -Entries @(
+            [PSCustomObject]@{ SourcePath = $tempTexturePath; DestinationPath = $finalTexturePath },
+            [PSCustomObject]@{ SourcePath = $tempBodyPath; DestinationPath = $finalBodyPath },
+            [PSCustomObject]@{ SourcePath = $tempMarkerPath; DestinationPath = $finalMarkerPath }
+        )
+        $tempTexturePath = $null
+        $tempBodyPath = $null
+        $tempMarkerPath = $null
+    }
+    $atlasResult = Resolve-BlockHudMinecraftSkinLookAtlas -OutputDirectory $resolvedOutputDirectory -CacheKey $sanitizedUsername -Model $renderModel -TexturePath $finalTexturePath -BodyPath $finalBodyPath
+    $atlasReady = $atlasResult.Ready -eq $true
+    foreach ($migrationWarning in @($atlasResult.Warnings)) {
+        Write-DebugLog ('ATLAS_MIGRATION_WARNING ' + [string]$migrationWarning)
+    }
+    Write-DebugLog ("SUCCESS texturePath='" + [System.IO.Path]::GetFullPath($finalTexturePath) + "' bodyPath='" + [System.IO.Path]::GetFullPath($finalBodyPath) + "' atlasPath='" + [string]$atlasResult.AtlasPath + "' atlasReady='" + $atlasReady + "' model='" + $renderModel + "' staticCacheHit='" + $cacheHit + "'")
 
     Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'OK'
     Set-ResultPairValue -Key 'DMEL_USERNAME' -Value $canonicalUsername
@@ -650,6 +718,10 @@ try {
     Set-ResultPairValue -Key 'DMEL_IMAGEPATH' -Value ([System.IO.Path]::GetFullPath($finalBodyPath))
     Set-ResultPairValue -Key 'DMEL_TEXTUREPATH' -Value ([System.IO.Path]::GetFullPath($finalTexturePath))
     Set-ResultPairValue -Key 'DMEL_MODEL' -Value $renderModel
+    Set-ResultPairValue -Key 'DMEL_CACHEKEY' -Value $sanitizedUsername
+    Set-ResultPairValue -Key 'DMEL_ATLASPATH' -Value $(if ($atlasReady) { [string]$atlasResult.AtlasPath } else { '' })
+    Set-ResultPairValue -Key 'DMEL_ATLASREADY' -Value $(if ($atlasReady) { '1' } else { '0' })
+    Set-ResultPairValue -Key 'DMEL_ATLAS_REQUIRED' -Value $(if ($atlasReady) { '0' } else { '1' })
     Emit-ResultPairs
 }
 catch [System.Net.WebException] {
@@ -713,7 +785,7 @@ catch {
     Emit-ResultPairs
 }
 finally {
-    foreach ($tempPath in @($tempTexturePath, $tempBodyPath)) {
+    foreach ($tempPath in @($tempTexturePath, $tempBodyPath, $tempAtlasPath, $tempMarkerPath)) {
         if ($tempPath -and [System.IO.File]::Exists($tempPath)) {
             Write-DebugLog ("Cleaning tempPath='" + $tempPath + "'")
             Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue

@@ -31,6 +31,32 @@ local JukeboxScheduler = {
     externalCommandWatchdog = false,
 }
 local JUKEBOX_EVENT_POLL_RUNTIME_TICKS = 4
+local JUKEBOX_EVENT_RECONCILE_RUNTIME_TICKS = 238
+local jukeboxEventSignalMode = 'unknown'
+
+local function trim(value)
+    return tostring(value or ''):match('^%s*(.-)%s*$')
+end
+
+-- DMEL_COMPAT:jukebox.event-signal-fallback
+local function setJukeboxEventSignalMode(values)
+    if trim(values and values.DMEL_EVENTSIGNAL or '') == '1' then
+        jukeboxEventSignalMode = 'signal'
+        JukeboxScheduler.eventPollRuntimeTicks = 0
+    else
+        jukeboxEventSignalMode = 'legacy'
+        JukeboxScheduler.eventPollRuntimeTicks = JUKEBOX_EVENT_POLL_RUNTIME_TICKS
+    end
+end
+
+local function jukeboxEventSignalCount()
+    local measure = SKIN:GetMeasure('MeasureJukeboxEventSignalCount')
+    if not measure then
+        return 0
+    end
+    SKIN:Bang('!UpdateMeasure', 'MeasureJukeboxEventSignalCount')
+    return math.max(0, tonumber(measure:GetValue()) or 0)
+end
 
 local function ensureResidentUpdateController()
     if residentUpdateController == nil then
@@ -64,7 +90,11 @@ function StartJukeboxEventPolling()
         return 0
     end
     JukeboxScheduler.eventPolling = true
-    JukeboxScheduler.eventPollRuntimeTicks = JUKEBOX_EVENT_POLL_RUNTIME_TICKS
+    if jukeboxEventSignalMode == 'signal' then
+        JukeboxScheduler.eventPollRuntimeTicks = 0
+    else
+        JukeboxScheduler.eventPollRuntimeTicks = JUKEBOX_EVENT_POLL_RUNTIME_TICKS
+    end
     syncJukeboxRuntimeDriver()
     return 0
 end
@@ -225,10 +255,6 @@ local ANIMATOR_TRANSITION_PROFILES = {
     stop = 'jukeboxSpriteSheet_stop.png',
 }
 
-local function trim(value)
-    return tostring(value or ''):match('^%s*(.-)%s*$')
-end
-
 local function upper(value)
     return string.upper(trim(value))
 end
@@ -282,6 +308,10 @@ end
 
 local function isJukeboxNoteAnimationDisabled()
     return trim(SKIN:GetVariable('DisableJukeboxNoteAnimation', '0')) == '1'
+end
+
+local function shouldAutoCloseDiscSlotOnExternalPlayPause()
+    return trim(SKIN:GetVariable('AutoCloseJukeboxDiscSlotOnExternalPlayPause', '1')) ~= '0'
 end
 
 local function isJukebox2DModeEnabled()
@@ -362,6 +392,10 @@ local function helperStateRootOverride()
     return trim(SKIN:GetVariable('JukeboxHelperStateRoot', ''))
 end
 
+local function eventSignalDirectoryPath()
+    return trim(SKIN:GetVariable('JukeboxEventSignalDirectory', ''))
+end
+
 local function playbackStatePath()
     return joinPath(trim(SKIN:GetVariable('@', '')), 'Customs\\Data\\JukeboxPlaybackState.inc')
 end
@@ -405,6 +439,11 @@ local function buildArgs(command, audioOverride, requestPath, loopEnabled, volum
     end
     args[#args + 1] = '-InstanceKey'
     args[#args + 1] = quotePowerShellArgument(instanceKey())
+    local signalDirectory = eventSignalDirectoryPath()
+    if signalDirectory ~= '' then
+        args[#args + 1] = '-EventSignalDirectory'
+        args[#args + 1] = quotePowerShellArgument(signalDirectory)
+    end
     return table.concat(args, ' ')
 end
 
@@ -987,15 +1026,58 @@ local function startJukeboxAnimation(kind, token)
     startJukeboxAnimatorTransition(kind, token)
 end
 
-function minimizedWidth() return math.max(1, round(SKIN:GetVariable('JukeboxMinimizedW', '100'))) end
-function minimizedHeight() return math.max(1, round(SKIN:GetVariable('JukeboxMinimizedH', '40'))) end
-function currentWindowX() return round(SKIN:GetVariable('CURRENTCONFIGX', '0')) end
-function currentWindowY() return round(SKIN:GetVariable('CURRENTCONFIGY', '0')) end
-function jukeboxMinimizedWorkArea(x) local probeX = round((tonumber(x) or currentWindowX()) + (minimizedWidth() / 2)); local probeY = currentWindowY(); if JukeboxWorkAreaForPoint then return JukeboxWorkAreaForPoint(probeX, probeY, JukeboxCurrentWorkArea()) end; return JukeboxCurrentWorkArea() end
-function minimizedBottomY(x) local work = jukeboxMinimizedWorkArea(x); return round(work.bottom - minimizedHeight()) end
-function clampMinimizedX(x) local work = jukeboxMinimizedWorkArea(x); return round(JukeboxClampToRange(round(x), work.x, work.right - minimizedWidth())) end
-function persistSharedJukeboxX(x, mainY) local targetX = clampMinimizedX(x); local y = storedJukeboxMainY(mainY); SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', string.format('SetFixedPosition(%q,%d,%d)', 'Jukebox', targetX, y)); return targetX end
-function moveJukeboxToMinimizedBottom(x) local targetX = clampMinimizedX(x); local targetY = minimizedBottomY(targetX); SKIN:Bang('!Move', tostring(targetX), tostring(targetY)); minimizedLastWindowY = targetY; return targetX, targetY end
+function minimizedWidth()
+    return math.max(1, round(SKIN:GetVariable('JukeboxMinimizedW', '100')))
+end
+
+function minimizedHeight()
+    return math.max(1, round(SKIN:GetVariable('JukeboxMinimizedH', '40')))
+end
+
+function currentWindowX()
+    return round(SKIN:GetVariable('CURRENTCONFIGX', '0'))
+end
+
+function currentWindowY()
+    return round(SKIN:GetVariable('CURRENTCONFIGY', '0'))
+end
+
+function jukeboxMinimizedWorkArea(x)
+    local probeX = round((tonumber(x) or currentWindowX()) + (minimizedWidth() / 2))
+    local probeY = currentWindowY()
+    if JukeboxWorkAreaForPoint then
+        return JukeboxWorkAreaForPoint(probeX, probeY, JukeboxCurrentWorkArea())
+    end
+    return JukeboxCurrentWorkArea()
+end
+
+function minimizedBottomY(x)
+    local work = jukeboxMinimizedWorkArea(x)
+    return round(work.bottom - minimizedHeight())
+end
+
+function clampMinimizedX(x)
+    local work = jukeboxMinimizedWorkArea(x)
+    return round(JukeboxClampToRange(round(x), work.x, work.right - minimizedWidth()))
+end
+
+function persistSharedJukeboxX(x, mainY)
+    local targetX = clampMinimizedX(x)
+    if JukeboxMonitorFallbackActive() then
+        return targetX
+    end
+    local y = storedJukeboxMainY(mainY)
+    SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', string.format('SetFixedPosition(%q,%d,%d)', 'Jukebox', targetX, y))
+    return targetX
+end
+
+function moveJukeboxToMinimizedBottom(x)
+    local targetX = clampMinimizedX(x)
+    local targetY = minimizedBottomY(targetX)
+    SKIN:Bang('!Move', tostring(targetX), tostring(targetY))
+    minimizedLastWindowY = targetY
+    return targetX, targetY
+end
 function updateMinimizedMeters() SKIN:Bang('!UpdateMeter', 'MeterJukeboxMinimized'); SKIN:Bang('!UpdateMeter', 'MeterJukeboxMinimizedAnimator') end
 function setJukeboxMinimizedMouseEnabled(enabled) if enabled then SKIN:Bang('!EnableMeasure', 'MeasureJukeboxMinimizedMouse'); SKIN:Bang('!UpdateMeasure', 'MeasureJukeboxMinimizedMouse') else SKIN:Bang('!DisableMeasure', 'MeasureJukeboxMinimizedMouse') end; return true end
 function minimizedImagePath(fileName) return resourcesRoot() .. MINIMIZED_ANIMATOR_IMAGE_ROOT .. tostring(fileName or '') end
@@ -1031,8 +1113,23 @@ local function updateDiscSlotMeters(configName)
     return true
 end
 
-local function applyDiscSlotLayout(configName)
-    return commandMeasureForActiveConfig('MeasureResponsiveLayout', 'ApplyLayout()', configName)
+local function applyDiscSlotLayout(configName, ownerRect)
+    ownerRect = ownerRect or {}
+    local x = tonumber(ownerRect.x)
+    local y = tonumber(ownerRect.y)
+    local width = tonumber(ownerRect.width)
+    local height = tonumber(ownerRect.height)
+    if x == nil or y == nil or width == nil or width <= 0 or height == nil or height <= 0 then
+        return false
+    end
+    local command = string.format(
+        'ApplyJukeboxDiscSlotLayout(%d,%d,%d,%d)',
+        round(x),
+        round(y),
+        math.max(1, round(width)),
+        math.max(1, round(height))
+    )
+    return commandMeasureForActiveConfig('MeasureResponsiveLayout', command, configName)
 end
 
 
@@ -1099,16 +1196,36 @@ local function writeJukeboxDisplayMode(mode)
     if mode ~= 'minimized' then
         mode = 'main'
     end
+    local previous = trim(SKIN:GetVariable('JukeboxDisplayMode', 'main')):lower()
     setVariable('JukeboxDisplayMode', mode)
-    writePlaybackStateValue('JukeboxDisplayMode', mode)
+    if previous ~= mode then
+        writePlaybackStateValue('JukeboxDisplayMode', mode)
+    end
     return mode
 end
 
 function writeJukeboxMainFormY(y)
     local value = tostring(round(tonumber(y) or 0))
+    local previous = trim(SKIN:GetVariable('JukeboxMainFormY', ''))
     setVariable('JukeboxMainFormY', value)
-    writePlaybackStateValue('JukeboxMainFormY', value)
+    if previous ~= value then
+        writePlaybackStateValue('JukeboxMainFormY', value)
+    end
     return tonumber(value) or 0
+end
+
+function JukeboxFormResetPending()
+    return trim(SKIN:GetVariable('ResponsiveLayout_Jukebox_FormResetPending', '0')) == '1'
+end
+
+function clearJukeboxFormResetPending()
+    if not JukeboxFormResetPending() then
+        return false
+    end
+    local statePath = tostring(SKIN:GetVariable('@') or '') .. 'Customs\\Data\\ResponsiveLayoutState.inc'
+    setVariable('ResponsiveLayout_Jukebox_FormResetPending', '0')
+    SKIN:Bang('!WriteKeyValue', 'Variables', 'ResponsiveLayout_Jukebox_FormResetPending', '0', statePath)
+    return true
 end
 
 function storedJukeboxMainY(fallbackY, preferSnapshot)
@@ -1462,8 +1579,11 @@ end
 local function currentJukeboxLiveRect()
     local x = round(tonumber(SKIN:GetVariable('CURRENTCONFIGX', '0')) or 0)
     local y = round(tonumber(SKIN:GetVariable('CURRENTCONFIGY', '0')) or 0)
-    local width = tonumber(SKIN:GetVariable('JukeboxW', ''))
-    local height = tonumber(SKIN:GetVariable('JukeboxH', ''))
+    local minimized = JukeboxIsMinimizedForm and JukeboxIsMinimizedForm()
+    local widthVariable = minimized and 'JukeboxMinimizedW' or 'JukeboxW'
+    local heightVariable = minimized and 'JukeboxMinimizedH' or 'JukeboxH'
+    local width = tonumber(SKIN:GetVariable(widthVariable, ''))
+    local height = tonumber(SKIN:GetVariable(heightVariable, ''))
     if not width or width <= 0 then
         width = tonumber(SKIN:GetVariable('CURRENTCONFIGWIDTH', '0'))
     end
@@ -1499,7 +1619,11 @@ function JukeboxCurrentWorkArea()
     }
 end
 
-local function jukeboxWorkAreaRect(x, y, width, height)
+function JukeboxMonitorFallbackActive()
+    return trim(SKIN:GetVariable('ResponsiveLayoutCurrentFallbackActive', '0')) == '1'
+end
+
+function JukeboxWorkAreaRect(x, y, width, height)
     x = round(tonumber(x) or 0)
     y = round(tonumber(y) or 0)
     width = math.max(1, round(tonumber(width) or 1))
@@ -1516,7 +1640,7 @@ local function jukeboxWorkAreaRect(x, y, width, height)
     }
 end
 
-local function jukeboxMonitorWorkAreas()
+function JukeboxMonitorWorkAreas()
     local result = {}
     local seen = {}
     for index = 1, 16 do
@@ -1525,7 +1649,7 @@ local function jukeboxMonitorWorkAreas()
         local width = tonumber(SKIN:GetVariable('WORKAREAWIDTH@' .. tostring(index), ''))
         local height = tonumber(SKIN:GetVariable('WORKAREAHEIGHT@' .. tostring(index), ''))
         if x and y and width and height and width > 0 and height > 0 then
-            local rect = jukeboxWorkAreaRect(x, y, width, height)
+            local rect = JukeboxWorkAreaRect(x, y, width, height)
             local key = table.concat({ rect.x, rect.y, rect.width, rect.height }, ':')
             if not seen[key] then
                 seen[key] = true
@@ -1536,11 +1660,11 @@ local function jukeboxMonitorWorkAreas()
     return result
 end
 
-local function jukeboxRectContainsPoint(rect, x, y)
+function JukeboxRectContainsPoint(rect, x, y)
     return rect and x >= rect.x and x < rect.right and y >= rect.y and y < rect.bottom
 end
 
-local function jukeboxDistanceSquaredToRectCenter(rect, x, y)
+function JukeboxDistanceSquaredToRectCenter(rect, x, y)
     local dx = (rect.centerX or 0) - x
     local dy = (rect.centerY or 0) - y
     return (dx * dx) + (dy * dy)
@@ -1549,23 +1673,23 @@ end
 function JukeboxWorkAreaForPoint(x, y, fallback)
     x = round(tonumber(x) or 0)
     y = round(tonumber(y) or 0)
-    local areas = jukeboxMonitorWorkAreas()
+    local areas = JukeboxMonitorWorkAreas()
     local best = nil
     local bestDistance = nil
     for _, area in ipairs(areas) do
-        if jukeboxRectContainsPoint(area, x, y) then
+        if JukeboxRectContainsPoint(area, x, y) then
             return area
         end
-        local distance = jukeboxDistanceSquaredToRectCenter(area, x, y)
+        local distance = JukeboxDistanceSquaredToRectCenter(area, x, y)
         if best == nil or distance < bestDistance then
             best = area
             bestDistance = distance
         end
     end
-    return best or fallback or JukeboxCurrentWorkArea()
+    return best or fallback
 end
 
-local function jukeboxWorkAreaForRect(rect, fallback)
+function JukeboxWorkAreaForRect(rect, fallback)
     rect = rect or currentJukeboxLiveRect()
     local width = math.max(1, round(tonumber(rect.width) or 100))
     local height = math.max(1, round(tonumber(rect.height) or 126))
@@ -1592,7 +1716,7 @@ function JukeboxClampRectToWorkArea(rect)
     rect = rect or currentJukeboxLiveRect()
     local width = math.max(1, round(tonumber(rect.width) or 100))
     local height = math.max(1, round(tonumber(rect.height) or 126))
-    local work = jukeboxWorkAreaForRect(rect, JukeboxCurrentWorkArea())
+    local work = JukeboxWorkAreaForRect(rect, JukeboxCurrentWorkArea())
     return {
         x = round(JukeboxClampToRange(rect.x, work.x, work.right - width)),
         y = round(JukeboxClampToRange(rect.y, work.y, work.bottom - height)),
@@ -1601,9 +1725,9 @@ function JukeboxClampRectToWorkArea(rect)
     }
 end
 
-local function syncJukeboxLiveStateToDiscSlot(configName)
+local function syncJukeboxLiveStateToDiscSlot(configName, rect)
     configName = configName or discSlotConfigName()
-    local rect = currentJukeboxLiveRect()
+    rect = rect or currentJukeboxLiveRect()
     if not isRainmeterConfigActive(configName) then
         return false
     end
@@ -1711,13 +1835,13 @@ showDiscSlotNow = function(configName, skipRefresh)
         discSlotRefreshRecoveryRequested = false
         return false
     end
-    surface:ShowIfActive()
+    local ownerRect = currentJukeboxLiveRect()
     surface:CommandIfActive('MeasureJukeboxDiscSlot', 'ResumeDiscSlotResident()')
-    syncJukeboxLiveStateToDiscSlot(configName)
-    applyDiscSlotLayout(configName)
+    syncJukeboxLiveStateToDiscSlot(configName, ownerRect)
+    applyDiscSlotLayout(configName, ownerRect)
+    surface:ShowIfActive()
     syncDiscSlotPlaybackModeControls(configName)
     updateDiscSlotMeters(configName)
-    SKIN:Bang('!Redraw', configName)
     setJukeboxDraggable(false)
     discSlotVisible = true
     discSlotPendingShow = false
@@ -2396,7 +2520,7 @@ function requestEmergencyStop(reason)
 
     local measure = SKIN:GetMeasure('MeasureJukeboxEmergencyStopRun')
     if not measure then
-        SKIN:Bang('!Log', 'Jukebox emergency stop could not run: missing emergency stop measure. Reason=' .. tostring(reason or ''), 'Error')
+        SKIN:Bang('!Log', 'Jukebox emergency stop could not run: missing emergency stop measure. Reason=' .. tostring(reason or ''), 'Warning')
         return false
     end
 
@@ -2761,6 +2885,23 @@ local function discardPendingDiscSlotPlayback()
     forceHideJukeboxAnimator()
 end
 
+local function logBackgroundEventPollFailure(values, fallback)
+    values = values or {}
+    local code = trim(values.DMEL_CODE)
+    if code == '' then
+        code = 'OUTPUT_INVALID'
+    end
+    local message = trim(values.DMEL_MESSAGE)
+    if message == '' then
+        message = trim(fallback)
+    end
+    if message == '' then
+        message = 'The Jukebox player status could not be checked.'
+    end
+    SKIN:Bang('!Log', 'Jukebox background event poll failed: code=' .. code .. '; ' .. message, 'Warning')
+    return false
+end
+
 local function requestDiscSlotAutoAdvance(shuffleEnabled)
     if not isDiscSlotCommandTargetActive() then
         return false
@@ -2798,6 +2939,9 @@ end
 
 local function handleResult(kind, output, defaultKey)
     local values = parsePairs(output)
+    if kind == 'playback' or kind == 'poll' then
+        setJukeboxEventSignalMode(values)
+    end
     local status = upper(values.DMEL_STATUS)
     local logPath = trim(values.DMEL_LOGPATH)
     if logPath == '' then
@@ -2813,6 +2957,9 @@ local function handleResult(kind, output, defaultKey)
         clearDiscSlotPlaybackSelection()
         requestEmergencyStop('missing-helper-status')
         forceHideJukeboxAnimator()
+        if kind == 'poll' then
+            return logBackgroundEventPollFailure(values, fallbackForKey(key))
+        end
         showAlert('error', key, fallbackForKey(key), logPath, placeholder)
         return false
     end
@@ -2861,6 +3008,9 @@ local function handleResult(kind, output, defaultKey)
         requestEmergencyStop('helper-error-' .. trim(values.DMEL_CODE))
         forceHideJukeboxAnimator()
     end
+    if kind == 'poll' then
+        return logBackgroundEventPollFailure(values, fallbackForKey(key))
+    end
     showAlert(level, key, fallbackForKey(key), logPath, placeholder)
     return false
 end
@@ -2873,6 +3023,11 @@ runMeasure = function(kind, measureName, missingKey)
     end
 
     if not SKIN:GetMeasure(measureName) then
+        if kind == 'poll' then
+            return logBackgroundEventPollFailure(
+                { DMEL_CODE = 'MEASURE_MISSING' },
+                fallbackForKey(missingKey))
+        end
         showAlert('error', missingKey, fallbackForKey(missingKey), modalAlertLogPath())
         return false
     end
@@ -3254,6 +3409,7 @@ function Initialize(allowCrossConfig)
     minimizedLastWindowY = nil
     JukeboxScheduler.eventPolling = false
     JukeboxScheduler.eventPollRuntimeTicks = 0
+    jukeboxEventSignalMode = 'unknown'
     JukeboxScheduler.minimizedIdle = false
     JukeboxScheduler.responsive = false
     syncJukeboxModeImages()
@@ -3293,6 +3449,64 @@ function Initialize(allowCrossConfig)
     if allowExternal and isDiscSlotCommandTargetActive() then
         scheduleDiscSlotDeferredSync()
     end
+end
+
+local function settingsConfigName()
+    local root = rootConfigName()
+    return root == '' and 'HUD\\Settings' or root .. '\\HUD\\Settings'
+end
+
+local function notifySettingsJukeboxRuntimeReady()
+    local configName = settingsConfigName()
+    if not isRainmeterConfigActive(configName) then
+        return false
+    end
+    SKIN:Bang('!CommandMeasure', 'MeasureSettingsCommit', 'NotifyJukeboxRuntimeReady()', configName)
+    return true
+end
+
+function CompleteSettingsRefreshInitialization()
+    return safeCall(function()
+        if isDiscSlotCommandTargetActive() then
+            SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlot', 'ReportStateAfterJukeboxRefresh()', discSlotConfigName())
+            return true
+        end
+        discSlotVisible = false
+        setJukeboxDraggable(true)
+        return notifySettingsJukeboxRuntimeReady()
+    end)
+end
+
+function RestoreDiscSlotStateAfterJukeboxRefresh(visible)
+    return safeCall(function()
+        local shouldShow = tostring(visible or '') == '1' or visible == true
+        if shouldShow and isDiscSlotCommandTargetActive() then
+            if not showDiscSlotNow(discSlotConfigName(), true) then
+                return false
+            end
+        else
+            discSlotVisible = false
+            setJukeboxDraggable(true)
+        end
+        return notifySettingsJukeboxRuntimeReady()
+    end)
+end
+
+function AcknowledgeSettingsApply(requestToken)
+    return safeCall(function()
+        local token = trim(requestToken or '')
+        local configName = settingsConfigName()
+        if token == '' or not isRainmeterConfigActive(configName) then
+            return false
+        end
+        SKIN:Bang(
+            '!CommandMeasure',
+            'MeasureSettingsCommit',
+            string.format('CompleteJukeboxSettingsApply(%q)', token),
+            configName
+        )
+        return true
+    end)
 end
 
 function PreloadJukeboxAnimator(allowCrossConfig)
@@ -3350,7 +3564,11 @@ function ContinueJukeboxResponsiveLayoutTimer()
     return StartJukeboxResponsiveLayoutTimer()
 end
 function persistCurrentJukeboxFixedPosition()
-    local rect = JukeboxClampRectToWorkArea(currentJukeboxLiveRect())
+    local liveRect = currentJukeboxLiveRect()
+    if JukeboxMonitorFallbackActive() then
+        return liveRect
+    end
+    local rect = JukeboxClampRectToWorkArea(liveRect)
     writeJukeboxMainFormY(rect.y)
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', string.format('SetFixedPosition(%q,%d,%d)', 'Jukebox', rect.x, rect.y))
     return rect
@@ -3412,6 +3630,13 @@ end
 
 function RestoreJukeboxFormOnRefresh()
     return safeCall(function()
+        if JukeboxFormResetPending() then
+            local restored = enterJukeboxMainForm(currentWindowX())
+            if restored then
+                clearJukeboxFormResetPending()
+            end
+            return restored
+        end
         if JukeboxIsMinimizedForm() then
             return enterJukeboxMinimizedForm(currentWindowX())
         end
@@ -3432,7 +3657,6 @@ function HandleJukeboxClose()
         StopJukeboxResponsiveLayoutTimer()
         StopJukeboxEventPolling()
         ensureResidentUpdateController().SuspendSurface('Jukebox')
-        SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
         return true
     end)
 end
@@ -3677,7 +3901,11 @@ end
 function ExternalPlayPause()
     return safeCall(function()
         local command = trim(externalPlaybackState.state) == '1' and 'Pause' or 'Play'
-        return requestExternalCommand(command)
+        local accepted = requestExternalCommand(command)
+        if accepted and shouldAutoCloseDiscSlotOnExternalPlayPause() then
+            HideDiscSlot()
+        end
+        return accepted
     end)
 end
 
@@ -3902,8 +4130,9 @@ function OnJukeboxMinimizedMouseUp(x, y)
             minimizedDragging = false
             return false
         end
-        local moved = minimizedDragMoved
-        if minimizedDragging and not moved then
+        local dragAllowed = minimizedDragAllowedAtDown
+        local moved = dragAllowed and minimizedDragMoved
+        if minimizedDragging and dragAllowed and not moved then
             local mouseX = tonumber(x) or minimizedDownX
             local mouseY = tonumber(y) or minimizedDownY
             moved = math.abs(mouseX - minimizedDownX) > MINIMIZED_DRAG_THRESHOLD or math.abs(mouseY - minimizedDownY) > MINIMIZED_DRAG_THRESHOLD
@@ -4292,7 +4521,14 @@ function UpdateJukeboxRuntime()
     end
     if JukeboxScheduler.eventPolling then
         JukeboxScheduler.eventPollRuntimeTicks = JukeboxScheduler.eventPollRuntimeTicks + 1
-        if JukeboxScheduler.eventPollRuntimeTicks >= JUKEBOX_EVENT_POLL_RUNTIME_TICKS then
+        local pollNow = false
+        if jukeboxEventSignalMode == 'signal' then
+            pollNow = jukeboxEventSignalCount() > 0
+                or JukeboxScheduler.eventPollRuntimeTicks >= JUKEBOX_EVENT_RECONCILE_RUNTIME_TICKS
+        else
+            pollNow = JukeboxScheduler.eventPollRuntimeTicks >= JUKEBOX_EVENT_POLL_RUNTIME_TICKS
+        end
+        if pollNow then
             JukeboxScheduler.eventPollRuntimeTicks = 0
             PollPlayerEvent()
         end
@@ -4358,7 +4594,7 @@ function HandleEmergencyStopComplete()
         if status == '' then
             SKIN:Bang('!Log', 'Jukebox emergency stop returned no DMEL_STATUS.', 'Warning')
         elseif status == 'ERROR' then
-            SKIN:Bang('!Log', 'Jukebox emergency stop failed: ' .. trim(values.DMEL_MESSAGE), 'Error')
+            SKIN:Bang('!Log', 'Jukebox emergency stop failed: ' .. trim(values.DMEL_MESSAGE), 'Warning')
         end
         return true
     end)

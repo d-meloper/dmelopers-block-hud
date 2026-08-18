@@ -32,7 +32,8 @@ return function(app)
 
         methods.closeDropdownInternal()
         methods.setLoadingVisible(true, methods.languageSwitchLoadingText(targetLanguage))
-        methods.renderActivePage()
+        methods.clearDropdownVisualState()
+        methods.refreshLoadingVisuals()
         SKIN:Bang('!CommandMeasure', 'MeasureSettingsDeferredLanguageSwitch', 'Stop 1')
         SKIN:Bang('!CommandMeasure', 'MeasureSettingsDeferredLanguageSwitch', 'Execute 1')
         return true
@@ -59,7 +60,6 @@ return function(app)
         })
 
         if not changed then
-            methods.syncActiveLocalization(pendingValue)
             methods.syncItemLabelsForLanguage(pendingValue, {
                 refreshAppOnComplete = true,
             })
@@ -74,7 +74,7 @@ return function(app)
         end
 
         if state.pendingDefaultItemLocalizationRunning ~= true then
-            SKIN:Bang('!RefreshApp')
+            methods.ScheduleRefreshApp()
         end
         return true
     end
@@ -155,6 +155,7 @@ return function(app)
         if field then
             methods.applyFieldValue(field, 'local', { suppressRefresh = true })
         end
+        methods.CompleteJukeboxPlaybackSourceApply(false)
         methods.renderActivePage()
         return false
     end
@@ -166,12 +167,13 @@ return function(app)
         end
 
         local pendingMode = trim(state.pendingJukeboxPlaybackSourceMode or '')
+        local accepted = true
         if pendingMode ~= '' then
             local field = methods.getField and methods.getField('jukeboxPlaybackSourceMode') or nil
             if field then
                 pendingMode = methods.normalizeFieldValue(field, pendingMode, 'local')
             end
-            local accepted = storedMode == pendingMode
+            accepted = storedMode == pendingMode
             local before = state.pendingJukeboxPlaybackSourceModeBeforeSnapshot
             local historyLabel = trim(state.pendingJukeboxPlaybackSourceModeHistoryLabel or 'Jukebox playback source')
             methods.clearPendingJukeboxPlaybackSourceMode()
@@ -179,6 +181,8 @@ return function(app)
                 methods.pushHistory(historyLabel, before)
             end
         end
+
+        methods.CompleteJukeboxPlaybackSourceApply(accepted)
 
         return methods.renderActivePage()
     end
@@ -200,8 +204,13 @@ return function(app)
             if changed and beforeSnapshot then
                 methods.pushHistory(field.historyLabel, beforeSnapshot)
             end
+            if changed then
+                methods.BeginJukeboxSettingsApply('source')
+            end
             methods.renderActivePage()
-            commandJukeboxPlaybackSourceMode(nextMode)
+            if not commandJukeboxPlaybackSourceMode(nextMode) and changed then
+                methods.CompleteJukeboxPlaybackSourceApply(false)
+            end
             return true
         end
 
@@ -213,6 +222,9 @@ return function(app)
         state.pendingJukeboxPlaybackSourceModeBeforeSnapshot = storedMode ~= nextMode and beforeSnapshot or nil
         state.pendingJukeboxPlaybackSourceModeHistoryLabel = field.historyLabel
         state.pendingJukeboxPlaybackSourceModeRetryCount = 0
+        if storedMode ~= nextMode then
+            methods.BeginJukeboxSettingsApply('source')
+        end
         methods.renderActivePage()
         if commandJukeboxPlaybackSourceMode(nextMode) then
             return true
@@ -303,6 +315,11 @@ return function(app)
 
 
         if methods.isFieldDisabled and methods.isFieldDisabled(field) then
+            return
+        end
+
+        if field.dropdownId == 'hudMirrorSelection' and methods.SelectHudMirrorDropdownOption then
+            methods.SelectHudMirrorDropdownOption(field, option)
             return
         end
 

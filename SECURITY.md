@@ -10,7 +10,7 @@ Security fixes are provided for the latest public GitHub release only unless a l
 
 Release notes publish an exact `SHA256 <hash> <asset>` entry for each distributed ZIP and RMSKIN asset. The public updater feed publishes a Korea or Global updater ZIP hash only when that exact release-note entry and the GitHub release asset's `sha256:` digest both exist and agree.
 
-Beginning with the first release that contains checksum-verifying updater support, network-driven updates and current-version resets fail closed:
+Beginning with v1.4.1, network-driven updates and current-version resets fail closed:
 
 - Repository, variant, exact asset name, and SHA-256 must come from the same verified metadata.
 - The downloaded ZIP is checked after staging and again immediately before extraction.

@@ -256,6 +256,40 @@ function M.Create(options)
         return requestDeferredOpen(skin(), deferredVariable(), deferredMeasure())
     end
 
+    function helper:QueueConfirmationByKeys(confirmation)
+        confirmation = confirmation or {}
+
+        local configName = modalConfig()
+        local ownerConfig = targetConfig()
+        local measureName = targetMeasure()
+        local titleKey = trim(confirmation.titleKey)
+        local messageKey = trim(confirmation.messageKey)
+        local confirmKey = trim(confirmation.primaryKey)
+        local cancelKey = trim(confirmation.secondaryKey)
+        local confirmCallback = trim(confirmation.primaryCallback)
+        local cancelCallback = trim(confirmation.secondaryCallback)
+        if configName == '' or ownerConfig == '' or measureName == ''
+            or titleKey == '' or messageKey == '' or confirmKey == '' or cancelKey == ''
+            or confirmCallback == '' then
+            return false
+        end
+
+        self.pendingOpenCommand = 'OpenByKeys('
+            .. luaString(ownerConfig) .. ','
+            .. luaString(token()) .. ','
+            .. luaString(titleKey) .. ','
+            .. luaString(messageKey) .. ','
+            .. luaString(confirmKey) .. ','
+            .. luaString(cancelKey) .. ','
+            .. luaString(measureName) .. ','
+            .. luaString(confirmCallback) .. ','
+            .. luaString(cancelCallback) .. ','
+            .. luaString('two') .. ')'
+
+        activateIfNeeded(configName)
+        return requestDeferredOpen(skin(), deferredVariable(), deferredMeasure())
+    end
+
     function helper:OpenPending()
         if trim(self.pendingOpenCommand) == '' then
             return false

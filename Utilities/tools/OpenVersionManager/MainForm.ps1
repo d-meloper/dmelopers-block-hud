@@ -53,6 +53,7 @@ function Start-VersionManager {
         ReleaseName = ''
         ReleaseUrl = ''
         AssetName = ''
+        AssetSha256 = ''
         AssetUrl = ''
         AssetSize = 0
         PublishedAtUtc = ''
@@ -936,6 +937,7 @@ function Start-VersionManager {
                 ReleaseName = [string]$badge.ReleaseName
                 ReleaseUrl = [string]$badge.ReleaseUrl
                 AssetName = [string]$badge.AssetName
+                AssetSha256 = [string]$badge.AssetSha256
                 AssetUrl = [string]$badge.AssetUrl
                 PublishedAtUtc = [string]$badge.PublishedAtUtc
                 Status = 'ready'
@@ -970,7 +972,8 @@ function Start-VersionManager {
             $previousProvenanceValid = ($null -ne $previousVersion -and
                 [string]::Equals([string]$previousCache.RepositorySlug, ('{0}/{1}' -f $ui.UpdateConfig.Owner, $ui.UpdateConfig.Repo), [System.StringComparison]::Ordinal) -and
                 [string]::Equals([string]$previousCache.ReleaseVariant, [string]$ui.UpdateConfig.ReleaseVariant, [System.StringComparison]::Ordinal) -and
-                [string]::Equals([string]$previousCache.AssetName, [string]$ui.UpdateConfig.ActiveAssetPattern, [System.StringComparison]::Ordinal))
+                [string]::Equals([string]$previousCache.AssetName, [string]$ui.UpdateConfig.ActiveAssetPattern, [System.StringComparison]::Ordinal) -and
+                [string]$previousCache.AssetSha256 -match '^[0-9A-Fa-f]{64}$')
             $ui.UpdateCache = Update-UpdateCache -Root $ui.Root -Patch ([PSCustomObject]@{
                 Status = $(if ($previousProvenanceValid) { 'ready' } else { 'error' })
                 Error = [string]$_.Exception.Message
@@ -1037,6 +1040,7 @@ function Start-VersionManager {
                 Version = [string]$ui.VerifiedBadge.VersionText
                 Tag = [string]$ui.VerifiedBadge.Tag
                 AssetUrl = [string]$ui.VerifiedBadge.AssetUrl
+                AssetSha256 = [string]$ui.VerifiedBadge.AssetSha256
                 InstalledPath = $installedPath
                 ReleaseVariant = [string]$ui.VerifiedBadge.ReleaseVariant
             }
@@ -1169,6 +1173,7 @@ function Start-VersionManager {
         $tagText = [string](Get-ObjectPropertyValue -Object $entry -Name 'Tag' -DefaultValue '')
         $expectedVersion = if ([string]::IsNullOrWhiteSpace($tagText)) { $versionText } else { $tagText }
         $assetUrl = [string](Get-ObjectPropertyValue -Object $entry -Name 'AssetUrl' -DefaultValue '')
+        $assetSha256 = [string](Get-ObjectPropertyValue -Object $entry -Name 'AssetSha256' -DefaultValue '')
         $installedPath = [string](Get-ObjectPropertyValue -Object $entry -Name 'InstalledPath' -DefaultValue '')
         $releaseVariant = [string](Get-ObjectPropertyValue -Object $entry -Name 'ReleaseVariant' -DefaultValue '')
         $isInstalled = -not [string]::IsNullOrWhiteSpace($installedPath)
@@ -1234,7 +1239,7 @@ function Start-VersionManager {
                     Invoke-VersionReleaseInstall -Root $ui.Root -SelectedTargetRoot $installedPath -ExpectedReleaseVariant $releaseVariant
                 }
                 else {
-                    Invoke-VersionReleaseInstall -Root $ui.Root -PackageUrl $assetUrl -ExpectedVersion $expectedVersion -ExpectedReleaseVariant $releaseVariant -ProgressOwnerRoot $ui.Root -ProgressToken $progressToken
+                    Invoke-VersionReleaseInstall -Root $ui.Root -PackageUrl $assetUrl -ExpectedPackageSha256 $assetSha256 -ExpectedVersion $expectedVersion -ExpectedReleaseVariant $releaseVariant -ProgressOwnerRoot $ui.Root -ProgressToken $progressToken
                 }
             }
             finally {
@@ -1268,7 +1273,7 @@ function Start-VersionManager {
                     $progressToken `
                     $operationStartedAtUtc
                 try {
-                    $result = Invoke-VersionReleaseInstall -Root $ui.Root -PackageUrl $assetUrl -ExpectedVersion $expectedVersion -ExpectedReleaseVariant $releaseVariant -AllowCompatibilityWarning -ExpectedRepairPlanId $repairPlanId -ProgressOwnerRoot $ui.Root -ProgressToken $progressToken
+                    $result = Invoke-VersionReleaseInstall -Root $ui.Root -PackageUrl $assetUrl -ExpectedPackageSha256 $assetSha256 -ExpectedVersion $expectedVersion -ExpectedReleaseVariant $releaseVariant -AllowCompatibilityWarning -ExpectedRepairPlanId $repairPlanId -ProgressOwnerRoot $ui.Root -ProgressToken $progressToken
                 }
                 finally {
                     & $hideBusyOverlay
@@ -1426,6 +1431,7 @@ function Start-VersionManager {
         }
 
         & $ensureInteractiveModules
+        $closeAfterSuccessfulReset = $false
         try {
             $ui.TargetVersionText = Get-SkinMetadataVersion -Root $ui.Root
             $ui.TargetVersion = Convert-ToVersion -VersionText $ui.TargetVersionText
@@ -1471,73 +1477,112 @@ function Start-VersionManager {
             & $showBusyOverlay `
                 (T 'Helper_VersionManager_Reset_BusyDownload' (U '\uB3D9\uC77C\uD55C \uBC84\uC804\uC744 \uC0C8\uB85C \uB0B4\uB824\uBC1B\uB294 \uC911\uC785\uB2C8\uB2E4... \uCC3D\uC744 \uB2EB\uC9C0 \uB9C8\uC138\uC694.')) `
                 (T 'Helper_VersionManager_Reset_CurrentGroup' (U '\uD604\uC7AC \uC2A4\uD0A8 \uCD08\uAE30\uD654'))
+            $integrity = Invoke-VersionManagerReleaseAssetIntegrityRequest `
+                -Config $ui.UpdateConfig `
+                -TagName $currentTag `
+                -AssetName $assetName `
+                -TimeoutSeconds 15
+            if (-not [string]::Equals([string]$integrity.AssetUrl, $packageUrl, [System.StringComparison]::Ordinal)) {
+                throw (New-UpdateOperationException -ErrorCode 'release-integrity-url' -Message 'The verified release asset URL did not match the reset download URL.')
+            }
+            # GetNewClosure captures variables from the current click-handler scope,
+            # not values found only through the parent Start-VersionManager scope.
+            $resetStageMessageSetter = $setBusyOverlayMessage
+            $resetStageMessageControl = $busyOverlayMessage
             $resetStageChanged = {
                 param([string]$Stage)
 
                 switch ($Stage) {
                     'validating' {
-                        & $setBusyOverlayMessage (T 'Helper_VersionManager_Reset_BusyValidate' (U '\uB2E4\uC6B4\uB85C\uB4DC\uD55C \uC2A4\uD0A8\uC744 \uAC80\uC99D\uD558\uB294 \uC911\uC785\uB2C8\uB2E4... \uCC3D\uC744 \uB2EB\uC9C0 \uB9C8\uC138\uC694.'))
+                        [void](& $resetStageMessageSetter (T 'Helper_VersionManager_Reset_BusyValidate' (U '\uB2E4\uC6B4\uB85C\uB4DC\uD55C \uC2A4\uD0A8\uC744 \uAC80\uC99D\uD558\uB294 \uC911\uC785\uB2C8\uB2E4... \uCC3D\uC744 \uB2EB\uC9C0 \uB9C8\uC138\uC694.')))
                     }
                     'applying' {
-                        & $setBusyOverlayMessage (T 'Helper_VersionManager_Reset_BusyApply' (U '\uD604\uC7AC \uC2A4\uD0A8\uC744 \uCD08\uAE30\uD654\uD558\uB294 \uC911\uC785\uB2C8\uB2E4... \uCC3D\uC744 \uB2EB\uC9C0 \uB9C8\uC138\uC694.'))
+                        [void](& $resetStageMessageSetter (T 'Helper_VersionManager_Reset_BusyApply' (U '\uD604\uC7AC \uC2A4\uD0A8\uC744 \uCD08\uAE30\uD654\uD558\uB294 \uC911\uC785\uB2C8\uB2E4... \uCC3D\uC744 \uB2EB\uC9C0 \uB9C8\uC138\uC694.')))
                     }
                     default {
-                        & $setBusyOverlayMessage (T 'Helper_VersionManager_Reset_BusyDownload' (U '\uB3D9\uC77C\uD55C \uBC84\uC804\uC744 \uC0C8\uB85C \uB0B4\uB824\uBC1B\uB294 \uC911\uC785\uB2C8\uB2E4... \uCC3D\uC744 \uB2EB\uC9C0 \uB9C8\uC138\uC694.'))
+                        [void](& $resetStageMessageSetter (T 'Helper_VersionManager_Reset_BusyDownload' (U '\uB3D9\uC77C\uD55C \uBC84\uC804\uC744 \uC0C8\uB85C \uB0B4\uB824\uBC1B\uB294 \uC911\uC785\uB2C8\uB2E4... \uCC3D\uC744 \uB2EB\uC9C0 \uB9C8\uC138\uC694.')))
                     }
                 }
-                $busyOverlayMessage.Refresh()
+                [void]$resetStageMessageControl.Refresh()
             }.GetNewClosure()
-            $result = Invoke-CurrentSkinReset `
-                -Root $ui.Root `
-                -PackageUrl $packageUrl `
-                -ExpectedVersion $currentTag `
-                -ExpectedReleaseVariant $variant `
-                -OnStageChanged $resetStageChanged
+            $resetInvocationOutput = @(Invoke-CurrentSkinReset `
+                    -Root $ui.Root `
+                    -PackageUrl $packageUrl `
+                    -ExpectedPackageSha256 ([string]$integrity.AssetSha256) `
+                    -ExpectedVersion $currentTag `
+                    -ExpectedReleaseVariant $variant `
+                    -OnStageChanged $resetStageChanged)
+            $result = ConvertTo-CurrentSkinResetUiResult -InvocationOutput $resetInvocationOutput
+            $resetStatus = [string](Get-ObjectPropertyValue -Object $result -Name 'Status' -DefaultValue 'ERROR')
+            $resetMessage = [string](Get-ObjectPropertyValue -Object $result -Name 'Message' -DefaultValue '')
+            $resetSourcePath = [string](Get-ObjectPropertyValue -Object $result -Name 'SourcePath' -DefaultValue '')
+            $resetLogPath = [string](Get-ObjectPropertyValue -Object $result -Name 'LogPath' -DefaultValue '')
             $successLikeReset = (
-                [string]::Equals([string]$result.Status, 'OK', [System.StringComparison]::OrdinalIgnoreCase) -or
-                [string]::Equals([string]$result.Status, 'NOOP', [System.StringComparison]::OrdinalIgnoreCase) -or
-                ([string]::Equals([string]$result.Status, 'WARN', [System.StringComparison]::OrdinalIgnoreCase) -and
-                 -not [string]::IsNullOrWhiteSpace([string]$result.SourcePath)))
+                [string]::Equals($resetStatus, 'OK', [System.StringComparison]::OrdinalIgnoreCase) -or
+                [string]::Equals($resetStatus, 'NOOP', [System.StringComparison]::OrdinalIgnoreCase) -or
+                ([string]::Equals($resetStatus, 'WARN', [System.StringComparison]::OrdinalIgnoreCase) -and
+                 -not [string]::IsNullOrWhiteSpace($resetSourcePath)))
             if ($successLikeReset) {
-                if (-not [string]::IsNullOrWhiteSpace([string]$result.SourcePath)) {
-                    Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value ([string]$result.SourcePath)
+                if (-not [string]::IsNullOrWhiteSpace($resetSourcePath)) {
+                    Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $resetSourcePath
                 }
-                if (-not [string]::IsNullOrWhiteSpace([string]$result.LogPath)) {
-                    Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value ([string]$result.LogPath)
+                if (-not [string]::IsNullOrWhiteSpace($resetLogPath)) {
+                    Set-ResultPairValue -Key 'DMEL_LOGPATH' -Value $resetLogPath
                 }
-                Set-ResultPairValue -Key 'DMEL_STATUS' -Value ([string]$result.Status)
-                if ([string]::Equals([string]$result.Status, 'WARN', [System.StringComparison]::OrdinalIgnoreCase)) {
-                    $warningMessage = [string]$result.Message
-                    if (-not [string]::IsNullOrWhiteSpace([string]$result.LogPath)) {
-                        $warningMessage += "`r`n`r`n" + [string]$result.LogPath
+                Set-ResultPairValue -Key 'DMEL_STATUS' -Value $resetStatus
+                if ([string]::Equals($resetStatus, 'WARN', [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $warningMessage = $resetMessage
+                    if (-not [string]::IsNullOrWhiteSpace($resetLogPath)) {
+                        $warningMessage += "`r`n`r`n" + $resetLogPath
                     }
                     Show-VersionManagerMessageBox -Owner $form -Message $warningMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
                 }
-                $ui.CloseAfterSwitch = $true
-                $form.Close()
-                return
-            }
-
-            $failureMessage = if ([string]::IsNullOrWhiteSpace([string]$result.Message)) {
-                T 'Helper_VersionManager_Reset_Failed' (U '\uD604\uC7AC \uC2A4\uD0A8\uC744 \uCD08\uAE30\uD654\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uB85C\uADF8 \uD30C\uC77C\uC744 \uD655\uC778\uD558\uC138\uC694.')
+                $closeAfterSuccessfulReset = $true
             }
             else {
-                [string]$result.Message
+                $failureMessage = if ([string]::IsNullOrWhiteSpace($resetMessage)) {
+                    T 'Helper_VersionManager_Reset_Failed' (U '\uD604\uC7AC \uC2A4\uD0A8\uC744 \uCD08\uAE30\uD654\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uB85C\uADF8 \uD30C\uC77C\uC744 \uD655\uC778\uD558\uC138\uC694.')
+                }
+                else {
+                    $resetMessage
+                }
+                if (-not [string]::IsNullOrWhiteSpace($resetLogPath)) {
+                    $failureMessage += "`r`n`r`n" + $resetLogPath
+                }
+                Show-VersionManagerMessageBox -Owner $form -Message $failureMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
             }
-            if (-not [string]::IsNullOrWhiteSpace([string]$result.LogPath)) {
-                $failureMessage += "`r`n`r`n" + [string]$result.LogPath
-            }
-            Show-VersionManagerMessageBox -Owner $form -Message $failureMessage -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
         catch {
             Write-Log ("Current skin reset failed: {0}" -f $_.Exception.ToString()) 'ERROR'
             Show-VersionManagerMessageBox -Owner $form -Message ([string]$_.Exception.Message) -Title $form.Text -Buttons ([System.Windows.Forms.MessageBoxButtons]::OK) -Icon ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
         finally {
-            & $hideBusyOverlay
+            try {
+                & $hideBusyOverlay
+            }
+            catch {
+                Write-Log ("Current skin reset UI cleanup warning: {0}" -f $_.Exception.ToString()) 'WARN'
+            }
             $ui.InstallationOperationInProgress = $false
-            & $syncInstallationSelectionState
-            & $syncCurrentSkinResetState
+            if (-not $form.IsDisposed) {
+                try {
+                    & $syncInstallationSelectionState
+                    & $syncCurrentSkinResetState
+                }
+                catch {
+                    Write-Log ("Current skin reset UI state refresh warning: {0}" -f $_.Exception.ToString()) 'WARN'
+                }
+            }
+        }
+
+        if ($closeAfterSuccessfulReset) {
+            $ui.CloseAfterSwitch = $true
+            try {
+                $form.Close()
+            }
+            catch {
+                Write-Log ("Current skin reset succeeded, but the Skin manager window could not close cleanly: {0}" -f $_.Exception.ToString()) 'WARN'
+            }
         }
     })
 

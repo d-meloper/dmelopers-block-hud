@@ -35,6 +35,7 @@ function Initialize(allowCrossConfig)
     minimizedLastWindowY = nil
     JukeboxScheduler.eventPolling = false
     JukeboxScheduler.eventPollRuntimeTicks = 0
+    jukeboxEventSignalMode = 'unknown'
     JukeboxScheduler.minimizedIdle = false
     JukeboxScheduler.responsive = false
     syncJukeboxModeImages()
@@ -74,6 +75,64 @@ function Initialize(allowCrossConfig)
     if allowExternal and isDiscSlotCommandTargetActive() then
         scheduleDiscSlotDeferredSync()
     end
+end
+
+local function settingsConfigName()
+    local root = rootConfigName()
+    return root == '' and 'HUD\\Settings' or root .. '\\HUD\\Settings'
+end
+
+local function notifySettingsJukeboxRuntimeReady()
+    local configName = settingsConfigName()
+    if not isRainmeterConfigActive(configName) then
+        return false
+    end
+    SKIN:Bang('!CommandMeasure', 'MeasureSettingsCommit', 'NotifyJukeboxRuntimeReady()', configName)
+    return true
+end
+
+function CompleteSettingsRefreshInitialization()
+    return safeCall(function()
+        if isDiscSlotCommandTargetActive() then
+            SKIN:Bang('!CommandMeasure', 'MeasureJukeboxDiscSlot', 'ReportStateAfterJukeboxRefresh()', discSlotConfigName())
+            return true
+        end
+        discSlotVisible = false
+        setJukeboxDraggable(true)
+        return notifySettingsJukeboxRuntimeReady()
+    end)
+end
+
+function RestoreDiscSlotStateAfterJukeboxRefresh(visible)
+    return safeCall(function()
+        local shouldShow = tostring(visible or '') == '1' or visible == true
+        if shouldShow and isDiscSlotCommandTargetActive() then
+            if not showDiscSlotNow(discSlotConfigName(), true) then
+                return false
+            end
+        else
+            discSlotVisible = false
+            setJukeboxDraggable(true)
+        end
+        return notifySettingsJukeboxRuntimeReady()
+    end)
+end
+
+function AcknowledgeSettingsApply(requestToken)
+    return safeCall(function()
+        local token = trim(requestToken or '')
+        local configName = settingsConfigName()
+        if token == '' or not isRainmeterConfigActive(configName) then
+            return false
+        end
+        SKIN:Bang(
+            '!CommandMeasure',
+            'MeasureSettingsCommit',
+            string.format('CompleteJukeboxSettingsApply(%q)', token),
+            configName
+        )
+        return true
+    end)
 end
 
 function PreloadJukeboxAnimator(allowCrossConfig)
@@ -131,7 +190,11 @@ function ContinueJukeboxResponsiveLayoutTimer()
     return StartJukeboxResponsiveLayoutTimer()
 end
 function persistCurrentJukeboxFixedPosition()
-    local rect = JukeboxClampRectToWorkArea(currentJukeboxLiveRect())
+    local liveRect = currentJukeboxLiveRect()
+    if JukeboxMonitorFallbackActive() then
+        return liveRect
+    end
+    local rect = JukeboxClampRectToWorkArea(liveRect)
     writeJukeboxMainFormY(rect.y)
     SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', string.format('SetFixedPosition(%q,%d,%d)', 'Jukebox', rect.x, rect.y))
     return rect
@@ -193,6 +256,13 @@ end
 
 function RestoreJukeboxFormOnRefresh()
     return safeCall(function()
+        if JukeboxFormResetPending() then
+            local restored = enterJukeboxMainForm(currentWindowX())
+            if restored then
+                clearJukeboxFormResetPending()
+            end
+            return restored
+        end
         if JukeboxIsMinimizedForm() then
             return enterJukeboxMinimizedForm(currentWindowX())
         end
@@ -213,7 +283,6 @@ function HandleJukeboxClose()
         StopJukeboxResponsiveLayoutTimer()
         StopJukeboxEventPolling()
         ensureResidentUpdateController().SuspendSurface('Jukebox')
-        SKIN:Bang('!CommandMeasure', 'MeasureResponsiveLayout', 'DeactivateLiveState()')
         return true
     end)
 end
@@ -458,7 +527,11 @@ end
 function ExternalPlayPause()
     return safeCall(function()
         local command = trim(externalPlaybackState.state) == '1' and 'Pause' or 'Play'
-        return requestExternalCommand(command)
+        local accepted = requestExternalCommand(command)
+        if accepted and shouldAutoCloseDiscSlotOnExternalPlayPause() then
+            HideDiscSlot()
+        end
+        return accepted
     end)
 end
 
@@ -683,8 +756,9 @@ function OnJukeboxMinimizedMouseUp(x, y)
             minimizedDragging = false
             return false
         end
-        local moved = minimizedDragMoved
-        if minimizedDragging and not moved then
+        local dragAllowed = minimizedDragAllowedAtDown
+        local moved = dragAllowed and minimizedDragMoved
+        if minimizedDragging and dragAllowed and not moved then
             local mouseX = tonumber(x) or minimizedDownX
             local mouseY = tonumber(y) or minimizedDownY
             moved = math.abs(mouseX - minimizedDownX) > MINIMIZED_DRAG_THRESHOLD or math.abs(mouseY - minimizedDownY) > MINIMIZED_DRAG_THRESHOLD
@@ -1073,7 +1147,14 @@ function UpdateJukeboxRuntime()
     end
     if JukeboxScheduler.eventPolling then
         JukeboxScheduler.eventPollRuntimeTicks = JukeboxScheduler.eventPollRuntimeTicks + 1
-        if JukeboxScheduler.eventPollRuntimeTicks >= JUKEBOX_EVENT_POLL_RUNTIME_TICKS then
+        local pollNow = false
+        if jukeboxEventSignalMode == 'signal' then
+            pollNow = jukeboxEventSignalCount() > 0
+                or JukeboxScheduler.eventPollRuntimeTicks >= JUKEBOX_EVENT_RECONCILE_RUNTIME_TICKS
+        else
+            pollNow = JukeboxScheduler.eventPollRuntimeTicks >= JUKEBOX_EVENT_POLL_RUNTIME_TICKS
+        end
+        if pollNow then
             JukeboxScheduler.eventPollRuntimeTicks = 0
             PollPlayerEvent()
         end
@@ -1139,7 +1220,7 @@ function HandleEmergencyStopComplete()
         if status == '' then
             SKIN:Bang('!Log', 'Jukebox emergency stop returned no DMEL_STATUS.', 'Warning')
         elseif status == 'ERROR' then
-            SKIN:Bang('!Log', 'Jukebox emergency stop failed: ' .. trim(values.DMEL_MESSAGE), 'Error')
+            SKIN:Bang('!Log', 'Jukebox emergency stop failed: ' .. trim(values.DMEL_MESSAGE), 'Warning')
         end
         return true
     end)

@@ -293,6 +293,9 @@ function EnterOptionHover(label)
         RunTooltipCommand(string.format('EnterOption(%q)', tostring(label or '')))
     end
 end
+function EnterOptionHoverVariable(variableName)
+    EnterOptionHover(SKIN:GetVariable(tostring(variableName or '')) or '')
+end
 function LeaveOptionHover()
     LoadEssentials()
     isOptionHovering = false
@@ -467,7 +470,8 @@ end
 local function hideDragVisual()
     resetDragHoverTracking()
     clearDragPayload()
-    dragVisualImagePath = nil
+    dragVisualImage.path = nil
+    dragVisualImage.crop = nil
     dragVisualImageX = nil
     dragVisualImageY = nil
     dragVisualImageSize = nil
@@ -515,9 +519,14 @@ local function ensureDragPayload(meta)
         return nil
     end
     local offsetX, offsetY, offsetSize = ImageAdjuster.GetAdjustments(dragRecord.ImageKey)
+    local presentation = EditorItemService.GetImagePresentation(
+        R,
+        dragRecord.ImageKey,
+        SKIN:GetVariable('ItemImageAtlasProfiles', ''))
     dragPayloadKey = payloadKey
     dragPayload = {
-        imagePath = EditorItemService.GetImagePath(R, dragRecord.ImageKey),
+        imagePath = presentation.ImagePath,
+        imageCrop = presentation.ImageCrop,
         qty = dragRecord.Qty or 0,
         adjustedItemSize = ItemSize + offsetSize,
         offsetX = offsetX,
@@ -536,9 +545,14 @@ local function updateDragVisual(x, y, meta)
     local imageY = y - (payload.adjustedItemSize / 2) + payload.offsetY
     local imageDirty = false
     local textDirty = false
-    if payload.imagePath ~= dragVisualImagePath then
-        dragVisualImagePath = payload.imagePath
+    if payload.imagePath ~= dragVisualImage.path then
+        dragVisualImage.path = payload.imagePath
         SKIN:Bang('!SetOption', DRAG_IMAGE_METER, 'ImageName', payload.imagePath)
+        imageDirty = true
+    end
+    if payload.imageCrop ~= dragVisualImage.crop then
+        dragVisualImage.crop = payload.imageCrop
+        SKIN:Bang('!SetOption', DRAG_IMAGE_METER, 'ImageCrop', payload.imageCrop)
         imageDirty = true
     end
     if imageX ~= dragVisualImageX then

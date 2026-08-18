@@ -28,11 +28,13 @@ If you are new to Rainmeter or skin installation, the Skin Notion page provides 
 - Skin attachment support for applying skin images
 - Herobrine content
 - Indicators for CPU, RAM, GPU, VRAM, and other system values
-- Clock skin with configurable text size, color, and 12/24-hour display
+- Clock skin with configurable text size, color, weight, border, shadow offset, shadow color, blur, opacity, and 12/24-hour display
+- Optional per-monitor copies of the Hotbar, indicators, Clock, and ClockSprite, with independent selection, positioning, drag, and edge snap
+- Animated GIF item images in the Editor, Hotbar, and Inventory, plus cursor-facing Inventory player animation with a static fallback
 - Settings window with undo, redo, refresh, reset, positioning, theme, font, and startup options
 - Manual drag and snap placement options for HUD elements
 - Import support for older skin data
-- Lightweight update notices with release notes, a 24-hour snooze option, and in-skin latest-version update
+- Lightweight update notices with release notes, a 24-hour snooze option, and checksum-verified in-skin latest-version update
 - A confirmed current-skin reset that re-downloads the same version while leaving other installed skins unchanged
 - Korea and Global public package variants
 
@@ -52,6 +54,8 @@ The `.rmskin` packages install to separate versioned skin folders: `DMeloper's B
 
 For updates, use the in-skin `Skin manager` whenever possible. It checks validated latest-release data for the installed variant and applies the matching ZIP package without loading a historical release list. Compatible settings, items, user images, and local audio are carried into the new install; if some item-image fields cannot be used, the skin asks before clearing only those fields. Use an `.rmskin` file when reinstalling manually from GitHub.
 
+Beginning with v1.4.1, network-downloaded updater ZIPs are checked against the published SHA-256 and are rejected before extraction when the verified metadata or downloaded bytes do not match. See the [security policy](SECURITY.md) for the verification scope and limitations.
+
 ## Requirements
 
 - Windows 7 or later
@@ -69,24 +73,9 @@ For setup, customization, and daily usage instructions, see the Skin Notion page
 
 ## Localization
 
-Currently supported languages:
+As of v1.4.1, Block HUD supports 42 languages, including Korean, English, Russian, Japanese, and Chinese.
 
-- Korean (`ko-KR`)
-- English (`en-US`)
-- Turkish (`tr-TR`)
-- Russian (`ru-RU`)
-- Simplified Chinese (`zh-CN`)
-- Armenian (`hy-AM`)
-- Danish (`da-DK`)
-- Finnish (`fi-FI`)
-- Portuguese (`pt-PT`)
-- Brazilian Portuguese (`pt-BR`)
-- Hinglish/Urdish (`hi-Latn`)
-- Persian (`fa-IR`)
-- Indonesian (`id-ID`)
-- German (`de-DE`)
-
-If you want to help translate the skin or improve an existing translation, please use the DMeloper's Block HUD Translation Hub. You do not need to edit code or Rainmeter files; translation work is handled through reviewed TSV/spreadsheet files.
+If you want to help translate the skin or improve an existing translation, please use the DMeloper's Block HUD Translation Hub. You do not need to edit code or Rainmeter files; translation work is handled collaboratively in a Google Sheet for each language.
 
 [DMeloper's Block HUD Translation Hub](https://www.notion.so/aismash/DMeloper-s-Block-HUD-Translation-Hub-3982dc0bb4ae80ebb693ecd08d9d498a?source=copy_link)
 

@@ -11,6 +11,105 @@ return function(app)
     local parseStartupAutoRunResult = helpers.parseStartupAutoRunResult
     local defaultLoadingMessage = helpers.defaultLoadingMessage
     local showModalAlert = helpers.showModalAlert
+
+    local function minecraftSkinPlayerFolderSizeViewIsVisible()
+        local tab = methods.activeTab and methods.activeTab() or nil
+        return tab ~= nil
+            and trim(tab.id or '') == 'inventory'
+            and methods.activePageIndex
+            and methods.activePageIndex() == 2
+    end
+
+    local function minecraftSkinPlayerFolderSizeKoreanFallback(korean, global)
+        local languageCode = methods.normalizeLanguageCode
+            and methods.normalizeLanguageCode(SKIN:GetVariable('LanguageCode', 'en-US'), 'en-US')
+            or trim(SKIN:GetVariable('LanguageCode', 'en-US'))
+        return languageCode == 'ko-KR' and korean or global
+    end
+
+    function methods.minecraftSkinPlayerFolderSizeDisplayText()
+        local bytes = math.max(0, tonumber(state.minecraftSkinPlayerFolderSizeBytes) or 0)
+        local megabytes = string.format('%.1f', bytes / (1024 * 1024))
+        return methods.localizeFormat(
+            'Settings_Notice_MinecraftSkinPlayerFolderSize_Format',
+            { megabytes },
+            minecraftSkinPlayerFolderSizeKoreanFallback('차지한 용량: %1MB', 'Occupied space: %1MB')
+        )
+    end
+
+    function methods.minecraftSkinPlayerFolderSizeTooltipText()
+        return methods.localize(
+            'Settings_Tooltip_MinecraftSkinPlayerFolderSize',
+            minecraftSkinPlayerFolderSizeKoreanFallback(
+                '스티브 스킨과 아틀라스 이미지 파일이 차지하는 총 용량입니다.\n윈도우 탐색기에서 사용하지 않는 파일을 직접 삭제해 용량을 확보할 수 있습니다.',
+                'This is the total space used by Steve skin and atlas image files.\nYou can free up space by deleting unused files directly in File Explorer.'
+            )
+        )
+    end
+
+    function methods.requestMinecraftSkinPlayerFolderSize()
+        if state.minecraftSkinPlayerFolderSizePending == true then
+            return false
+        end
+        if not SKIN:GetMeasure('MeasureSettingsMinecraftSkinPlayerFolder')
+            or not SKIN:GetMeasure('MeasureSettingsMinecraftSkinPlayerFolderSize') then
+            return false
+        end
+        state.minecraftSkinPlayerFolderSizePending = true
+        state.minecraftSkinPlayerFolderSizeNeedsRefresh = false
+        SKIN:Bang('!CommandMeasure', 'MeasureSettingsMinecraftSkinPlayerFolder', 'Update')
+        SKIN:Bang('!UpdateMeasure', 'MeasureSettingsMinecraftSkinPlayerFolder')
+        return true
+    end
+
+    function methods.markMinecraftSkinPlayerFolderSizeDirty()
+        state.minecraftSkinPlayerFolderSizeNeedsRefresh = true
+        if state.minecraftSkinPlayerFolderSizePending == true then
+            state.minecraftSkinPlayerFolderSizeRescanRequested = true
+            return false
+        end
+        if minecraftSkinPlayerFolderSizeViewIsVisible() then
+            return methods.requestMinecraftSkinPlayerFolderSize()
+        end
+        return true
+    end
+
+    function methods.syncMinecraftSkinPlayerFolderSizeView()
+        local visible = minecraftSkinPlayerFolderSizeViewIsVisible()
+        if not visible then
+            state.minecraftSkinPlayerFolderSizeViewActive = false
+            return false
+        end
+        if state.minecraftSkinPlayerFolderSizeViewActive ~= true then
+            state.minecraftSkinPlayerFolderSizeViewActive = true
+            state.minecraftSkinPlayerFolderSizeNeedsRefresh = true
+        end
+        if state.minecraftSkinPlayerFolderSizeNeedsRefresh == true
+            and state.minecraftSkinPlayerFolderSizePending ~= true then
+            return methods.requestMinecraftSkinPlayerFolderSize()
+        end
+        return false
+    end
+
+    function methods.CaptureMinecraftSkinPlayerFolderSize()
+        if state.minecraftSkinPlayerFolderSizePending ~= true then
+            return false
+        end
+        local measure = SKIN:GetMeasure('MeasureSettingsMinecraftSkinPlayerFolderSize')
+        local bytes = measure and tonumber(measure:GetValue()) or nil
+        if bytes ~= nil then
+            state.minecraftSkinPlayerFolderSizeBytes = math.max(0, math.floor(bytes + 0.5))
+        end
+        state.minecraftSkinPlayerFolderSizePending = false
+        local rescanRequested = state.minecraftSkinPlayerFolderSizeRescanRequested == true
+        state.minecraftSkinPlayerFolderSizeRescanRequested = false
+        state.minecraftSkinPlayerFolderSizeNeedsRefresh = rescanRequested
+        if minecraftSkinPlayerFolderSizeViewIsVisible() and methods.renderActivePage then
+            methods.renderActivePage()
+        end
+        return bytes ~= nil
+    end
+
     function methods.applyMinecraftSkinFetchResult(result)
 
         local canonicalField = methods.getField('minecraftSkinUsername')
@@ -28,6 +127,19 @@ return function(app)
             else
                 resolvedModel = 'wide'
             end
+        end
+        local atlasState = nil
+        if status == 'OK' and methods.prepareMinecraftSkinAtlasState then
+            atlasState = methods.prepareMinecraftSkinAtlasState({
+                username = result and result.username or '',
+                imagePath = resolvedImagePath,
+                texturePath = resolvedTexturePath,
+                model = resolvedModel,
+                cacheKey = result and result.cacheKey or '',
+                atlasPath = result and result.atlasPath or '',
+                atlasReady = result and result.atlasReady or '',
+                atlasRequired = result and result.atlasRequired or '',
+            })
         end
 
         methods.appendMinecraftSkinDebugLog('applyMinecraftSkinFetchResult status=' .. tostring(status) .. ' username=' .. tostring(result and result.username or '') .. ' imagePath=' .. tostring(resolvedImagePath) .. ' texturePath=' .. tostring(resolvedTexturePath) .. ' model=' .. tostring(resolvedModel) .. ' message=' .. tostring(result and result.message or ''))
@@ -53,11 +165,22 @@ return function(app)
 
             if methods.syncInventoryPlayerSkinLiveState then
 
-                methods.syncInventoryPlayerSkinLiveState(result.username, resolvedImagePath, targetSet, { verified = true })
+                methods.syncInventoryPlayerSkinLiveState(result.username, resolvedImagePath, targetSet, {
+                    verified = true,
+                    texturePath = resolvedTexturePath,
+                    model = resolvedModel,
+                    atlasPath = atlasState and atlasState.path or '',
+                    atlasVerified = atlasState and atlasState.ready or false,
+                    atlasManaged = atlasState ~= nil,
+                })
 
             end
 
             methods.refreshTargets(targetSet)
+
+            if methods.markMinecraftSkinPlayerFolderSizeDirty then
+                methods.markMinecraftSkinPlayerFolderSizeDirty()
+            end
 
             methods.rememberMinecraftSkinHistory(result.username)
 
@@ -71,6 +194,14 @@ return function(app)
 
             end
 
+            if atlasState and atlasState.required and methods.beginMinecraftSkinAtlasStage then
+                return methods.beginMinecraftSkinAtlasStage(atlasState)
+            end
+            if atlasState and atlasState.bodyOnly and methods.showMinecraftSkinBodyOnlyNotice then
+                methods.showMinecraftSkinBodyOnlyNotice()
+            end
+            return false
+
         elseif status == 'RESET' and canonicalField then
 
             local targetSet = {}
@@ -81,10 +212,18 @@ return function(app)
 
             methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinImagePathVerified', '0')
             methods.writeIniVariable(methods.settingsFilePath('Support'), 'MinecraftSkinTexturePath', '')
+            if methods.persistMinecraftSkinAtlasState then
+                methods.persistMinecraftSkinAtlasState('', false, false)
+            end
 
             if methods.syncInventoryPlayerSkinLiveState then
 
-                methods.syncInventoryPlayerSkinLiveState('', '', targetSet)
+                methods.syncInventoryPlayerSkinLiveState('', '', targetSet, {
+                    texturePath = '',
+                    atlasPath = '',
+                    atlasVerified = false,
+                    atlasManaged = false,
+                })
 
             end
 
@@ -99,6 +238,8 @@ return function(app)
                 })
 
             end
+
+            return false
 
         else
 
@@ -127,6 +268,8 @@ return function(app)
 
         end
 
+        return false
+
     end
 
     function methods.applyMinecraftSkinFileAttachResult(result)
@@ -143,25 +286,29 @@ return function(app)
 
         if status == 'CANCEL' then
             logNotice('Minecraft skin file attachment canceled.')
-            return
+            return false
         end
 
         if status == 'OK' and imagePath ~= '' then
             if username == '' then
                 username = 'A'
             end
-            methods.applyMinecraftSkinFetchResult({
+            local atlasScheduled = methods.applyMinecraftSkinFetchResult({
                 status = 'OK',
                 username = username,
                 imagePath = imagePath,
                 texturePath = texturePath,
                 model = model,
+                cacheKey = result.cacheKey,
+                atlasPath = result.atlasPath,
+                atlasReady = result.atlasReady,
+                atlasRequired = result.atlasRequired,
                 message = '',
             })
             if methods.syncMinecraftSkinDraft then
                 methods.syncMinecraftSkinDraft('')
             end
-            return
+            return atlasScheduled == true
         end
 
         if message == '' then
@@ -177,6 +324,7 @@ return function(app)
                 logPath
             )
         end
+        return false
     end
 
     function methods.restorePendingMinecraftSkinModelSelection()
@@ -217,20 +365,23 @@ return function(app)
         methods.appendMinecraftSkinDebugLog('applyMinecraftSkinTextureRenderResult status=' .. tostring(status) .. ' username=' .. tostring(username) .. ' imagePath=' .. tostring(imagePath) .. ' texturePath=' .. tostring(texturePath) .. ' model=' .. tostring(model) .. ' message=' .. tostring(message) .. ' logPath=' .. tostring(logPath))
 
         if status == 'OK' and imagePath ~= '' then
-            methods.applyMinecraftSkinFetchResult({
+            local atlasScheduled = methods.applyMinecraftSkinFetchResult({
                 status = 'OK',
                 username = username,
                 imagePath = imagePath,
                 texturePath = texturePath,
                 model = model,
+                cacheKey = result.cacheKey,
+                atlasPath = result.atlasPath,
+                atlasReady = result.atlasReady,
+                atlasRequired = result.atlasRequired,
                 message = '',
             })
             if methods.syncMinecraftSkinDraft then
                 methods.syncMinecraftSkinDraft(username)
             end
-            return
+            return atlasScheduled == true
         end
-
         if message == '' then
             message = methods.localize('ModalAlert_MinecraftSkinFileInvalid', 'Attach a correct 64x64 PNG Minecraft skin texture.')
         end
@@ -248,5 +399,6 @@ return function(app)
                 logPath
             )
         end
+        return false
     end
 end

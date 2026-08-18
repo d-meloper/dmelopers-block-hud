@@ -1,7 +1,7 @@
 return {
 trackedFieldKeys = {
 
-        'muteSound', 'hideHintTooltip', 'itemCountTextFontSize', 'language', 'startupAutoRun', 'lowSpecFreezeInventoryPlayerAnimation', 'lowSpecDisableSlotHoverHighlight', 'lowSpecDisableHoverTextTooltip', 'hotbarSlotSize', 'hotbarItemOffset', 'hotbarTextYOffset', 'hotbarTextFontSize', 'hotbarTextColor', 'hotbarEnabled', 'hotbarDraggable', 'hotbarDragSnap',
+        'muteSound', 'hideHintTooltip', 'itemCountTextFontSize', 'language', 'hudMirrorModeEnabled', 'startupAutoRun', 'startupFastAutoRun', 'lowSpecFreezeInventoryPlayerAnimation', 'lowSpecDisableSlotHoverHighlight', 'lowSpecDisableHoverTextTooltip', 'hotbarSlotSize', 'hotbarItemOffset', 'hotbarTextYOffset', 'hotbarTextFontSize', 'hotbarTextColor', 'hotbarEnabled', 'hotbarDraggable', 'hotbarDragSnap',
 
         'healthSource', 'armorSource', 'foodSource', 'airSource', 'expSource', 'expLevel', 'expLevelGap', 'indicatorBarScalePercent', 'indicatorsDraggable', 'indicatorsDragSnap',
 
@@ -9,9 +9,9 @@ trackedFieldKeys = {
 
         'inventoryItemSize', 'inventoryTooltipSize', 'inventoryBottomRow', 'minecraftSkinUsername', 'minecraftSkinModel', 'inventoryEnabled', 'inventoryDraggable', 'inventoryDragSnap', 'inventoryRefreshPositionLock',
 
-        'clockType', 'clockSpriteSize', 'clock24Hour', 'clockHideMeridiem', 'clockTimeSize', 'clockDateSize', 'clockTextColor', 'clockTextGap', 'clockEnabled', 'clockDraggable', 'clockDragSnap',
+        'clockType', 'clockSpriteSize', 'clock24Hour', 'clockHideMeridiem', 'clockTimeSize', 'clockDateSize', 'clockTextGap', 'clockTextColor', 'clockTextWeight', 'clockTextBorderSize', 'clockTextBorderColor', 'clockTextShadowYOffset', 'clockTextShadowColor', 'clockTextShadowBlur', 'clockTextShadowOpacity', 'clockEnabled', 'clockDraggable', 'clockDragSnap',
 
-        'jukeboxEnabled', 'jukebox2DMode', 'jukeboxDisableNoteAnimation', 'jukeboxPlaybackSourceMode', 'jukeboxDraggable', 'jukeboxDragSnap', 'herobrineEnabled',
+        'jukeboxEnabled', 'jukebox2DMode', 'jukeboxDisableNoteAnimation', 'jukeboxAutoCloseExternalPlayPause', 'jukeboxPlaybackSourceMode', 'jukeboxDraggable', 'jukeboxDragSnap', 'herobrineEnabled',
 
         'baseFont', 'settingsTheme', 'hideUsageGuide', 'hideSkinFolderButton', 'hideEditButton', 'hideSettingsButton', 'hideSteve',
 

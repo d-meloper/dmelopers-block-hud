@@ -34,6 +34,7 @@ function Get-LatestUpdateInstallResult {
     $parameters = [ordered]@{
         CurrentTargetRoot = $script:ResolvedRoot
         PackagePath = $stagingPath
+        ExpectedPackageSha256 = [string]$script:Intent.ExpectedPackageSha256
         ExpectedVersion = [string]$script:Intent.ExpectedVersion
         ExpectedReleaseVariant = [string]$script:Intent.ReleaseVariant
         LatestUpdateLaunchToken = $LaunchToken
@@ -55,6 +56,7 @@ function Get-LatestUpdateInstallResult {
     return $result[0]
 }
 
+# DMEL_COMPAT:update.unscoped-decision-transport
 function Wait-LatestUpdateCompatibilityDecision {
     while ($true) {
         $decisionPath = Get-LatestUpdateDecisionPath -Root $script:ResolvedRoot
@@ -123,7 +125,7 @@ try {
 
     [void](Save-LatestUpdateState -Root $script:ResolvedRoot -Intent $script:Intent -Status 'installing' -SessionPid $PID -Message 'Installing the downloaded update.' -LogPath (Get-LatestUpdateLogPath -Root $script:ResolvedRoot))
     $result = Get-LatestUpdateInstallResult
-    $status = ([string]$result.DMEL_STATUS).ToUpperInvariant()
+    $status = Assert-LatestUpdateInstallResultContract -Result $result
     $approvedRepairPlanId = ''
     while ($status -eq 'WARN') {
         $compatibility = ([string](Get-LatestUpdateObjectProperty -Object $result -Name 'DMEL_COMPATIBILITY' -DefaultValue '')).ToUpperInvariant()
@@ -202,7 +204,7 @@ try {
         $result = Get-LatestUpdateInstallResult `
             -AllowCompatibilityWarning `
             -ExpectedRepairPlanId $approvedRepairPlanId
-        $status = ([string]$result.DMEL_STATUS).ToUpperInvariant()
+        $status = Assert-LatestUpdateInstallResultContract -Result $result
     }
     if ($status -notin @('OK', 'NOOP')) {
         $detail = [string]$result.DMEL_MESSAGE
