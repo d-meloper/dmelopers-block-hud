@@ -144,37 +144,56 @@ jobs:
             }
           }
 
-          $forbiddenExact = @(
+          $forbiddenPathPatterns = @(
             'AGENTS.md',
             'CODEX_GUIDE.md',
             'ImplementationChecklist.md',
+            'docs/*',
+            'DistDatas/*',
+            'BestPractice/*',
+            'CodexDocs/*',
+            'PublicGitHub/*',
+            'Tests/*',
+            'ThirdParty/*',
+            '_Development/*',
+            'dist/*',
+            'rainmeter-upstream/*',
+            'tools/*',
+            '.agents/*',
+            '.codex/*',
+            '.githooks/*',
+            '.vscode/*',
+            'MigrationBackup/*',
+            'MigrationBackup_*/*',
+            'Logs/*',
+            'temp/*',
+            'VersionManagerExports/*',
+            '@Resources/Customs/Data/EditorFavoritesCatalog.txt',
+            '@Resources/Customs/Data/EditorProgramPickerCache.txt',
+            '@Resources/Customs/Data/*Ready_*.json',
+            '@Resources/Customs/Data/.LatestUpdate*.tmp*',
             '@Resources/Customs/Data/MinecraftSkinHistory.txt',
+            '@Resources/Customs/Data/MinecraftSkinFetchState.txt',
             '@Resources/Customs/Data/ProgramActionLabels.txt',
+            '@Resources/Customs/Data/JukeboxDiscSlots.json',
+            '@Resources/Customs/Data/LatestUpdateDecision.json',
+            '@Resources/Customs/Data/LatestUpdateIntent.json',
+            '@Resources/Customs/Data/LatestUpdateState.json',
+            '@Resources/Customs/Data/VersionImportProgress_*.json*',
+            '@Resources/Customs/Data/.VersionImportProgress_*.*.tmp*',
+            '@Resources/Customs/Data/MinecraftSkinAtlasProgress_*',
             '@Resources/Customs/Data/VersionManagerLaunchState.json',
             '@Resources/Customs/Data/VersionManagerSources.json',
             '@Resources/Customs/Data/VersionManagerUpdateCache.json',
-            '@Resources/Customs/Data/VersionManagerZPosBootstrap.state'
-          )
-          $forbiddenPrefixes = @(
-            'docs/',
-            'DistDatas/',
-            '.codex/',
-            '.githooks/',
-            '.vscode/',
-            'MigrationBackup/',
-            'Logs/',
-            'temp/',
-            'VersionManagerExports/',
-            '@Resources/Customs/Images/Data/',
-            '@Resources/Customs/Data/VersionManagerDownloads/'
+            '@Resources/Customs/Data/VersionManagerDownloads',
+            '@Resources/Customs/Data/VersionManagerDownloads/*',
+            '@Resources/Customs/Data/VersionManagerZPosBootstrap.state',
+            '@Resources/Customs/Images/Player/*'
           )
 
           foreach ($path in $paths) {
-            if ($forbiddenExact -contains $path) {
-              throw "Forbidden source-only path found in public branch: $path"
-            }
-            foreach ($prefix in $forbiddenPrefixes) {
-              if ($path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            foreach ($pattern in $forbiddenPathPatterns) {
+              if ($path -like $pattern) {
                 throw "Forbidden source-only path found in public branch: $path"
               }
             }
@@ -183,13 +202,36 @@ jobs:
             }
           }
 
-          $textExtensions = @('.ini', '.inc', '.lua', '.ps1', '.cmd', '.txt', '.json', '.md', '.yml', '.yaml')
-          $secretPatterns = @(
-            '(?i)[A-Z]:\\Users\\[^\\\r\n]+\\',
-            '(?i)[A-Z]:\\Documents and Settings\\[^\\\r\n]+\\',
-            '(?i)\bgithub_pat_[A-Za-z0-9_]{20,}\b',
-            '(?i)\bgh[pousr]_[A-Za-z0-9_]{20,}\b',
-            '(?i)\bsk-[A-Za-z0-9]{20,}\b'
+          $textExtensions = @('', '.ini', '.inc', '.lua', '.ps1', '.cmd', '.txt', '.json', '.md', '.yml', '.yaml', '.env', '.key', '.pem')
+          $secretRules = @(
+            @{
+              Name = 'user-profile'
+              Pattern = '(?i)[A-Z]:\\Users\\[^\\\r\n]+\\'
+            },
+            @{
+              Name = 'legacy-user-profile'
+              Pattern = '(?i)[A-Z]:\\Documents and Settings\\[^\\\r\n]+\\'
+            },
+            @{
+              Name = 'github-pat'
+              Pattern = '(?i)\bgithub_pat_[A-Za-z0-9_]{20,}\b'
+            },
+            @{
+              Name = 'github-classic-pat'
+              Pattern = '(?i)\bgh[pousr]_[A-Za-z0-9_]{20,}\b'
+            },
+            @{
+              Name = 'openai-key'
+              Pattern = '(?i)(?<![A-Za-z0-9_-])sk-(?:(?:proj|svcacct)-)?[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])'
+            },
+            @{
+              Name = 'openai-api-key-assignment'
+              Pattern = '(?im)^\s*(?:export\s+|\$env:)?[''"]?OPENAI_API_KEY[''"]?\s*[:=]\s*[''"]?(?!(?:your(?:[_-](?:openai|api|key|here))+|replace(?:[_-]?me)?|placeholder|redacted|example|dummy|test|none|null|<[^>\r\n]+>|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)(?:[''"]?\s*,?\s*(?:#.*)?$))(?<value>[A-Za-z0-9_./+=:-]{16,})[''"]?\s*,?\s*(?:#.*)?$'
+            },
+            @{
+              Name = 'pem-private-key'
+              Pattern = '(?s)-----BEGIN (?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED) )?PRIVATE KEY-----[ \t]*\r?\n(?:[A-Za-z0-9+/]{16,}={0,2}[ \t]*\r?\n){2,}-----END (?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED) )?PRIVATE KEY-----'
+            }
           )
 
           $files = @(Get-ChildItem -LiteralPath $root -Force -Recurse -File | Where-Object {
@@ -199,9 +241,9 @@ jobs:
           foreach ($file in $files) {
             $relative = $file.FullName.Substring($root.Length).TrimStart('\', '/') -replace '\\', '/'
             $content = Get-Content -LiteralPath $file.FullName -Raw
-            foreach ($pattern in $secretPatterns) {
-              if ($content -match $pattern) {
-                throw "Forbidden private path or token-like content found in public branch file: $relative"
+            foreach ($rule in $secretRules) {
+              if ($content -match ([string]$rule.Pattern)) {
+                throw "Forbidden content leak detected in public branch ($($rule.Name)) at $relative."
               }
             }
           }
