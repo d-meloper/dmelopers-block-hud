@@ -1,7 +1,7 @@
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 $skinLayoutCommonPath = Join-Path $PSScriptRoot 'SkinLayout.Common.ps1'
-if (-not (Get-Command Resolve-BlockHudSkinRoot -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $skinLayoutCommonPath -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath 'Function:\Resolve-BlockHudSkinRoot') -and (Test-Path -LiteralPath $skinLayoutCommonPath -PathType Leaf)) {
     . $skinLayoutCommonPath
 }
 $utf16LeBom = New-Object System.Text.UnicodeEncoding($false, $true)
@@ -151,7 +151,7 @@ function Get-LocalizationSkinRoot {
         $ScriptRoot = $PSScriptRoot
     }
 
-    if (Get-Command Resolve-BlockHudSkinRoot -ErrorAction SilentlyContinue) {
+    if (Test-Path -LiteralPath 'Function:\Resolve-BlockHudSkinRoot') {
         return Resolve-BlockHudSkinRoot -StartPath $ScriptRoot
     }
 

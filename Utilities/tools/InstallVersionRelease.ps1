@@ -33,6 +33,7 @@ catch {
 
 . (Join-Path $PSScriptRoot 'Localization.Common.ps1')
 . (Join-Path $PSScriptRoot 'VersionManager.ReleaseIdentity.ps1')
+. (Join-Path $PSScriptRoot 'LatestUpdate.Common.ps1')
 
 $script:LogMessages = New-Object System.Collections.Generic.List[string]
 $script:LogPath = Get-BlockHudCanonicalLogPath -ScriptRoot $PSScriptRoot
@@ -46,6 +47,9 @@ $script:DestinationReplacementBackupRoot = ''
 $script:ImportStarted = $false
 $script:SwitchSucceeded = $false
 $script:ExtractRoot = ''
+$script:CancellationObserved = $false
+$script:CancellationRollbackFailed = $false
+$script:CancellationRollbackMessage = ''
 $script:ResultPairs = [ordered]@{
     DMEL_STATUS = ''
     DMEL_SOURCEPATH = ''
@@ -65,6 +69,23 @@ function T {
     )
 
     Get-LocalizedText -Table $script:LocTable -Key $Key -Fallback $Fallback
+}
+
+function Test-LatestUpdateInstallCancellationRequested {
+    if ([string]::IsNullOrWhiteSpace($LatestUpdateLaunchToken) -or
+        [string]::IsNullOrWhiteSpace($ProgressOwnerRoot)) {
+        return $false
+    }
+    return [string]::Equals(
+        (Read-LatestUpdateCancellation -Root $ProgressOwnerRoot -LaunchToken $LatestUpdateLaunchToken),
+        'cancel',
+        [System.StringComparison]::Ordinal)
+}
+
+function Assert-LatestUpdateInstallNotCancelled {
+    if (-not (Test-LatestUpdateInstallCancellationRequested)) { return }
+    $script:CancellationObserved = $true
+    throw (New-Object System.OperationCanceledException 'Latest update was canceled by the user.')
 }
 
 function TF {
@@ -658,11 +679,56 @@ function Get-ReleasePackageIdentity {
     $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
-        return (($sha256.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) -join '')
+        $buffer = New-Object byte[] (1024 * 1024)
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            Assert-LatestUpdateInstallNotCancelled
+            [void]$sha256.TransformBlock($buffer, 0, $read, $buffer, 0)
+        }
+        [void]$sha256.TransformFinalBlock((New-Object byte[] 0), 0, 0)
+        return (($sha256.Hash | ForEach-Object { $_.ToString('x2') }) -join '')
     }
     finally {
         $sha256.Dispose()
         $stream.Dispose()
+    }
+}
+
+function Invoke-CancelablePowerShellCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Parameters,
+        [Parameter(Mandatory = $true)][string]$Operation
+    )
+
+    Assert-LatestUpdateInstallNotCancelled
+    $pipeline = [PowerShell]::Create()
+    $asyncResult = $null
+    try {
+        [void]$pipeline.AddCommand($Command)
+        foreach ($entry in $Parameters.GetEnumerator()) {
+            if ($entry.Value -is [bool] -and [bool]$entry.Value) {
+                [void]$pipeline.AddParameter([string]$entry.Key)
+            }
+            else {
+                [void]$pipeline.AddParameter([string]$entry.Key, $entry.Value)
+            }
+        }
+        $asyncResult = $pipeline.BeginInvoke()
+        while (-not $asyncResult.IsCompleted) {
+            Assert-LatestUpdateInstallNotCancelled
+            Start-Sleep -Milliseconds 100
+        }
+        [void]$pipeline.EndInvoke($asyncResult)
+        if ($pipeline.HadErrors) {
+            $detail = @($pipeline.Streams.Error | ForEach-Object { [string]$_ }) -join ' | '
+            throw ("{0} failed: {1}" -f $Operation, $detail)
+        }
+    }
+    finally {
+        if ($null -ne $asyncResult -and -not $asyncResult.IsCompleted) {
+            try { $pipeline.Stop() } catch { }
+        }
+        $pipeline.Dispose()
     }
 }
 
@@ -699,7 +765,16 @@ function Copy-PackageToDestination {
     }
 
     Ensure-Directory -Path $parent
-    Copy-Item -LiteralPath $PackageRoot -Destination $DestinationRoot -Recurse -Force
+    Invoke-CancelablePowerShellCommand `
+        -Command 'Copy-Item' `
+        -Parameters ([ordered]@{
+            LiteralPath = $PackageRoot
+            Destination = $DestinationRoot
+            Recurse = $true
+            Force = $true
+            ErrorAction = 'Stop'
+        }) `
+        -Operation 'release package copy'
 }
 
 function Move-ExistingDestinationForReplacement {
@@ -742,6 +817,49 @@ function Remove-RootBestEffort {
     catch {
         Write-Log ("Best-effort cleanup failed for {0}: {1}" -f $Root, $_.Exception.Message) 'WARN'
     }
+}
+
+function Remove-RootStrict {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Reason
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Root) -or -not (Test-Path -LiteralPath $Root)) {
+        return
+    }
+    Write-Log ("Removing destination root after {0}: {1}" -f $Reason, $Root) 'WARN'
+    Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction Stop
+    if (Test-Path -LiteralPath $Root) {
+        throw "Destination rollback did not remove the root: $Root"
+    }
+}
+
+function Write-MousePluginUpdateCancellationMarker {
+    param([Parameter(Mandatory = $true)][string]$DestinationRoot)
+
+    $dataRoot = Join-Path $DestinationRoot '@Resources\Customs\Data'
+    $pendingPath = Join-Path $dataRoot 'MousePluginUpdatePending.json'
+    if (-not (Test-Path -LiteralPath $pendingPath -PathType Leaf)) {
+        return
+    }
+    $markerPath = Join-Path $dataRoot 'MousePluginUpdateCancelled.inc'
+    $temporaryPath = $markerPath + '.' + $PID + '.tmp'
+    try {
+        [System.IO.File]::WriteAllText($temporaryPath, "[Variables]`r`nCancelled=1`r`n", [System.Text.Encoding]::Unicode)
+        Move-Item -LiteralPath $temporaryPath -Destination $markerPath -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) {
+            Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+    $markerBytes = [System.IO.File]::ReadAllBytes($markerPath)
+    if ($markerBytes.Length -lt 2 -or $markerBytes[0] -ne 0xFF -or $markerBytes[1] -ne 0xFE -or
+        -not ([System.Text.Encoding]::Unicode.GetString($markerBytes, 2, $markerBytes.Length - 2) -match '(?m)^Cancelled=1\s*$')) {
+        throw 'Mouse plugin cancellation marker was not committed with the expected UTF-16 state.'
+    }
+    Write-Log ("Mouse plugin handoff canceled before reverse switch: {0}" -f $markerPath) 'WARN'
 }
 
 function Remove-ExtractRootBestEffort {
@@ -794,9 +912,13 @@ function Restore-DestinationReplacement {
 
     Write-Log ("Restoring previous destination after {0}: {1}" -f $Reason, $DestinationRoot) 'WARN'
     if (Test-Path -LiteralPath $DestinationRoot) {
-        Remove-Item -LiteralPath $DestinationRoot -Recurse -Force -ErrorAction Stop
+        Remove-RootStrict -Root $DestinationRoot -Reason $Reason
     }
     Move-Item -LiteralPath $script:DestinationReplacementBackupRoot -Destination $DestinationRoot -Force -ErrorAction Stop
+    if (-not (Test-Path -LiteralPath $DestinationRoot -PathType Container) -or
+        (Test-Path -LiteralPath $script:DestinationReplacementBackupRoot)) {
+        throw "Previous destination rollback could not be verified: $DestinationRoot"
+    }
     $script:DestinationReplacementBackupRoot = ''
     $script:DestinationCreated = $false
 }
@@ -807,13 +929,19 @@ function Undo-DestinationInstallAttempt {
         [Parameter(Mandatory = $true)][string]$Reason
     )
 
+    if ($script:SwitchSucceeded) {
+        Write-Log ("Preserving destination because it may still be the active root: {0}" -f $DestinationRoot) 'ERROR'
+        return
+    }
+
     if (-not [string]::IsNullOrWhiteSpace($script:DestinationReplacementBackupRoot)) {
         Restore-DestinationReplacement -DestinationRoot $DestinationRoot -Reason $Reason
         return
     }
 
     if ($script:DestinationCreated -and -not $script:SwitchSucceeded) {
-        Remove-RootBestEffort -Root $DestinationRoot -Reason $Reason
+        Remove-RootStrict -Root $DestinationRoot -Reason $Reason
+        $script:DestinationCreated = $false
     }
 }
 
@@ -859,9 +987,13 @@ function Invoke-HelperScript {
     param(
         [Parameter(Mandatory = $true)][string]$ScriptPath,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [Parameter(Mandatory = $true)][string]$Operation
+        [Parameter(Mandatory = $true)][string]$Operation,
+        [switch]$DeferCancellation
     )
 
+    if (-not $DeferCancellation) {
+        Assert-LatestUpdateInstallNotCancelled
+    }
     Write-Log ("Starting {0}: {1}" -f $Operation, $ScriptPath)
     $output = @()
     $exitCode = $null
@@ -884,6 +1016,7 @@ function Invoke-HelperScript {
         $parameterMap['PassThruResultObject'] = $true
 
         $pipeline = [PowerShell]::Create()
+        $asyncResult = $null
         try {
             [void]$pipeline.AddCommand($ScriptPath)
             foreach ($entry in $parameterMap.GetEnumerator()) {
@@ -894,7 +1027,14 @@ function Invoke-HelperScript {
                     [void]$pipeline.AddParameter([string]$entry.Key, $entry.Value)
                 }
             }
-            $output = @($pipeline.Invoke())
+            $asyncResult = $pipeline.BeginInvoke()
+            while (-not $asyncResult.IsCompleted) {
+                if (-not $DeferCancellation) {
+                    Assert-LatestUpdateInstallNotCancelled
+                }
+                Start-Sleep -Milliseconds 100
+            }
+            $output = @($pipeline.EndInvoke($asyncResult))
             $resultObject = @($output | Where-Object { $null -ne $_.PSObject.Properties['DMEL_STATUS'] } | Select-Object -Last 1)
             if ($resultObject.Count -gt 0) {
                 foreach ($property in $resultObject[0].PSObject.Properties) {
@@ -909,12 +1049,16 @@ function Invoke-HelperScript {
             $exitCode = if ($pipeline.HadErrors) { 1 } else { 0 }
         }
         finally {
+            if ($null -ne $asyncResult -and -not $asyncResult.IsCompleted) {
+                try { $pipeline.Stop() } catch { }
+            }
             $pipeline.Dispose()
         }
     }
     else {
         Write-Log ("{0} uses the legacy external-process compatibility path." -f $Operation) 'WARN'
         $output = @(& (Get-InstallRuntimePowerShellPath) -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments 2>&1)
+        Assert-LatestUpdateInstallNotCancelled
         $exitCode = $LASTEXITCODE
         $pairs = Convert-OutputToResultPairs -Output $output
     }
@@ -1140,6 +1284,31 @@ function Resolve-SwitchScript {
     throw 'SwitchActiveSkinVersion.ps1 was not found in the selected or current root.'
 }
 
+function Restore-PreviousActiveVersionAfterCancellation {
+    param(
+        [Parameter(Mandatory = $true)][string]$SelectedRoot,
+        [Parameter(Mandatory = $true)][string]$CurrentRoot,
+        [Parameter(Mandatory = $true)][string]$SwitchScript
+    )
+
+    try {
+        Write-MousePluginUpdateCancellationMarker -DestinationRoot $SelectedRoot
+        $rollbackResult = Invoke-HelperScript `
+            -ScriptPath $SwitchScript `
+            -Arguments @('-CurrentTargetRoot', $SelectedRoot, '-SelectedTargetRoot', $CurrentRoot, '-EmitResultPairs') `
+            -Operation 'canceled active version rollback' `
+            -DeferCancellation
+        Assert-HelperOk -Result $rollbackResult -Operation 'Canceled active version rollback'
+        $script:SwitchSucceeded = $false
+    }
+    catch {
+        $script:CancellationRollbackFailed = $true
+        $script:CancellationRollbackMessage = 'Cancellation was requested, but the previous active installation could not be restored: ' + [string]$_.Exception.Message
+        Write-Log $script:CancellationRollbackMessage 'ERROR'
+        throw $script:CancellationRollbackMessage
+    }
+}
+
 function Invoke-VersionSwitch {
     param(
         [Parameter(Mandatory = $true)][string]$SelectedRoot,
@@ -1148,9 +1317,16 @@ function Invoke-VersionSwitch {
 
     $switchScript = Resolve-SwitchScript -PreferredRoot $SelectedRoot -CurrentRoot $CurrentRoot
     $arguments = @('-CurrentTargetRoot', $CurrentRoot, '-SelectedTargetRoot', $SelectedRoot, '-EmitResultPairs')
-    $result = Invoke-HelperScript -ScriptPath $switchScript -Arguments $arguments -Operation 'active version switch'
+    Assert-LatestUpdateInstallNotCancelled
+    $result = Invoke-HelperScript -ScriptPath $switchScript -Arguments $arguments -Operation 'active version switch' -DeferCancellation
     Assert-HelperOk -Result $result -Operation 'Active version switch'
     $script:SwitchSucceeded = $true
+    if (Test-LatestUpdateInstallCancellationRequested) {
+        $script:CancellationObserved = $true
+        Write-Log 'Cancellation arrived during active version switch; restoring the previous active root.' 'WARN'
+        Restore-PreviousActiveVersionAfterCancellation -SelectedRoot $SelectedRoot -CurrentRoot $CurrentRoot -SwitchScript $switchScript
+        throw (New-Object System.OperationCanceledException 'Latest update was canceled during active version switching.')
+    }
     return $result
 }
 
@@ -1244,6 +1420,7 @@ function Invoke-PackageInstall {
         [Parameter(Mandatory = $true)][string]$SkinsRoot
     )
 
+    Assert-LatestUpdateInstallNotCancelled
     $expectedPackageIdentity = Resolve-ExpectedPackageSha256
     $resolvedPackagePath = Resolve-ReleasePackagePath -CurrentRoot $ResolvedCurrentRoot
     $packageIdentity = Get-ReleasePackageIdentity -Path $resolvedPackagePath
@@ -1263,7 +1440,16 @@ function Invoke-PackageInstall {
     $script:ExtractRoot = $extractRoot
     Assert-BlockHudZipPackageSafeToExtract -PackagePath $resolvedPackagePath -ExtractRoot $extractRoot
     Ensure-Directory -Path $extractRoot
-    Expand-Archive -LiteralPath $resolvedPackagePath -DestinationPath $extractRoot -Force
+    Invoke-CancelablePowerShellCommand `
+        -Command 'Expand-Archive' `
+        -Parameters ([ordered]@{
+            LiteralPath = $resolvedPackagePath
+            DestinationPath = $extractRoot
+            Force = $true
+            ErrorAction = 'Stop'
+        }) `
+        -Operation 'release package extraction'
+    Assert-LatestUpdateInstallNotCancelled
     $packageRoot = Resolve-PackageRoot -ExtractRoot $extractRoot
 
     $packageMetadata = Get-SkinMetadata -Root $packageRoot
@@ -1304,6 +1490,7 @@ function Invoke-PackageInstall {
     }
 
     $validationResult = Invoke-ImportValidation -ImportScript $packageImportScript -TargetRoot $packageRoot -SourceRoot $ResolvedCurrentRoot -PackageIdentity $packageIdentity
+    Assert-LatestUpdateInstallNotCancelled
     $compatibility = Get-ValidatedCompatibilityStatus -Result $validationResult
     $validationResult.Compatibility = $compatibility
     Copy-CompatibilityResultPairs -Result $validationResult
@@ -1364,9 +1551,11 @@ function Invoke-PackageInstall {
     }
 
     try {
+        Assert-LatestUpdateInstallNotCancelled
         Move-ExistingDestinationForReplacement -DestinationRoot $destinationRoot -CurrentRoot $ResolvedCurrentRoot
         Copy-PackageToDestination -PackageRoot $packageRoot -DestinationRoot $destinationRoot
         $script:DestinationCreated = $true
+        Assert-LatestUpdateInstallNotCancelled
         Use-CanonicalHelperLogPath -Root $destinationRoot -Prefix 'InstallVersionRelease'
 
         $installedImportScript = Get-BlockHudRuntimeToolPath -Root $destinationRoot -RelativeToolPath 'ImportFromOldVersion.ps1'
@@ -1375,15 +1564,15 @@ function Invoke-PackageInstall {
         }
         Invoke-RealImport -ImportScript $installedImportScript -TargetRoot $destinationRoot -SourceRoot $ResolvedCurrentRoot -PackageIdentity $packageIdentity -RepairPlanId $repairPlanId -ImportProgressOwnerRoot $ProgressOwnerRoot -ImportProgressToken $ProgressToken
 
+        Assert-LatestUpdateInstallNotCancelled
         Publish-LatestUpdateSwitchingState -CurrentRoot $ResolvedCurrentRoot
         Invoke-InstalledRootRefresh -Root $destinationRoot
+        Assert-LatestUpdateInstallNotCancelled
         Invoke-VersionSwitch -SelectedRoot $destinationRoot -CurrentRoot $ResolvedCurrentRoot | Out-Null
         Complete-DestinationReplacement -DestinationRoot $destinationRoot
     }
     catch {
-        $failureMessage = $_.Exception.Message
-        Undo-DestinationInstallAttempt -DestinationRoot $destinationRoot -Reason 'failed release install'
-        throw $failureMessage
+        throw
     }
 
     Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'OK'
@@ -1446,14 +1635,37 @@ try {
     Invoke-InstallVersionRelease
 }
 catch {
-    $friendlyMessage = Get-FriendlyInstallErrorMessage -RawMessage ([string]$_.Exception.Message)
+    $failureRecord = $_
+    $rawMessage = [string]$_.Exception.Message
+    $rollbackFailureMessage = ''
     if (($script:DestinationCreated -or -not [string]::IsNullOrWhiteSpace($script:DestinationReplacementBackupRoot)) -and -not [string]::IsNullOrWhiteSpace($script:ResolvedDestinationRoot)) {
-        Undo-DestinationInstallAttempt -DestinationRoot $script:ResolvedDestinationRoot -Reason 'error rollback'
+        try {
+            Undo-DestinationInstallAttempt `
+                -DestinationRoot $script:ResolvedDestinationRoot `
+                -Reason $(if ($script:CancellationObserved) { 'canceled release install' } else { 'error rollback' })
+        }
+        catch {
+            $rollbackFailureMessage = [string]$_.Exception.Message
+            Write-Log ("Destination rollback failed: {0}" -f $rollbackFailureMessage) 'ERROR'
+            if ($script:CancellationObserved) {
+                $script:CancellationRollbackFailed = $true
+                $script:CancellationRollbackMessage = 'Cancellation was requested, but the destination installation could not be rolled back completely: ' + $rollbackFailureMessage
+            }
+        }
     }
 
-    Set-ResultPairValue -Key 'DMEL_STATUS' -Value 'ERROR'
-    if ([string]::IsNullOrWhiteSpace([string]$script:ResultPairs['DMEL_COMPATIBILITY']) -or
-        [string]::Equals([string]$script:ResultPairs['DMEL_COMPATIBILITY'], 'OK', [System.StringComparison]::OrdinalIgnoreCase)) {
+    $cancellationCompleted = $script:CancellationObserved -and -not $script:CancellationRollbackFailed
+    $friendlyMessage = if ($script:CancellationRollbackFailed) {
+        if ([string]::IsNullOrWhiteSpace($script:CancellationRollbackMessage)) { $rawMessage } else { $script:CancellationRollbackMessage }
+    }
+    else {
+        $baseMessage = Get-FriendlyInstallErrorMessage -RawMessage $rawMessage
+        if ([string]::IsNullOrWhiteSpace($rollbackFailureMessage)) { $baseMessage }
+        else { $baseMessage + ' Destination rollback also failed: ' + $rollbackFailureMessage }
+    }
+    Set-ResultPairValue -Key 'DMEL_STATUS' -Value $(if ($cancellationCompleted) { 'CANCEL' } else { 'ERROR' })
+    if (-not $cancellationCompleted -and ([string]::IsNullOrWhiteSpace([string]$script:ResultPairs['DMEL_COMPATIBILITY']) -or
+        [string]::Equals([string]$script:ResultPairs['DMEL_COMPATIBILITY'], 'OK', [System.StringComparison]::OrdinalIgnoreCase))) {
         Set-ResultPairValue -Key 'DMEL_COMPATIBILITY' -Value 'FATAL'
     }
     if (-not [string]::IsNullOrWhiteSpace($script:ResolvedCurrentRoot)) {
@@ -1468,10 +1680,10 @@ catch {
     else {
         Set-ResultPairValue -Key 'DMEL_BACKUPPATH' -Value ''
     }
-    Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value $friendlyMessage
-    Write-Log $_.Exception.Message 'ERROR'
-    if ($_.ScriptStackTrace) {
-        Write-Log $_.ScriptStackTrace 'ERROR'
+    Set-ResultPairValue -Key 'DMEL_MESSAGE' -Value $(if ($cancellationCompleted) { 'Latest update was canceled and transactional changes were rolled back.' } else { $friendlyMessage })
+    Write-Log $rawMessage $(if ($cancellationCompleted) { 'WARN' } else { 'ERROR' })
+    if ($failureRecord.ScriptStackTrace) {
+        Write-Log $failureRecord.ScriptStackTrace 'ERROR'
     }
 }
 finally {

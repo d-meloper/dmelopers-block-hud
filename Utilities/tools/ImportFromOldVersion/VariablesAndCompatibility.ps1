@@ -183,7 +183,7 @@ function New-RootConfigNameCompatManifestContent {
     return @'
 @{
     RootModule = 'DMeloperBlockHudCompat.psm1'
-    ModuleVersion = '1.4.1'
+    ModuleVersion = '1.4.2'
     GUID = '7e2698fc-2f2e-4cda-b6e8-b0df5cbf8931'
     Author = 'DMeloper'
     CompanyName = 'DMeloper'

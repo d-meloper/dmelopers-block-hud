@@ -168,6 +168,8 @@ jobs:
             'Logs/*',
             'temp/*',
             'VersionManagerExports/*',
+            '@Resources/UpdaterPayload',
+            '@Resources/UpdaterPayload/*',
             '@Resources/Customs/Data/EditorFavoritesCatalog.txt',
             '@Resources/Customs/Data/EditorProgramPickerCache.txt',
             '@Resources/Customs/Data/*Ready_*.json',

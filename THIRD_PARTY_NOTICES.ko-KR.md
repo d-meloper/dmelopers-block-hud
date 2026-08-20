@@ -9,9 +9,10 @@
 - 프로젝트: Mouse.dll
 - 작성자: NighthawkSLO
 - 출처: https://github.com/NighthawkSLO/Mouse.dll
-- 패키징에 사용된 버전: v3.2.0
+- 업스트림 기반: v3.2.0 (`460cb3f2dc6dd6d5ba0d2f43afd196209330367a`)
+- 패키징 파일 버전: 3.2.0.1 (DMeloper safety patch 1)
 
-Mouse.dll은 서드파티 Rainmeter 플러그인으로 크레딧됩니다. DMeloper가 작성한 구성 요소가 아니며, 이 프로젝트의 MIT License로 재라이선스되지 않습니다.
+패키징된 바이너리는 Mouse.dll 인터페이스를 유지하면서 업스트림의 교차 스레드 action pointer 수명 결함을 제거하는 DMeloper 임시 안전 패치를 적용합니다. 업스트림 저작자 표시는 유지되며 이 프로젝트의 MIT License로 재라이선스되지 않습니다. Rainmeter가 공식 지원 대안을 제공하면 이 임시 빌드는 명시적 검토 후 제거할 예정입니다.
 
 ## WebNowPlaying
 

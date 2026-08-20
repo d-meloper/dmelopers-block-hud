@@ -1993,12 +1993,6 @@ function OnMouseMove(x, y)
     local disableSlotHoverHighlight = isLowSpecSlotHoverHighlightDisabled()
     local disableHoverTextTooltip = isLowSpecHoverTextTooltipDisabled()
     local meta = IsHudMirrorReplica() and nil or currentEditorMeta()
-    if not IsHotbar and not meta then
-        SKIN:Bang(
-            '!CommandMeasure',
-            'MeasureAnimation',
-            string.format('HandleMouseMove(%s,%s)', tostring(x), tostring(y)))
-    end
     local dragActive = meta and meta.DragActive or false
     if not IsHotbar then
         if not disableHoverTextTooltip then
@@ -2845,14 +2839,7 @@ end
 function HandleInventoryBackgroundMouseMove(x, y)
     LoadEssentials()
     local meta = currentEditorMeta()
-    if not meta then
-        SKIN:Bang(
-            '!CommandMeasure',
-            'MeasurePlayerLookBridge',
-            string.format('HandleMouseMove(%s,%s)', tostring(x), tostring(y)))
-        return
-    end
-    if not meta.DragActive then
+    if not meta or not meta.DragActive then
         return
     end
     local currentX = tonumber(SKIN:GetVariable('CURRENTCONFIGX', '')) or tonumber(SKIN:GetVariable('PWORKAREAX', '0')) or 0

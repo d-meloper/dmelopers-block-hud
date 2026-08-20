@@ -118,6 +118,15 @@ function Get-LatestUpdateNativeDecisionPath {
     return (Join-Path (Get-LatestUpdateStagingRoot -Root $Root) ("LatestUpdateDecision_{0}.inc" -f $LaunchToken))
 }
 
+function Get-LatestUpdateCancellationPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$LaunchToken
+    )
+    [void](Assert-LatestUpdateToken -LaunchToken $LaunchToken)
+    return (Join-Path (Get-LatestUpdateDataRoot -Root $Root) ("LatestUpdateCancellation_{0}.inc" -f $LaunchToken))
+}
+
 function Get-LatestUpdateLogPath {
     param([Parameter(Mandatory = $true)][string]$Root)
     return (Join-Path $Root "Logs\DMeloper's Block HUD Log.log")
@@ -401,9 +410,36 @@ function Copy-LatestUpdatePackageToStaging {
     $destination = Get-LatestUpdateStagingPath -Root $Root -LaunchToken $LaunchToken
     $temporary = $destination + '.' + $PID + '.' + [guid]::NewGuid().ToString('N') + '.tmp.zip'
     try {
-        [System.IO.File]::Copy($resolvedSource, $temporary, $true)
+        if ([string]::Equals((Read-LatestUpdateCancellation -Root $Root -LaunchToken $LaunchToken), 'cancel', [System.StringComparison]::Ordinal)) {
+            throw (New-Object System.OperationCanceledException 'Latest update was canceled while staging the downloaded package.')
+        }
+        $sourceStream = $null
+        $destinationStream = $null
+        $sha256 = $null
+        try {
+            $sourceStream = [System.IO.File]::Open($resolvedSource, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::Read -bor [System.IO.FileShare]::Delete))
+            $destinationStream = [System.IO.File]::Open($temporary, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            $sha256 = [System.Security.Cryptography.SHA256]::Create()
+            $buffer = New-Object byte[] (1024 * 1024)
+            while (($read = $sourceStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                if ([string]::Equals((Read-LatestUpdateCancellation -Root $Root -LaunchToken $LaunchToken), 'cancel', [System.StringComparison]::Ordinal)) {
+                    throw (New-Object System.OperationCanceledException 'Latest update was canceled while staging the downloaded package.')
+                }
+                $destinationStream.Write($buffer, 0, $read)
+                [void]$sha256.TransformBlock($buffer, 0, $read, $buffer, 0)
+            }
+            [void]$sha256.TransformFinalBlock((New-Object byte[] 0), 0, 0)
+            $actualSha256 = (($sha256.Hash | ForEach-Object { $_.ToString('x2') }) -join '').ToUpperInvariant()
+        }
+        finally {
+            if ($null -ne $sha256) { $sha256.Dispose() }
+            if ($null -ne $destinationStream) { $destinationStream.Dispose() }
+            if ($null -ne $sourceStream) { $sourceStream.Dispose() }
+        }
+        if ([string]::Equals((Read-LatestUpdateCancellation -Root $Root -LaunchToken $LaunchToken), 'cancel', [System.StringComparison]::Ordinal)) {
+            throw (New-Object System.OperationCanceledException 'Latest update was canceled while staging the downloaded package.')
+        }
         [void](Assert-LatestUpdateZipFile -Path $temporary)
-        $actualSha256 = (Get-FileHash -LiteralPath $temporary -Algorithm SHA256).Hash.ToUpperInvariant()
         if (-not [string]::Equals($actualSha256, $expectedSha256, [System.StringComparison]::Ordinal)) {
             throw "Downloaded update SHA-256 did not match the published checksum. expected=$expectedSha256 actual=$actualSha256"
         }
@@ -483,6 +519,49 @@ function Read-LatestUpdateNativeDecision {
     }
     catch { }
     return ''
+}
+
+function Read-LatestUpdateCancellation {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$LaunchToken
+    )
+    $path = Get-LatestUpdateCancellationPath -Root $Root -LaunchToken $LaunchToken
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return '' }
+    try {
+        [byte[]]$bytes = [System.IO.File]::ReadAllBytes($path)
+        if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
+            $text = [System.Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
+        }
+        elseif ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $text = [System.Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3)
+        }
+        else { $text = [System.Text.Encoding]::UTF8.GetString($bytes) }
+        $inVariables = $false
+        foreach ($line in ($text -split "`r?`n")) {
+            $trimmed = ([string]$line).Trim()
+            if ($trimmed -match '^\[(.+)\]$') {
+                $inVariables = [string]::Equals($matches[1], 'Variables', [System.StringComparison]::OrdinalIgnoreCase)
+                continue
+            }
+            if ($inVariables -and $trimmed -match '^Cancellation\s*=\s*cancel\s*$') {
+                return 'cancel'
+            }
+        }
+    }
+    catch { }
+    return ''
+}
+
+function Remove-LatestUpdateCancellationForToken {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$LaunchToken
+    )
+    $path = Get-LatestUpdateCancellationPath -Root $Root -LaunchToken $LaunchToken
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Initialize-LatestUpdateNativeDecision {

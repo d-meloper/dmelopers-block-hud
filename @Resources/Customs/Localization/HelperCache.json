@@ -391,6 +391,8 @@
                     "Loc_Modal_StartupFastAutoRunConfirm_Title":  "빠른 자동 실행(실험적)",
                     "Loc_Modal_StartupFastAutoRunConfirm_Message":  "Windows 로그인 직후 작업 스케줄러를 통해 레인미터를 보다 빠르게 실행시킬 수 있는 옵션입니다.\\n일반 자동 실행보다 빨라질 수 있지만 Windows 및 보안 프로그램 상태에 따라 기능이 작동하지 않을 수 있습니다.",
                     "Loc_Modal_StartupFastAutoRunConfirm_Enable":  "빠른 실행 켜기",
+                    "Loc_Modal_MousePluginUpdate_Title":  "마우스 입력 플러그인 업데이트",
+                    "Loc_Modal_MousePluginUpdate_Message":  "마우스 플러그인이 업데이트 됐습니다, 변경 사항을 저장하기 위해 레인미터를 다시 시작합니다. 잠시만 기다려주세요..",
                     "Loc_BootstrapModal_Title":  "스킨 초기화",
                     "Loc_BootstrapModal_Message":  "스킨 레이아웃 정렬 중입니다.\\n오류 방지를 위해 클릭하지 마세요.",
                     "Loc_ModalAlert_ErrorTitle":  "Block HUD 오류",

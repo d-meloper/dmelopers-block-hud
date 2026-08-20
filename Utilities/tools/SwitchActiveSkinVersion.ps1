@@ -268,6 +268,7 @@ function Test-ConfigFileExists {
 function Get-CurrentRootDeactivateSpecs {
     @(
         [PSCustomObject]@{ RelativePath = 'HUD\Mirror\Controller'; FileName = 'Controller.ini' }
+        [PSCustomObject]@{ RelativePath = 'Utilities\MousePluginUpdate'; FileName = 'MousePluginUpdate.ini' }
         [PSCustomObject]@{ RelativePath = 'Bootstrap'; FileName = 'ZPosBootstrap.ini' }
         [PSCustomObject]@{ RelativePath = 'Hotbar'; FileName = 'Hotbar.ini' }
         [PSCustomObject]@{ RelativePath = 'Clock'; FileName = 'Clock.ini' }
@@ -302,6 +303,7 @@ function Get-CurrentRootDeactivateSpecs {
 function Get-CurrentLatestUpdateHandoffDeactivateSpecs {
     @(
         [PSCustomObject]@{ RelativePath = 'Utilities\LatestUpdate'; FileName = 'LatestUpdate.ini' }
+        [PSCustomObject]@{ RelativePath = 'Utilities\MousePluginUpdate'; FileName = 'MousePluginUpdate.ini' }
         [PSCustomObject]@{ RelativePath = 'Modal'; FileName = 'Modal.ini' }
     )
 }
