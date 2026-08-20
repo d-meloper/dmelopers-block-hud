@@ -246,6 +246,30 @@ function M.ParseFlatJsonObject(raw)
     return nil, 'unterminated JSON object'
 end
 
+function M.IsLatestUpdateSwitchingState(raw)
+    local values = M.ParseFlatJsonObject(raw)
+    if type(values) ~= 'table' or type(values.SchemaVersion) ~= 'number'
+        or values.SchemaVersion ~= 2 or type(values.Status) ~= 'string'
+        or trim(values.Status):lower() ~= 'switching'
+        or type(values.LaunchToken) ~= 'string' then
+        return false
+    end
+
+    local launchToken = trim(values.LaunchToken)
+    local startedAt = tonumber(values.StartedAtUnixSeconds) or 0
+    local sessionPid = tonumber(values.SessionPid) or 0
+    local sessionStartedAtUtcTicks = tonumber(values.SessionStartedAtUtcTicks) or 0
+    return #launchToken >= 1 and #launchToken <= 128
+        and launchToken:match('^[A-Za-z0-9][A-Za-z0-9._-]*$') ~= nil
+        and type(values.StartedAtUnixSeconds) == 'number'
+        and startedAt > 0 and startedAt == math.floor(startedAt)
+        and type(values.SessionPid) == 'number'
+        and sessionPid > 0 and sessionPid == math.floor(sessionPid)
+        and type(values.SessionStartedAtUtcTicks) == 'number'
+        and sessionStartedAtUtcTicks > 0
+        and sessionStartedAtUtcTicks == math.floor(sessionStartedAtUtcTicks)
+end
+
 function M.ParseResultPairs(raw)
     local values = {}
     for line in tostring(raw or ''):gmatch('[^\r\n]+') do

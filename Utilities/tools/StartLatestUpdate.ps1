@@ -285,6 +285,7 @@ function Invoke-LatestUpdateLaunch {
     # can only belong to a completed older token and must not linger forever.
     Remove-LatestUpdateDecisionFile -Root $script:ResolvedRoot
     Remove-LatestUpdateNativeDecisionForToken -Root $script:ResolvedRoot -LaunchToken $LaunchToken
+    [void](Initialize-LatestUpdateNativeDecision -Root $script:ResolvedRoot -LaunchToken $LaunchToken)
     [void](Save-LatestUpdateState -Root $script:ResolvedRoot -Intent $script:Intent -Status 'staging' -SessionPid $PID -Message 'Preparing the downloaded update package.' -LogPath (Get-LatestUpdateLogPath -Root $script:ResolvedRoot))
     $script:StagingPath = Copy-LatestUpdatePackageToStaging -Root $script:ResolvedRoot -LaunchToken $LaunchToken -SourcePath $DownloadedPackagePath -ExpectedPackageSha256 $script:Intent.ExpectedPackageSha256
     Write-LatestUpdateLog -Root $script:ResolvedRoot -Stage 'staged' -Message $script:StagingPath
@@ -317,13 +318,46 @@ try {
 }
 catch {
     $message = [string]$_.Exception.Message
+    $wasCanceled = $false
+    if ([string]::IsNullOrWhiteSpace($Decision) -and $null -ne $script:Intent -and -not [string]::IsNullOrWhiteSpace($script:ResolvedRoot)) {
+        $wasCanceled = [string]::Equals(
+            (Read-LatestUpdateCancellation -Root $script:ResolvedRoot -LaunchToken $LaunchToken),
+            'cancel',
+            [System.StringComparison]::Ordinal)
+    }
     if (-not [string]::IsNullOrWhiteSpace($script:ResolvedRoot)) {
-        Write-LatestUpdateLog -Root $script:ResolvedRoot -Stage 'launcher-error' -Message $message
+        Write-LatestUpdateLog `
+            -Root $script:ResolvedRoot `
+            -Stage $(if ($wasCanceled) { 'launcher-canceled' } else { 'launcher-error' }) `
+            -Message $message
     }
     if ([string]::IsNullOrWhiteSpace($Decision) -and $null -ne $script:Intent -and -not $script:ChildOwnershipConfirmed) {
-        try { [void](Save-LatestUpdateState -Root $script:ResolvedRoot -Intent $script:Intent -Status 'error' -SessionPid $PID -Message $message -LogPath (Get-LatestUpdateLogPath -Root $script:ResolvedRoot) -ErrorCode 'startup-failed') } catch { }
+        try {
+            if ($wasCanceled) {
+                [void](Save-LatestUpdateState `
+                    -Root $script:ResolvedRoot `
+                    -Intent $script:Intent `
+                    -Status 'canceled' `
+                    -SessionPid $PID `
+                    -Message 'Latest update was canceled before the installer session started.' `
+                    -LogPath (Get-LatestUpdateLogPath -Root $script:ResolvedRoot))
+            }
+            else {
+                [void](Save-LatestUpdateState `
+                    -Root $script:ResolvedRoot `
+                    -Intent $script:Intent `
+                    -Status 'error' `
+                    -SessionPid $PID `
+                    -Message $message `
+                    -LogPath (Get-LatestUpdateLogPath -Root $script:ResolvedRoot) `
+                    -ErrorCode 'startup-failed')
+            }
+        }
+        catch { }
         if (-not [string]::IsNullOrWhiteSpace($script:ResolvedRoot)) { Remove-LatestUpdateStagingPackage -Root $script:ResolvedRoot -LaunchToken $LaunchToken }
+        if (-not [string]::IsNullOrWhiteSpace($script:ResolvedRoot)) { Remove-LatestUpdateNativeDecisionForToken -Root $script:ResolvedRoot -LaunchToken $LaunchToken }
+        if (-not [string]::IsNullOrWhiteSpace($script:ResolvedRoot)) { Remove-LatestUpdateCancellationForToken -Root $script:ResolvedRoot -LaunchToken $LaunchToken }
     }
-    Set-LatestUpdateResult -Status 'ERROR' -Message $message
+    Set-LatestUpdateResult -Status $(if ($wasCanceled) { 'CANCEL' } else { 'ERROR' }) -Message $(if ($wasCanceled) { 'Latest update was canceled.' } else { $message })
 }
 finally { Emit-LatestUpdateResult }

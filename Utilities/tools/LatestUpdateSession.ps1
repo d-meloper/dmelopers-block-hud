@@ -21,6 +21,21 @@ $script:Compatibility = ''
 $script:RepairCount = 0
 $script:RepairSummary = ''
 $script:RepairPlanId = ''
+$script:CancellationObserved = $false
+
+function Test-LatestUpdateCancellationRequested {
+    if ([string]::IsNullOrWhiteSpace($script:ResolvedRoot)) { return $false }
+    return [string]::Equals(
+        (Read-LatestUpdateCancellation -Root $script:ResolvedRoot -LaunchToken $LaunchToken),
+        'cancel',
+        [System.StringComparison]::Ordinal)
+}
+
+function Assert-LatestUpdateNotCancelled {
+    if (-not (Test-LatestUpdateCancellationRequested)) { return }
+    $script:CancellationObserved = $true
+    throw (New-Object System.OperationCanceledException 'Latest update was canceled by the user.')
+}
 
 function Get-LatestUpdateInstallResult {
     param(
@@ -59,6 +74,7 @@ function Get-LatestUpdateInstallResult {
 # DMEL_COMPAT:update.unscoped-decision-transport
 function Wait-LatestUpdateCompatibilityDecision {
     while ($true) {
+        if (Test-LatestUpdateCancellationRequested) { return 'cancel' }
         $decisionPath = Get-LatestUpdateDecisionPath -Root $script:ResolvedRoot
         $decision = $null
         try { $decision = Read-LatestUpdateJson -Path $decisionPath }
@@ -123,9 +139,15 @@ try {
     }
     if ([bool]$script:OperationLock.Abandoned) { Write-LatestUpdateLog -Root $script:ResolvedRoot -Stage 'mutex-recovered' -Message $script:OperationLock.Name }
 
+    Assert-LatestUpdateNotCancelled
     [void](Save-LatestUpdateState -Root $script:ResolvedRoot -Intent $script:Intent -Status 'installing' -SessionPid $PID -Message 'Installing the downloaded update.' -LogPath (Get-LatestUpdateLogPath -Root $script:ResolvedRoot))
     $result = Get-LatestUpdateInstallResult
     $status = Assert-LatestUpdateInstallResultContract -Result $result
+    if ($status -in @('CANCEL', 'CANCELED')) {
+        $script:CancellationObserved = $true
+        Complete-LatestUpdateSession -Status 'canceled' -Message 'Latest update was canceled and transactional changes were rolled back.' -LogPath ([string]$result.DMEL_LOGPATH)
+        return
+    }
     $approvedRepairPlanId = ''
     while ($status -eq 'WARN') {
         $compatibility = ([string](Get-LatestUpdateObjectProperty -Object $result -Name 'DMEL_COMPATIBILITY' -DefaultValue '')).ToUpperInvariant()
@@ -187,6 +209,7 @@ try {
             Remove-LatestUpdateNativeDecisionForToken -Root $script:ResolvedRoot -LaunchToken $LaunchToken
             return
         }
+        Assert-LatestUpdateNotCancelled
         [void](Save-LatestUpdateState `
             -Root $script:ResolvedRoot `
             -Intent $script:Intent `
@@ -205,6 +228,11 @@ try {
             -AllowCompatibilityWarning `
             -ExpectedRepairPlanId $approvedRepairPlanId
         $status = Assert-LatestUpdateInstallResultContract -Result $result
+        if ($status -in @('CANCEL', 'CANCELED')) {
+            $script:CancellationObserved = $true
+            Complete-LatestUpdateSession -Status 'canceled' -Message 'Latest update was canceled and transactional changes were rolled back.' -LogPath ([string]$result.DMEL_LOGPATH)
+            return
+        }
     }
     if ($status -notin @('OK', 'NOOP')) {
         $detail = [string]$result.DMEL_MESSAGE
@@ -226,6 +254,22 @@ try {
 }
 catch {
     $message = [string]$_.Exception.Message
+    if ($script:CancellationObserved) {
+        if ($null -ne $script:Intent -and -not [string]::IsNullOrWhiteSpace($script:ResolvedRoot)) {
+            try {
+                Complete-LatestUpdateSession `
+                    -Status 'canceled' `
+                    -Message 'Latest update was canceled and transactional changes were rolled back.' `
+                    -LogPath (Get-LatestUpdateLogPath -Root $script:ResolvedRoot) `
+                    -Compatibility $script:Compatibility `
+                    -RepairCount $script:RepairCount `
+                    -RepairSummary $script:RepairSummary `
+                    -RepairPlanId $script:RepairPlanId
+            }
+            catch { }
+        }
+        return
+    }
     if (-not [string]::IsNullOrWhiteSpace($script:ResolvedRoot)) { Write-LatestUpdateLog -Root $script:ResolvedRoot -Stage 'session-error' -Message $message }
     if ($null -ne $script:Intent -and -not [string]::IsNullOrWhiteSpace($script:ResolvedRoot)) {
         try {
@@ -245,6 +289,7 @@ finally {
     if (-not [string]::IsNullOrWhiteSpace($script:ResolvedRoot)) {
         Remove-LatestUpdateDecisionForToken -Root $script:ResolvedRoot -LaunchToken $LaunchToken
         Remove-LatestUpdateNativeDecisionForToken -Root $script:ResolvedRoot -LaunchToken $LaunchToken
+        Remove-LatestUpdateCancellationForToken -Root $script:ResolvedRoot -LaunchToken $LaunchToken
         Remove-LatestUpdateStagingPackage -Root $script:ResolvedRoot -LaunchToken $LaunchToken
     }
     Exit-VersionManagerOperationMutex -Lock $script:OperationLock

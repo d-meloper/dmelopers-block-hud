@@ -299,7 +299,7 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
         -Specs $fixedRootCompatibilityAssets `
         -WaitForHandoffRequestRemoval:$handoffWasRequested
     Write-Output 'Legacy layout transport adapter is already absent.'
-    exit 0
+    return
 }
 
 $manifest = [System.IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json

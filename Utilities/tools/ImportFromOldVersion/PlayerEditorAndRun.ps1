@@ -793,6 +793,7 @@ function Invoke-Migration {
     Initialize-ImportProgress -OwnerRoot $ProgressOwnerRoot -Token $ProgressToken -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
     $script:ImportAudioWorkload = Get-JukeboxAudioMigrationWorkload -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
     $script:ImportProgressDetailVisible = Test-ImportProgressDetailThreshold -TotalBytes ([int64]$script:ImportAudioWorkload.TotalBytes)
+    $mousePluginUpdatePlan = Get-MousePluginUpdatePlan -TargetRoot $resolvedTargetRoot
 
     if ($ValidateOnly) {
         Preflight-SourceState -SourceRoot $resolvedSourceRoot
@@ -872,9 +873,11 @@ function Invoke-Migration {
     Normalize-ImportedMinecraftSkinState -TargetRoot $resolvedTargetRoot
     Sync-ActiveLocalizationCatalog -TargetRoot $resolvedTargetRoot -LanguageCode $importedLanguageCode
     Set-LegacyUpdaterZPosBootstrapPending -TargetRoot $resolvedTargetRoot -SourceVersion $sourceVersion
+    Write-MousePluginUpdatePending -TargetRoot $resolvedTargetRoot -SourceRoot $resolvedSourceRoot -Plan $mousePluginUpdatePlan
     Write-ImportProgress -Stage 'validating' -CompletedBytes 0 -TotalBytes 1 -CompletedFiles 0 -TotalFiles 1 -Force
     Validate-TouchedRainmeterFiles
     Write-ImportProgress -Stage 'validating' -CompletedBytes 1 -TotalBytes 1 -CompletedFiles 1 -TotalFiles 1 -Force
+    Complete-MousePluginUpdateImportHandoff -TargetRoot $resolvedTargetRoot -Plan $mousePluginUpdatePlan
     Install-RootConfigNameCompatModule -SourceRoot $resolvedSourceRoot
     if (-not [string]::IsNullOrWhiteSpace($script:EphemeralRollbackRoot)) {
         Remove-TemporaryRollbackRootBestEffort -RollbackRoot $script:EphemeralRollbackRoot -Reason 'successful legacy import'

@@ -9,9 +9,10 @@ This project includes or credits third-party components and references.
 - Project: Mouse.dll
 - Author: NighthawkSLO
 - Source: https://github.com/NighthawkSLO/Mouse.dll
-- Version used for packaging: v3.2.0
+- Upstream base: v3.2.0 (`460cb3f2dc6dd6d5ba0d2f43afd196209330367a`)
+- Packaged file version: 3.2.0.1 (DMeloper safety patch 1)
 
-Mouse.dll is credited as a third-party Rainmeter plugin. It is not authored by DMeloper and is not relicensed by this project's MIT License.
+The packaged binary temporarily applies a DMeloper safety patch that removes the upstream cross-thread action-pointer lifetime defect while preserving the Mouse.dll interface. Upstream authorship remains credited, and the component is not relicensed by this project's MIT License. This temporary build is intended to be retired when Rainmeter provides a supported official equivalent.
 
 ## WebNowPlaying
 

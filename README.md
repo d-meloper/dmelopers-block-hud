@@ -54,6 +54,8 @@ The `.rmskin` packages install to separate versioned skin folders: `DMeloper's B
 
 For updates, use the in-skin `Skin manager` whenever possible. It checks validated latest-release data for the installed variant and applies the matching ZIP package without loading a historical release list. Compatible settings, items, user images, and local audio are carried into the new install; if some item-image fields cannot be used, the skin asks before clearing only those fields. Use an `.rmskin` file when reinstalling manually from GitHub.
 
+If the safer Mouse.dll must be installed, the update can show a `Mouse plugin update` notice and restart Rainmeter automatically. Wait for it to finish; if the notice repeats or the update rolls back, check the logs and use the support route instead of replacing the DLL manually.
+
 Beginning with v1.4.1, network-downloaded updater ZIPs are checked against the published SHA-256 and are rejected before extraction when the verified metadata or downloaded bytes do not match. See the [security policy](SECURITY.md) for the verification scope and limitations.
 
 ## Requirements
@@ -73,7 +75,7 @@ For setup, customization, and daily usage instructions, see the Skin Notion page
 
 ## Localization
 
-As of v1.4.1, Block HUD supports 42 languages, including Korean, English, Russian, Japanese, and Chinese.
+As of v1.4.2, Block HUD supports 42 languages, including Korean, English, Russian, Japanese, and Chinese.
 
 If you want to help translate the skin or improve an existing translation, please use the DMeloper's Block HUD Translation Hub. You do not need to edit code or Rainmeter files; translation work is handled collaboratively in a Google Sheet for each language.
 

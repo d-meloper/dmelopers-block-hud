@@ -76,6 +76,7 @@ $script:ModuleRoot = Join-Path $PSScriptRoot 'ImportFromOldVersion'
 . (Join-Path $script:ModuleRoot 'JukeboxAndProgress.ps1')
 . (Join-Path $script:ModuleRoot 'SettingsLayoutAndImages.ps1')
 . (Join-Path $script:ModuleRoot 'ItemImageRepair.ps1')
+. (Join-Path $script:ModuleRoot 'MousePluginUpdate.ps1')
 . (Join-Path $script:ModuleRoot 'PlayerEditorAndRun.ps1')
 
 
