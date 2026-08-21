@@ -121,12 +121,16 @@ function Select-StableReleases {
     return @($Releases | Where-Object { -not [bool]$_.draft -and -not [bool]$_.prerelease })
 }
 
-function Get-TotalReleaseAssetDownloads {
+function Get-TotalRmskinDownloads {
     param([Parameter(Mandatory = $true)][object[]]$Releases)
 
     $total = 0
     foreach ($release in $Releases) {
         foreach ($asset in @($release.assets)) {
+            $assetName = [string]$asset.name
+            if (-not $assetName.EndsWith('.rmskin', [System.StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
             $total += [int]$asset.download_count
         }
     }
@@ -387,7 +391,7 @@ function Get-BadgePayload {
     $latestGlobal = Get-LatestStableReleaseWithAsset -Releases $stableReleases -AssetName $globalAssetName
     $latestKoreaSha256 = Get-ReleaseAssetSha256 -Release $latestKorea -AssetName $koreaAssetName
     $latestGlobalSha256 = Get-ReleaseAssetSha256 -Release $latestGlobal -AssetName $globalAssetName
-    $downloadCount = Get-TotalReleaseAssetDownloads -Releases $publishedReleases
+    $downloadCount = Get-TotalRmskinDownloads -Releases $publishedReleases
 
     return [PSCustomObject]@{
         SchemaVersion = 3

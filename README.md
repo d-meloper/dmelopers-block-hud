@@ -6,7 +6,7 @@ English | [한국어](README.ko-KR.md)
 
 <p align="center">
   <a href="https://github.com/d-meloper/dmelopers-block-hud/releases/latest"><img alt="Latest release" src="https://raw.githubusercontent.com/d-meloper/dmelopers-block-hud/badges/release.svg"></a>
-  <a href="https://github.com/d-meloper/dmelopers-block-hud/releases"><img alt="Total downloads" src="https://raw.githubusercontent.com/d-meloper/dmelopers-block-hud/badges/downloads.svg"></a>
+  <a href="https://github.com/d-meloper/dmelopers-block-hud/releases"><img alt="RMSKIN downloads" src="https://raw.githubusercontent.com/d-meloper/dmelopers-block-hud/badges/downloads.svg"></a>
   <a href="https://github.com/d-meloper/dmelopers-block-hud/stargazers"><img alt="GitHub stars" src="https://raw.githubusercontent.com/d-meloper/dmelopers-block-hud/badges/stars.svg"></a>
   <a href="https://github.com/d-meloper/dmelopers-block-hud/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-AED8FF?style=for-the-badge&labelColor=4A4F63"></a>
 </p>
