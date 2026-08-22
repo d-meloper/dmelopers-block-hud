@@ -310,7 +310,15 @@ function Get-JukeboxAudioMigrationWorkload {
             TotalFiles = 0
         }
     }
-    $sourceFiles = @(Get-TopLevelRegularFilesStrict -Directory $sourceDirectory -Context 'source Jukebox audio directory')
+    $sourceFiles = @()
+    if (Test-SkippedSourcePath -Path $sourceDirectory) {
+        Write-Log "Skipped source Jukebox audio workload marked unreadable during preflight: $sourceDirectory" 'WARN'
+    }
+    else {
+        $sourceFiles = @(Get-TopLevelRegularFilesStrict -Directory $sourceDirectory -Context 'source Jukebox audio directory' | Where-Object {
+            -not (Test-SkippedSourcePath -Path $_.FullName)
+        })
+    }
     $targetFiles = @(Get-TopLevelRegularFilesStrict -Directory $targetDirectory -Context 'target Jukebox audio directory')
     $targetMap = New-JukeboxFileMap -Files $targetFiles
     $entries = New-Object System.Collections.Generic.List[object]

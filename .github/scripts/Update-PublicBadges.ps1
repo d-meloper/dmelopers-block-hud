@@ -121,6 +121,40 @@ function Select-StableReleases {
     return @($Releases | Where-Object { -not [bool]$_.draft -and -not [bool]$_.prerelease })
 }
 
+function ConvertTo-GitHubDateTimeOffset {
+    param([Parameter(Mandatory = $true)]$Value)
+
+    if ($Value -is [DateTimeOffset]) {
+        return [DateTimeOffset]$Value
+    }
+    if ($Value -is [DateTime]) {
+        $dateTime = [DateTime]$Value
+        if ($dateTime.Kind -eq [DateTimeKind]::Unspecified) {
+            $dateTime = [DateTime]::SpecifyKind($dateTime, [DateTimeKind]::Utc)
+        }
+        return [DateTimeOffset]::new($dateTime.ToUniversalTime())
+    }
+    return [DateTimeOffset]::Parse(
+        [string]$Value,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind
+    )
+}
+
+function Test-GitHubDateTimeValueEqual {
+    param($Left, $Right)
+
+    try {
+        return (
+            (ConvertTo-GitHubDateTimeOffset -Value $Left).ToUniversalTime().Ticks -eq
+            (ConvertTo-GitHubDateTimeOffset -Value $Right).ToUniversalTime().Ticks
+        )
+    }
+    catch {
+        return $false
+    }
+}
+
 function Get-TotalRmskinDownloads {
     param([Parameter(Mandatory = $true)][object[]]$Releases)
 
@@ -186,7 +220,7 @@ function Get-LatestStableRelease {
                     Major = $key.Major
                     Minor = $key.Minor
                     Patch = $key.Patch
-                    PublishedAt = [DateTimeOffset]::Parse([string]$release.published_at)
+                    PublishedAt = ConvertTo-GitHubDateTimeOffset -Value $release.published_at
                 }
             }
         }
@@ -194,7 +228,7 @@ function Get-LatestStableRelease {
     if ($semantic.Count -gt 0) {
         return ($semantic | Sort-Object Major, Minor, Patch, PublishedAt -Descending | Select-Object -First 1).Release
     }
-    return ($Releases | Sort-Object { [DateTimeOffset]::Parse([string]$_.published_at) } -Descending | Select-Object -First 1)
+    return ($Releases | Sort-Object { ConvertTo-GitHubDateTimeOffset -Value $_.published_at } -Descending | Select-Object -First 1)
 }
 
 function Get-LatestStableReleaseWithAsset {
@@ -218,7 +252,7 @@ function Get-LatestStableReleaseWithAsset {
                 Major = $versionKey.Major
                 Minor = $versionKey.Minor
                 Patch = $versionKey.Patch
-                PublishedAt = [DateTimeOffset]::Parse([string]$release.published_at)
+                PublishedAt = ConvertTo-GitHubDateTimeOffset -Value $release.published_at
             }
         }
     )
@@ -403,12 +437,12 @@ function Get-BadgePayload {
         LatestReleaseNameKorea = [string]$latestKorea.name
         LatestAssetNameKorea = $koreaAssetName
         LatestAssetSha256Korea = $latestKoreaSha256
-        LatestPublishedAtUtcKorea = ([DateTimeOffset]::Parse([string]$latestKorea.published_at)).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        LatestPublishedAtUtcKorea = (ConvertTo-GitHubDateTimeOffset -Value $latestKorea.published_at).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         LatestReleaseGlobal = [string]$latestGlobal.tag_name
         LatestReleaseNameGlobal = [string]$latestGlobal.name
         LatestAssetNameGlobal = $globalAssetName
         LatestAssetSha256Global = $latestGlobalSha256
-        LatestPublishedAtUtcGlobal = ([DateTimeOffset]::Parse([string]$latestGlobal.published_at)).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        LatestPublishedAtUtcGlobal = (ConvertTo-GitHubDateTimeOffset -Value $latestGlobal.published_at).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         TotalDownloads = $downloadCount
         Stars = [int]$repo.stargazers_count
     }
@@ -465,12 +499,12 @@ function Test-BadgePayloadValuesEqual {
         ([string]$ExistingPayload.LatestReleaseNameKorea -eq [string]$NewPayload.LatestReleaseNameKorea) -and
         ([string]$ExistingPayload.LatestAssetNameKorea -eq [string]$NewPayload.LatestAssetNameKorea) -and
         ([string]$ExistingPayload.LatestAssetSha256Korea -eq [string]$NewPayload.LatestAssetSha256Korea) -and
-        ([string]$ExistingPayload.LatestPublishedAtUtcKorea -eq [string]$NewPayload.LatestPublishedAtUtcKorea) -and
+        (Test-GitHubDateTimeValueEqual -Left $ExistingPayload.LatestPublishedAtUtcKorea -Right $NewPayload.LatestPublishedAtUtcKorea) -and
         ([string]$ExistingPayload.LatestReleaseGlobal -eq [string]$NewPayload.LatestReleaseGlobal) -and
         ([string]$ExistingPayload.LatestReleaseNameGlobal -eq [string]$NewPayload.LatestReleaseNameGlobal) -and
         ([string]$ExistingPayload.LatestAssetNameGlobal -eq [string]$NewPayload.LatestAssetNameGlobal) -and
         ([string]$ExistingPayload.LatestAssetSha256Global -eq [string]$NewPayload.LatestAssetSha256Global) -and
-        ([string]$ExistingPayload.LatestPublishedAtUtcGlobal -eq [string]$NewPayload.LatestPublishedAtUtcGlobal) -and
+        (Test-GitHubDateTimeValueEqual -Left $ExistingPayload.LatestPublishedAtUtcGlobal -Right $NewPayload.LatestPublishedAtUtcGlobal) -and
         ([int]$ExistingPayload.TotalDownloads -eq [int]$NewPayload.TotalDownloads) -and
         ([int]$ExistingPayload.Stars -eq [int]$NewPayload.Stars)
     )

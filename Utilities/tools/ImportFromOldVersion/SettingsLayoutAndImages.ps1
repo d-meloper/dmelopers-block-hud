@@ -213,7 +213,7 @@ function Replace-DirectorySnapshot {
     }
 
     Clear-TargetPath -Path $TargetDirectory
-    Copy-PathSnapshot -SourcePath $SourceDirectory -TargetPath $TargetDirectory
+    Copy-FilteredSourceDirectorySnapshot -SourceDirectory $SourceDirectory -TargetDirectory $TargetDirectory
 }
 
 function Get-TargetFallbackItemImageAssets {

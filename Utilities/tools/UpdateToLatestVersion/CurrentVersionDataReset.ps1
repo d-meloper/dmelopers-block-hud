@@ -102,13 +102,22 @@ function Get-CurrentVersionResetFileSystemInfoPropertyText {
 function Test-CurrentVersionResetCloudPlaceholderFileAttributes {
     param([Parameter(Mandatory = $true)][System.IO.FileAttributes]$Attributes)
 
-    # Windows PowerShell 5.1 does not name these newer FileAttributes bits.
-    # Casting either numeric value to the enum throws, so inspect the raw bits.
-    $attributeBits = [int64]$Attributes
-    $recallOnOpenBits = [int64]0x00040000
-    $recallOnDataAccessBits = [int64]0x00400000
-    return (($attributeBits -band $recallOnOpenBits) -ne 0 -or
-        ($attributeBits -band $recallOnDataAccessBits) -ne 0)
+    return (Test-BlockHudCloudRecallAttributes -Attributes $Attributes)
+}
+
+function Test-CurrentVersionResetCloudPlaceholderReparsePoint {
+    param(
+        [Parameter(Mandatory = $true)][System.IO.FileSystemInfo]$Item,
+        [AllowNull()][Nullable[uint32]]$ReparseTag
+    )
+
+    $resolvedTag = if ($PSBoundParameters.ContainsKey('ReparseTag')) {
+        $ReparseTag
+    }
+    else {
+        Get-BlockHudReparseTagValue -Item $Item
+    }
+    return (Test-BlockHudCloudPlaceholderMetadata -Attributes $Item.Attributes -ReparseTag $resolvedTag)
 }
 
 function Get-CurrentVersionResetReparseTargetText {
@@ -167,7 +176,7 @@ function Resolve-CurrentVersionResetReparseAwareExistingPath {
                 if (-not [string]::IsNullOrWhiteSpace($linkType)) {
                     throw "Reparse target is unavailable for '$($item.FullName)' (LinkType=$linkType)."
                 }
-                if (Test-CurrentVersionResetCloudPlaceholderFileAttributes -Attributes $item.Attributes) {
+                if (Test-CurrentVersionResetCloudPlaceholderReparsePoint -Item $item) {
                     continue
                 }
                 throw "Unsupported targetless reparse point cannot be resolved safely: '$($item.FullName)'."
@@ -221,7 +230,7 @@ function Test-CurrentVersionResetNonRedirectingReparsePoint {
         return $false
     }
 
-    if (-not (Test-CurrentVersionResetCloudPlaceholderFileAttributes -Attributes $Item.Attributes)) {
+    if (-not (Test-CurrentVersionResetCloudPlaceholderReparsePoint -Item $Item)) {
         $Reason.Value = 'unsupported targetless reparse tag'
         return $false
     }
