@@ -230,23 +230,22 @@ function Get-ReparseTargetText {
 function Test-CloudPlaceholderFileAttributes {
     param([Parameter(Mandatory = $true)][System.IO.FileAttributes]$Attributes)
 
-    # Windows cloud placeholders are non-redirecting reparse points.  The
-    # RecallOnOpen / RecallOnDataAccess flags distinguish those placeholders
-    # from an unknown redirecting tag whose target PowerShell cannot resolve.
-    # Windows PowerShell 5.1's FileAttributes enum does not define either
-    # member, so inspect the raw bits instead of casting those values to the
-    # enum and rejecting otherwise valid OneDrive placeholders.
-    $attributeBits = [int64]$Attributes
-    $recallOnOpenBits = [int64]0x00040000
-    $recallOnDataAccessBits = [int64]0x00400000
-    return (($attributeBits -band $recallOnOpenBits) -ne 0 -or
-        ($attributeBits -band $recallOnDataAccessBits) -ne 0)
+    return (Test-BlockHudCloudRecallAttributes -Attributes $Attributes)
 }
 
 function Test-CloudPlaceholderReparsePoint {
-    param([Parameter(Mandatory = $true)][System.IO.FileSystemInfo]$Item)
+    param(
+        [Parameter(Mandatory = $true)][System.IO.FileSystemInfo]$Item,
+        [AllowNull()][Nullable[uint32]]$ReparseTag
+    )
 
-    return (Test-CloudPlaceholderFileAttributes -Attributes $Item.Attributes)
+    $resolvedTag = if ($PSBoundParameters.ContainsKey('ReparseTag')) {
+        $ReparseTag
+    }
+    else {
+        Get-BlockHudReparseTagValue -Item $Item
+    }
+    return (Test-BlockHudCloudPlaceholderMetadata -Attributes $Item.Attributes -ReparseTag $resolvedTag)
 }
 
 function Resolve-ReparseAwareExistingPath {
@@ -342,6 +341,22 @@ function Get-FinalExistingPathInfo {
             Path = ''
             Error = $_.Exception.Message
         }
+    }
+}
+
+function Assert-NonRedirectingExistingImportPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Context
+    )
+
+    $pathIdentity = Normalize-PathIdentity -Path $Path
+    $finalPathInfo = Get-FinalExistingPathInfo -Path $Path
+    if (-not $finalPathInfo.Success) {
+        throw "Refusing migration because $Context could not be resolved without an unsafe reparse point ($($finalPathInfo.Error)): $Path"
+    }
+    if ($finalPathInfo.Path -ne $pathIdentity) {
+        throw "Refusing migration because $Context resolves through a redirecting reparse point: $Path -> $($finalPathInfo.Path)"
     }
 }
 

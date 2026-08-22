@@ -6,6 +6,84 @@ function Resolve-BlockHudFullPath {
     return [System.IO.Path]::GetFullPath($Path)
 }
 
+# DMEL_COMPAT:import.cloud-placeholder-path-safety
+function Test-BlockHudCloudRecallAttributes {
+    param([Parameter(Mandatory = $true)][System.IO.FileAttributes]$Attributes)
+
+    # Windows PowerShell 5.1 does not name these newer FileAttributes bits.
+    # Casting either numeric value to the enum throws, so inspect the raw bits.
+    $attributeBits = [int64]$Attributes
+    $recallOnOpenBits = [int64]0x00040000
+    $recallOnDataAccessBits = [int64]0x00400000
+    return (($attributeBits -band $recallOnOpenBits) -ne 0 -or
+        ($attributeBits -band $recallOnDataAccessBits) -ne 0)
+}
+
+function Test-BlockHudCloudFilesReparseTag {
+    param([Parameter(Mandatory = $true)][uint32]$ReparseTag)
+
+    # IO_REPARSE_TAG_CLOUD through IO_REPARSE_TAG_CLOUD_F differ only in the
+    # four provider bits covered by IO_REPARSE_TAG_CLOUD_MASK.
+    $cloudTagMask = [Convert]::ToUInt32('ffff0fff', 16)
+    $cloudTag = [Convert]::ToUInt32('9000001a', 16)
+    return (($ReparseTag -band $cloudTagMask) -eq $cloudTag)
+}
+
+function Get-BlockHudReparseTagValue {
+    param([Parameter(Mandatory = $true)][System.IO.FileSystemInfo]$Item)
+
+    if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0 -or
+        [string]::IsNullOrWhiteSpace($Item.FullName) -or
+        [string]::IsNullOrWhiteSpace($env:SystemRoot)) {
+        return $null
+    }
+
+    $fsutilPath = Join-Path $env:SystemRoot 'System32\fsutil.exe'
+    if (-not (Test-Path -LiteralPath $fsutilPath -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        $queryOutput = @(& $fsutilPath reparsepoint query $Item.FullName 2>&1)
+        $queryExitCode = $LASTEXITCODE
+    }
+    catch {
+        return $null
+    }
+    if ($queryExitCode -ne 0) {
+        return $null
+    }
+
+    foreach ($line in $queryOutput) {
+        $match = [regex]::Match([string]$line, '(?i)(?<![0-9a-f])0x([0-9a-f]{8})(?![0-9a-f])')
+        if ($match.Success) {
+            # fsutil prints the reparse tag before provider-owned payload text.
+            # A substitute name may itself contain another 0x######## token, so
+            # only the first exact DWORD belongs to the tag header.
+            return [Convert]::ToUInt32($match.Groups[1].Value, 16)
+        }
+    }
+    return $null
+}
+
+function Test-BlockHudCloudPlaceholderMetadata {
+    param(
+        [Parameter(Mandatory = $true)][System.IO.FileAttributes]$Attributes,
+        [AllowNull()][Nullable[uint32]]$ReparseTag
+    )
+
+    if (($Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+        return $false
+    }
+    if ($null -ne $ReparseTag) {
+        return (Test-BlockHudCloudFilesReparseTag -ReparseTag ([uint32]$ReparseTag))
+    }
+
+    # Older hosts may expose the recall bits but make the actual tag query
+    # unavailable. Keep that bounded fallback only when no tag was obtained.
+    return (Test-BlockHudCloudRecallAttributes -Attributes $Attributes)
+}
+
 function Resolve-BlockHudSkinRoot {
     param([Parameter(Mandatory = $true)][string]$StartPath)
 

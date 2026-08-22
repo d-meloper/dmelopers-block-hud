@@ -199,9 +199,18 @@ function New-RootConfigNameCompatManifestContent {
 }
 
 function Install-RootConfigNameCompatModule {
-    param([Parameter(Mandatory = $true)][string]$SourceRoot)
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [AllowNull()][Nullable[bool]]$Required
+    )
 
-    if (-not (Test-SourceInstallerNeedsRootConfigNameCompat -SourceRoot $SourceRoot)) {
+    $compatRequired = if ($PSBoundParameters.ContainsKey('Required')) {
+        [bool]$Required
+    }
+    else {
+        Test-SourceInstallerNeedsRootConfigNameCompat -SourceRoot $SourceRoot
+    }
+    if (-not $compatRequired) {
         return
     }
 

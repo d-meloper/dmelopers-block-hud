@@ -75,7 +75,7 @@ For setup, customization, and daily usage instructions, see the Skin Notion page
 
 ## Localization
 
-As of v1.4.2, Block HUD supports 42 languages, including Korean, English, Russian, Japanese, and Chinese.
+As of v1.4.3, Block HUD supports 42 languages, including Korean, English, Russian, Japanese, and Chinese.
 
 If you want to help translate the skin or improve an existing translation, please use the DMeloper's Block HUD Translation Hub. You do not need to edit code or Rainmeter files; translation work is handled collaboratively in a Google Sheet for each language.
 

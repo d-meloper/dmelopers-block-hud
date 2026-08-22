@@ -748,12 +748,14 @@ function Invoke-Migration {
 
     $resolvedTargetRoot = Resolve-FullPath -Path $TargetRoot
     $script:ResolvedTargetRoot = $resolvedTargetRoot
+    Assert-NonRedirectingExistingImportPath -Path $resolvedTargetRoot -Context 'TargetRoot'
     Assert-MigrationTargetRoot -Root $resolvedTargetRoot
     $targetVersion = ConvertTo-SkinVersion -VersionText (Get-SkinMetadataVersion -Root $resolvedTargetRoot) -Context 'TargetRoot'
 
     $sourceSelection = Find-SourceRoot -ResolvedTargetRoot $resolvedTargetRoot -TargetVersion $targetVersion
     $resolvedSourceRoot = $sourceSelection.Path
     Set-ResultPairValue -Key 'DMEL_SOURCEPATH' -Value $resolvedSourceRoot
+    Assert-NonRedirectingExistingImportPath -Path $resolvedSourceRoot -Context 'SourceRoot'
     Assert-MigrationSourceRoot -Root $resolvedSourceRoot -TargetVersion $targetVersion
     Assert-DifferentRoots -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
     Assert-RootContainmentPolicy -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
@@ -789,14 +791,26 @@ function Invoke-Migration {
     $targetItemImageDirectory = Join-RootPath -Root $resolvedTargetRoot -RelativePath '@Resources\Customs\Images\Items'
     $script:ImportedItemGifAtlasProfiles = ''
     $importedLanguageCode = $null
+    $sourceNeedsRootConfigNameCompat = $false
 
     Initialize-ImportProgress -OwnerRoot $ProgressOwnerRoot -Token $ProgressToken -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
+    if (-not $ValidateOnly) {
+        Use-CanonicalTargetLogPath -TargetRoot $resolvedTargetRoot -Prefix 'ImportFromOldVersion'
+    }
+    Preflight-SourceState -SourceRoot $resolvedSourceRoot
     $script:ImportAudioWorkload = Get-JukeboxAudioMigrationWorkload -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
     $script:ImportProgressDetailVisible = Test-ImportProgressDetailThreshold -TotalBytes ([int64]$script:ImportAudioWorkload.TotalBytes)
     $mousePluginUpdatePlan = Get-MousePluginUpdatePlan -TargetRoot $resolvedTargetRoot
+    if (-not $ValidateOnly) {
+        $sourceInstallerPath = Get-BlockHudRuntimeToolPath -Root $resolvedSourceRoot -RelativeToolPath 'InstallVersionRelease.ps1' -AllowMissing
+        if (Test-Path -LiteralPath $sourceInstallerPath -PathType Leaf) {
+            Assert-NonRedirectingExistingImportPath -Path $sourceInstallerPath -Context 'source InstallVersionRelease.ps1 compatibility helper'
+            Test-ReadableSourceFile -Path $sourceInstallerPath
+        }
+        $sourceNeedsRootConfigNameCompat = Test-SourceInstallerNeedsRootConfigNameCompat -SourceRoot $resolvedSourceRoot
+    }
 
     if ($ValidateOnly) {
-        Preflight-SourceState -SourceRoot $resolvedSourceRoot
         $importedLanguageCode = Resolve-ImportedLanguageCode -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
         Assert-MigrationTargetImportState -Root $resolvedTargetRoot -ImportedLanguageCode $importedLanguageCode
         $script:ItemImageCompatibilityPlan = New-ItemImageCompatibilityPlan -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot -SourceHotbarPath $sourceHotbarPath -SourceInventoryPath $sourceInventoryPath -SourceEditorDraftPath $sourceEditorDraftPath -SourceImageDirectory $sourceItemImageDirectory -TargetImageDirectory $targetItemImageDirectory
@@ -813,8 +827,6 @@ function Invoke-Migration {
         return
     }
 
-    Use-CanonicalTargetLogPath -TargetRoot $resolvedTargetRoot -Prefix 'ImportFromOldVersion'
-    Preflight-SourceState -SourceRoot $resolvedSourceRoot
     $importedLanguageCode = Resolve-ImportedLanguageCode -SourceRoot $resolvedSourceRoot -TargetRoot $resolvedTargetRoot
     Assert-MigrationTargetImportState -Root $resolvedTargetRoot -ImportedLanguageCode $importedLanguageCode
 
@@ -878,7 +890,7 @@ function Invoke-Migration {
     Validate-TouchedRainmeterFiles
     Write-ImportProgress -Stage 'validating' -CompletedBytes 1 -TotalBytes 1 -CompletedFiles 1 -TotalFiles 1 -Force
     Complete-MousePluginUpdateImportHandoff -TargetRoot $resolvedTargetRoot -Plan $mousePluginUpdatePlan
-    Install-RootConfigNameCompatModule -SourceRoot $resolvedSourceRoot
+    Install-RootConfigNameCompatModule -SourceRoot $resolvedSourceRoot -Required $sourceNeedsRootConfigNameCompat
     if (-not [string]::IsNullOrWhiteSpace($script:EphemeralRollbackRoot)) {
         Remove-TemporaryRollbackRootBestEffort -RollbackRoot $script:EphemeralRollbackRoot -Reason 'successful legacy import'
         $script:EphemeralRollbackRoot = ''

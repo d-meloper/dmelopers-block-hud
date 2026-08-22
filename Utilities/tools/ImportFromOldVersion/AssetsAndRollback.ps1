@@ -224,13 +224,15 @@ function Get-SourceDirectoryFilesLoopSafe {
         }
 
         try {
-            $canonical = Get-CanonicalExistingPath -Path $currentDirectory
+            $currentItem = Get-Item -LiteralPath $currentDirectory -Force -ErrorAction Stop
         }
         catch {
             Add-SkippedSourcePath -Path $currentDirectory -Directory
             Write-Log "Skipped unreadable source directory: $currentDirectory ($($_.Exception.Message))" 'WARN'
             continue
         }
+        Assert-NonRedirectingExistingImportPath -Path $currentItem.FullName -Context 'source user-data directory'
+        $canonical = Normalize-PathIdentity -Path $currentItem.FullName
 
         if (-not $visited.Add($canonical)) {
             Write-Log "Skipped already-visited source directory during loop-safe traversal: $currentDirectory" 'WARN'
@@ -247,6 +249,13 @@ function Get-SourceDirectoryFilesLoopSafe {
         }
 
         foreach ($child in $children) {
+            if (($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                $reason = ''
+                if (-not (Test-NonRedirectingReparsePoint -Item $child -Reason ([ref]$reason))) {
+                    throw "Refusing migration because source user data contains an unsafe reparse point ($reason): $($child.FullName)"
+                }
+                Write-Log "Allowed source user-data reparse point as $reason`: $($child.FullName)"
+            }
             if ($child.PSIsContainer) {
                 $pending.Enqueue($child.FullName)
             }
@@ -270,6 +279,8 @@ function Invoke-OptionalSourceProbe {
         Write-Log "Source $Description is absent: $Path; current target data will be preserved when present."
         return
     }
+
+    Assert-NonRedirectingExistingImportPath -Path $Path -Context "source $Description"
 
     try {
         [void](& $Probe)
@@ -307,6 +318,10 @@ function Preflight-SourceState {
 
     Write-Log 'Building read-only source preflight model.'
 
+    $sourceSettingsIni = Join-RootPath -Root $SourceRoot -RelativePath ((Get-BlockHudSettingsRelativePath -Root $SourceRoot) + '\Settings.ini')
+    Assert-NonRedirectingExistingImportPath -Path $sourceSettingsIni -Context 'source Settings.ini'
+    Test-ReadableSourceFile -Path $sourceSettingsIni
+
     foreach ($relativePath in @(
         '@Resources\Customs\Data\HotbarItems.inc',
         '@Resources\Customs\Data\InventoryItems.inc',
@@ -323,7 +338,14 @@ function Preflight-SourceState {
             throw "SourceRoot is missing required legacy import file: $relativePath"
         }
 
+        Assert-NonRedirectingExistingImportPath -Path $sourcePath -Context "required legacy import file $relativePath"
         Test-ReadableSourceFile -Path $sourcePath
+    }
+
+    $editorDraftPath = Join-RootPath -Root $SourceRoot -RelativePath '@Resources\Customs\Data\EditorDraft.inc'
+    if (Test-Path -LiteralPath $editorDraftPath -PathType Leaf) {
+        Assert-NonRedirectingExistingImportPath -Path $editorDraftPath -Context 'source EditorDraft.inc'
+        Test-ReadableSourceFile -Path $editorDraftPath
     }
 
     foreach ($optionalFile in @(
@@ -335,7 +357,8 @@ function Preflight-SourceState {
         '@Resources\Customs\Data\JukeboxDiscSlots.json',
         '@Resources\Customs\Data\JukeboxPlaybackState.inc',
         '@Resources\Customs\Data\ProgramActionLabels.txt',
-        '@Resources\Customs\Data\MinecraftSkinHistory.txt'
+        '@Resources\Customs\Data\MinecraftSkinHistory.txt',
+        '@Resources\CustomsDataMinecraftSkinHistory.txt'
     )) {
         $probePath = Join-RootPath -Root $SourceRoot -RelativePath $optionalFile
         Invoke-OptionalSourceProbe -Path $probePath -Description $optionalFile -Probe {
@@ -343,6 +366,10 @@ function Preflight-SourceState {
         }
     }
 
+    $hudMirrorPath = Join-RootPath -Root $SourceRoot -RelativePath '@Resources\Customs\Settings\HudMirror.inc'
+    if (Test-Path -LiteralPath $hudMirrorPath -PathType Leaf) {
+        Assert-NonRedirectingExistingImportPath -Path $hudMirrorPath -Context 'source HUD mirror settings'
+    }
     Assert-HudMirrorImportSourcePreflight -SourceRoot $SourceRoot
 
     foreach ($optionalDirectory in @(
@@ -383,6 +410,31 @@ function Copy-PathSnapshot {
 
     $null = Invoke-MigrationAction -Action 'Copy snapshot path' -Target $TargetPath -ScriptBlock {
         Copy-Item -LiteralPath $SourcePath -Destination $TargetPath -Force -Recurse
+    }
+}
+
+function Copy-FilteredSourceDirectorySnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceDirectory,
+        [Parameter(Mandatory = $true)][string]$TargetDirectory
+    )
+
+    Assert-SafeTargetPath -Path $TargetDirectory
+    $sourceBase = [System.IO.Path]::GetFullPath($SourceDirectory).TrimEnd('\', '/') + '\'
+    $sourceFiles = @(Get-SourceDirectoryFilesLoopSafe -SourceDirectory $SourceDirectory)
+    $null = Invoke-MigrationAction -Action 'Copy filtered source directory snapshot' -Target $TargetDirectory -ScriptBlock {
+        Ensure-Directory -Path $TargetDirectory
+        foreach ($sourceFile in $sourceFiles) {
+            if (Test-SkippedSourcePath -Path $sourceFile) {
+                continue
+            }
+
+            $relativePath = [System.IO.Path]::GetFullPath($sourceFile).Substring($sourceBase.Length)
+            $targetFile = Join-RootPath -Root $TargetDirectory -RelativePath $relativePath
+            Assert-SafeTargetPath -Path $targetFile
+            Ensure-Directory -Path (Split-Path -Parent $targetFile)
+            Copy-Item -LiteralPath $sourceFile -Destination $targetFile -Force
+        }
     }
 }
 
@@ -525,7 +577,13 @@ function Get-MinecraftSkinHistoryCandidates {
 
     $playerImageDirectory = Join-RootPath -Root $Root -RelativePath '@Resources\Customs\Images\Player'
     if (Test-Path -LiteralPath $playerImageDirectory -PathType Container) {
+        if (Test-SkippedSourcePath -Path $playerImageDirectory) {
+            return $values.ToArray()
+        }
         foreach ($file in Get-ChildItem -LiteralPath $playerImageDirectory -File -Filter 'MinecraftSkinBody_*.png') {
+            if (Test-SkippedSourcePath -Path $file.FullName) {
+                continue
+            }
             $name = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
             if ($name.StartsWith('MinecraftSkinBody_', [System.StringComparison]::OrdinalIgnoreCase)) {
                 $skinName = $name.Substring('MinecraftSkinBody_'.Length).Trim()
