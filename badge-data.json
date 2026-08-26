@@ -1,7 +1,7 @@
 {
   "SchemaVersion": 3,
   "RepoSlug": "d-meloper/dmelopers-block-hud",
-  "GeneratedAtUtc": "2026-08-26T13:15:32.0329982+00:00",
+  "GeneratedAtUtc": "2026-08-26T20:01:10.6986586+00:00",
   "LatestRelease": "v1.4.3",
   "LatestReleaseName": "DMeloper's Block HUD v1.4.3",
   "LatestReleaseKorea": "v1.4.3",
@@ -14,6 +14,6 @@
   "LatestAssetNameGlobal": "DMelopers-Block-HUD_Global.zip",
   "LatestAssetSha256Global": "6637811A9A8BDC5B5DDC377DD836BE8F75AA54C3DA110729A9FC378642AE2784",
   "LatestPublishedAtUtcGlobal": "2026-08-22T15:25:50Z",
-  "TotalDownloads": 7055,
+  "TotalDownloads": 7100,
   "Stars": 94
 }
