@@ -76,6 +76,7 @@ jobs:
           }
 
           $metadataOnlyAllowedFiles = @(
+            '.gitattributes',
             'README.md',
             'README.ko-KR.md',
             'LICENSE',
@@ -141,6 +142,39 @@ jobs:
           foreach ($requiredFile in $requiredFiles) {
             if (-not (Test-Path -LiteralPath (Join-Path $root $requiredFile) -PathType Leaf)) {
               throw "Required public repository file is missing: $requiredFile"
+            }
+          }
+
+          $languageAttributesPath = Join-Path $root '.gitattributes'
+          $expectedLanguageRule = '*.inc linguist-language=INI linguist-detectable'
+          if (-not (Test-Path -LiteralPath $languageAttributesPath -PathType Leaf)) {
+            throw 'Required public language attributes file is missing: .gitattributes'
+          }
+          $languageRules = @(Get-Content -LiteralPath $languageAttributesPath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+          if ($languageRules.Count -ne 1 -or -not [string]::Equals($languageRules[0], $expectedLanguageRule, [System.StringComparison]::Ordinal)) {
+            throw 'Public language attributes must contain only the approved detectable INI rule for *.inc.'
+          }
+
+          $runtimeLanguageFiles = @(git -c core.quotePath=false ls-files -- '*.inc' '*.lua' '*.ps1')
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not enumerate public runtime language files.'
+          }
+          if ($runtimeLanguageFiles.Count -gt 0) {
+            $runtimeLanguageAttributes = @(git -c core.quotePath=false check-attr linguist-language linguist-detectable -- @runtimeLanguageFiles)
+            if ($LASTEXITCODE -ne 0 -or $runtimeLanguageAttributes.Count -ne (2 * $runtimeLanguageFiles.Count)) {
+              throw 'Could not check every public runtime language file.'
+            }
+            for ($index = 0; $index -lt $runtimeLanguageFiles.Count; $index++) {
+              $path = [string]$runtimeLanguageFiles[$index]
+              $isInc = $path.EndsWith('.inc', [System.StringComparison]::Ordinal)
+              $expectedLanguage = if ($isInc) { 'INI' } else { 'unspecified' }
+              $expectedDetectable = if ($isInc) { 'set' } else { 'unspecified' }
+              $actualLanguage = [string]$runtimeLanguageAttributes[2 * $index]
+              $actualDetectable = [string]$runtimeLanguageAttributes[(2 * $index) + 1]
+              if (-not [string]::Equals($actualLanguage, "${path}: linguist-language: $expectedLanguage", [System.StringComparison]::Ordinal) -or
+                  -not [string]::Equals($actualDetectable, "${path}: linguist-detectable: $expectedDetectable", [System.StringComparison]::Ordinal)) {
+                throw "Public language attributes changed the classification contract for: $path"
+              }
             }
           }
 
