@@ -1,11 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="103.2" height="28" role="img" aria-label="STARS: 100">
-<title>STARS: 100</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="103.2" height="28" role="img" aria-label="STARS: 101">
+<title>STARS: 101</title>
 <g shape-rendering="crispEdges">
 <rect width="60" height="28" fill="#2F334D"/>
 <rect x="60" width="43.2" height="28" fill="#C6C4FF"/>
 </g>
 <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" text-rendering="geometricPrecision" font-size="100">
 <text transform="scale(.1)" x="300" y="175" textLength="350">STARS</text>
-<text transform="scale(.1)" x="816" y="175" textLength="210" font-weight="bold" fill="#333">100</text>
+<text transform="scale(.1)" x="816" y="175" textLength="210" font-weight="bold" fill="#333">101</text>
 </g>
 </svg>
