@@ -56,7 +56,7 @@ GitHub에서 직접 설치하려는 경우에는 반드시 `.rmskin` 파일을 �
 
 더 안전한 Mouse.dll 설치가 필요하면 업데이트 중 `마우스 플러그인 업데이트` 안내가 표시되고 Rainmeter가 자동으로 재시작될 수 있습니다. 완료될 때까지 기다리세요. 안내가 반복되거나 업데이트가 되돌려지면 DLL을 직접 교체하지 말고 로그를 확인한 뒤 지원 경로를 이용하세요.
 
-v1.4.1부터 네트워크로 내려받은 updater ZIP은 공개된 SHA-256과 대조하며, 검증된 metadata 또는 다운로드한 파일 내용이 일치하지 않으면 압축 해제 전에 거부합니다. 검증 범위와 한계는 [보안 정책](SECURITY.ko-KR.md)을 확인하세요.
+v1.4.1부터 네트워크로 내려받은 updater ZIP은 공개된 SHA-256과 대조하며, 검증된 metadata 또는 다운로드한 파일 내용이 일치하지 않으면 압축 해제 전에 거부합니다. 검증 범위와 한계는 [보안 정책](docs/SECURITY.ko-KR.md)을 확인하세요.
 
 ## 요구 사항
 
@@ -111,7 +111,7 @@ v1.4.3 기준, Block HUD는 한국어, 영어, 러시아어, 일본어, 중국�
 
 GitHub 기여 proposal을 보내려면 Pull Request를 열기 전에 기여 안내를 먼저 읽어 주세요.
 
-[기여 안내](CONTRIBUTING.ko-KR.md)
+[기여 안내](docs/CONTRIBUTING.ko-KR.md)
 
 이 공개 저장소는 공개 릴리즈를 위한 distribution 및 review surface입니다. 커뮤니티 Pull Request는 proposal로 검토되며, 채택된 변경은 maintainer 검증 후 release approval Pull Request를 통해 공개 릴리즈에 포함될 수 있습니다.
 
@@ -130,9 +130,10 @@ GitHub 기여 proposal을 보내려면 Pull Request를 열기 전에 기여 안�
 ## 지원
 
 - 버그 및 기능 요청: GitHub Issues 사용
-- 코드, 문서, 번역 proposal: Pull Request를 열기 전에 `CONTRIBUTING.ko-KR.md` 확인
-- 보안 제보: `SECURITY.md` 절차를 따르고 공개 이슈로 올리지 않기
-- 설치 및 사용 문의: 먼저 `SUPPORT.md` 확인
+- 코드, 문서, 번역 proposal: Pull Request를 열기 전에 [기여 안내](docs/CONTRIBUTING.ko-KR.md) 확인
+- 커뮤니티 토론: [행동 규범](docs/CODE_OF_CONDUCT.ko-KR.md) 따르기
+- 보안 제보: [보안 정책](docs/SECURITY.ko-KR.md) 절차를 따르고 공개 이슈로 올리지 않기
+- 설치 및 사용 문의: 먼저 [지원 안내](docs/SUPPORT.ko-KR.md) 확인
 
 ## 크레딧
 
@@ -146,6 +147,6 @@ GitHub 기여 proposal을 보내려면 Pull Request를 열기 전에 기여 안�
 
 작성자가 만든 원본 코드와 원본 리소스는 MIT License로 배포됩니다. 자세한 내용은 `LICENSE`를 확인하세요.
 
-서드파티 크레딧과 고지는 `THIRD_PARTY_NOTICES.md`에 정리되어 있습니다.
+서드파티 크레딧과 고지는 [서드파티 고지](docs/THIRD_PARTY_NOTICES.ko-KR.md)에 정리되어 있습니다.
 
 이 스킨은 Mojang Studios 또는 Microsoft와 아무 관련이 없으며, 승인 또는 후원을 받지 않았습니다. Minecraft 및 관련 상표, 이름, 저작권은 각 권리자에게 있습니다.
