@@ -67,7 +67,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($baseSha) -or [string]::IsNullOrWhiteSpace($headSha)) {
             throw "Could not resolve public PR base/head SHAs."
           }
-          $changedFiles = @(git diff --name-only $baseSha $headSha | ForEach-Object { $_ -replace '\\', '/' } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+          $changedFiles = @(git diff --no-renames --name-only $baseSha $headSha | ForEach-Object { $_ -replace '\\', '/' } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
           if ($LASTEXITCODE -ne 0) {
             throw "Could not resolve changed files for public PR validation."
           }
@@ -80,16 +80,16 @@ jobs:
             'README.md',
             'README.ko-KR.md',
             'LICENSE',
-            'THIRD_PARTY_NOTICES.md',
-            'THIRD_PARTY_NOTICES.ko-KR.md',
-            'SECURITY.md',
-            'SECURITY.ko-KR.md',
-            'SUPPORT.md',
-            'SUPPORT.ko-KR.md',
-            'CONTRIBUTING.md',
-            'CONTRIBUTING.ko-KR.md',
-            'CODE_OF_CONDUCT.md',
-            'CODE_OF_CONDUCT.ko-KR.md',
+            'docs/THIRD_PARTY_NOTICES.md',
+            'docs/THIRD_PARTY_NOTICES.ko-KR.md',
+            'docs/SECURITY.md',
+            'docs/SECURITY.ko-KR.md',
+            'docs/SUPPORT.md',
+            'docs/SUPPORT.ko-KR.md',
+            'docs/CONTRIBUTING.md',
+            'docs/CONTRIBUTING.ko-KR.md',
+            'docs/CODE_OF_CONDUCT.md',
+            'docs/CODE_OF_CONDUCT.ko-KR.md',
             'assets/hero-screenshot.png',
             '.github/ISSUE_TEMPLATE/bug_report.yml',
             '.github/ISSUE_TEMPLATE/feature_request.yml',
@@ -102,9 +102,26 @@ jobs:
             '.github/workflows/update-public-badges.yml'
           )
 
+          $retiredMetadataFiles = @(
+            'THIRD_PARTY_NOTICES.md',
+            'THIRD_PARTY_NOTICES.ko-KR.md',
+            'SECURITY.md',
+            'SECURITY.ko-KR.md',
+            'SUPPORT.md',
+            'SUPPORT.ko-KR.md',
+            'CONTRIBUTING.md',
+            'CONTRIBUTING.ko-KR.md',
+            'CODE_OF_CONDUCT.md',
+            'CODE_OF_CONDUCT.ko-KR.md'
+          )
+          $deletedFiles = @(git diff --no-renames --diff-filter=D --name-only $baseSha $headSha)
+          if ($LASTEXITCODE -ne 0) { throw 'Could not resolve deleted public metadata paths.' }
+
           if ($isMetadataOnly) {
             foreach ($changedFile in $changedFiles) {
-              if (-not (Test-OrdinalContains -AllowedValues $metadataOnlyAllowedFiles -Value $changedFile)) {
+              $isRetiredDeletion = (Test-OrdinalContains -AllowedValues $retiredMetadataFiles -Value $changedFile) -and
+                ($deletedFiles.Count -gt 0) -and (Test-OrdinalContains -AllowedValues $deletedFiles -Value $changedFile)
+              if (-not $isRetiredDeletion -and -not (Test-OrdinalContains -AllowedValues $metadataOnlyAllowedFiles -Value $changedFile)) {
                 throw "Metadata-only PR changed a non-metadata path: $changedFile"
               }
             }
@@ -121,16 +138,16 @@ jobs:
             'README.md',
             'README.ko-KR.md',
             'LICENSE',
-            'THIRD_PARTY_NOTICES.md',
-            'THIRD_PARTY_NOTICES.ko-KR.md',
-            'SECURITY.md',
-            'SECURITY.ko-KR.md',
-            'SUPPORT.md',
-            'SUPPORT.ko-KR.md',
-            'CONTRIBUTING.md',
-            'CONTRIBUTING.ko-KR.md',
-            'CODE_OF_CONDUCT.md',
-            'CODE_OF_CONDUCT.ko-KR.md',
+            'docs/THIRD_PARTY_NOTICES.md',
+            'docs/THIRD_PARTY_NOTICES.ko-KR.md',
+            'docs/SECURITY.md',
+            'docs/SECURITY.ko-KR.md',
+            'docs/SUPPORT.md',
+            'docs/SUPPORT.ko-KR.md',
+            'docs/CONTRIBUTING.md',
+            'docs/CONTRIBUTING.ko-KR.md',
+            'docs/CODE_OF_CONDUCT.md',
+            'docs/CODE_OF_CONDUCT.ko-KR.md',
             '.github/ISSUE_TEMPLATE/bug_report.yml',
             '.github/ISSUE_TEMPLATE/feature_request.yml',
             '.github/ISSUE_TEMPLATE/support_question.yml',
@@ -142,6 +159,11 @@ jobs:
           foreach ($requiredFile in $requiredFiles) {
             if (-not (Test-Path -LiteralPath (Join-Path $root $requiredFile) -PathType Leaf)) {
               throw "Required public repository file is missing: $requiredFile"
+            }
+          }
+          foreach ($retiredFile in $retiredMetadataFiles) {
+            if (Test-Path -LiteralPath (Join-Path $root $retiredFile)) {
+              throw "Superseded root guidance must be removed: $retiredFile"
             }
           }
 
@@ -194,6 +216,9 @@ jobs:
             'rainmeter-upstream/*',
             'tools/*',
             '.agents/*',
+            '.oasis/*',
+            'ProjectGuide.md',
+            'LocalGitWorkflow.md',
             '.codex/*',
             '.githooks/*',
             '.vscode/*',
@@ -228,8 +253,12 @@ jobs:
           )
 
           foreach ($path in $paths) {
+            # Only exact source-owned public guides may occupy docs/. Keep the
+            # docs/* deny rule for every other file and nested directory.
+            $isPublicGuide = $path.StartsWith('docs/', [System.StringComparison]::Ordinal) -and
+              (Test-OrdinalContains -AllowedValues $metadataOnlyAllowedFiles -Value $path)
             foreach ($pattern in $forbiddenPathPatterns) {
-              if ($path -like $pattern) {
+              if (-not $isPublicGuide -and $path -like $pattern) {
                 throw "Forbidden source-only path found in public branch: $path"
               }
             }

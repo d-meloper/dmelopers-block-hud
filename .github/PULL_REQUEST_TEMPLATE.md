@@ -2,7 +2,11 @@
 
 Describe the change.
 
+Read the [contributing guide](../docs/CONTRIBUTING.md) and [code of conduct](../docs/CODE_OF_CONDUCT.md) before opening a proposal.
+
 변경 내용을 적어주세요.
+
+proposal을 열기 전에 [기여 안내](../docs/CONTRIBUTING.ko-KR.md)와 [행동 규범](../docs/CODE_OF_CONDUCT.ko-KR.md)을 확인해주세요.
 
 For community PRs, describe the proposal. Accepted changes are validated by the maintainer and published here through a release approval PR or metadata-only PR, depending on the change.
 

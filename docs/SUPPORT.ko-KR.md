@@ -2,7 +2,7 @@
 
 [English](SUPPORT.md) | 한국어
 
-이슈를 열기 전에 README와 기본 문제 해결 항목을 먼저 확인해주세요.
+이슈를 열기 전에 [README](../README.ko-KR.md)와 기본 문제 해결 항목을 먼저 확인해주세요.
 
 ## 설치 도움말
 
@@ -29,7 +29,7 @@ GitHub에서 직접 내려받아 설치할 때는 `.rmskin`을 사용하세요.
 - 재현 가능한 버그: GitHub Issues
 - 기능 요청: GitHub Issues
 - 일반 설치/사용 문의: support question 이슈 양식 사용
-- 보안 제보: `SECURITY.md` 절차를 따르고 공개 이슈는 사용하지 않기
+- 보안 제보: [보안 정책](SECURITY.ko-KR.md) 절차를 따르고 공개 이슈는 사용하지 않기
 
 ## 같이 적어주면 좋은 정보
 

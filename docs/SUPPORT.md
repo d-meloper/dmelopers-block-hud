@@ -2,7 +2,7 @@
 
 English | [한국어](SUPPORT.ko-KR.md)
 
-Before opening an issue, check the README and try the basic troubleshooting steps.
+Before opening an issue, check the [README](../README.md) and try the basic troubleshooting steps.
 
 ## Installation Help
 
@@ -29,7 +29,7 @@ Before downloading, check the GitHub release notes for asset availability and SH
 - Confirmed bugs: GitHub Issues.
 - Feature requests: GitHub Issues.
 - General setup questions: use the support question issue form.
-- Security reports: follow `SECURITY.md` and do not open a public issue.
+- Security reports: follow the [security policy](SECURITY.md) and do not open a public issue.
 
 ## Useful Details To Include
 

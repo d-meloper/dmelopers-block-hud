@@ -56,7 +56,7 @@ For updates, use the in-skin `Skin manager` whenever possible. It checks validat
 
 If the safer Mouse.dll must be installed, the update can show a `Mouse plugin update` notice and restart Rainmeter automatically. Wait for it to finish; if the notice repeats or the update rolls back, check the logs and use the support route instead of replacing the DLL manually.
 
-Beginning with v1.4.1, network-downloaded updater ZIPs are checked against the published SHA-256 and are rejected before extraction when the verified metadata or downloaded bytes do not match. See the [security policy](SECURITY.md) for the verification scope and limitations.
+Beginning with v1.4.1, network-downloaded updater ZIPs are checked against the published SHA-256 and are rejected before extraction when the verified metadata or downloaded bytes do not match. See the [security policy](docs/SECURITY.md) for the verification scope and limitations.
 
 ## Requirements
 
@@ -113,7 +113,7 @@ For questions, bug reports, suggestions, or ideas, please use the survey form be
 
 For GitHub contribution proposals, read the contributing guide before opening a pull request.
 
-[Contributing guide](CONTRIBUTING.md)
+[Contributing guide](docs/CONTRIBUTING.md)
 
 This public repository is the distribution and review surface for public releases. Community pull requests are reviewed as proposals, and accepted changes may appear through a maintainer release approval pull request after validation.
 
@@ -132,9 +132,10 @@ When reporting a bug, include as much of the following information as possible.
 ## Support
 
 - Bugs and feature requests: use GitHub Issues.
-- Code, documentation, or localization proposals: read `CONTRIBUTING.md` before opening a pull request.
-- Security reports: follow `SECURITY.md`; do not open public security issues.
-- Installation and usage help: see `SUPPORT.md` first.
+- Code, documentation, or localization proposals: read the [contributing guide](docs/CONTRIBUTING.md) before opening a pull request.
+- Community discussion: follow the [code of conduct](docs/CODE_OF_CONDUCT.md).
+- Security reports: follow the [security policy](docs/SECURITY.md); do not open public security issues.
+- Installation and usage help: see the [support guide](docs/SUPPORT.md) first.
 
 ## Credits
 
@@ -148,6 +149,6 @@ When reporting a bug, include as much of the following information as possible.
 
 Original project code and original resources created by the author are distributed under the MIT License. See `LICENSE` for details.
 
-Third-party credits and notices are listed in `THIRD_PARTY_NOTICES.md`.
+Third-party credits and notices are listed in the [third-party notices](docs/THIRD_PARTY_NOTICES.md).
 
 This skin is not affiliated with, endorsed by, or sponsored by Mojang Studios or Microsoft. Minecraft and related trademarks, names, and copyrights belong to their respective owners.

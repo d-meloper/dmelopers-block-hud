@@ -6,9 +6,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Please check the README and SUPPORT.md before opening a support question.
+        Please check the [README](https://github.com/d-meloper/dmelopers-block-hud/blob/main/README.md) and [support guide](https://github.com/d-meloper/dmelopers-block-hud/blob/main/docs/SUPPORT.md) before opening a support question.
         
-        지원 요청을 올리기 전에 README와 SUPPORT.md를 먼저 확인해주세요.
+        지원 요청을 올리기 전에 [README](https://github.com/d-meloper/dmelopers-block-hud/blob/main/README.ko-KR.md)와 [지원 안내](https://github.com/d-meloper/dmelopers-block-hud/blob/main/docs/SUPPORT.ko-KR.md)를 먼저 확인해주세요.
   - type: textarea
     id: question
     attributes:
